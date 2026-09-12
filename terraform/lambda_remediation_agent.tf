@@ -32,11 +32,12 @@ resource "aws_lambda_function" "remediation_agent" {
 
   layers = [aws_lambda_layer_version.anthropic.arn]
 
-  # The handler loops over every mapped finding, and each iteration makes an
-  # Anthropic call plus a synchronous terraform-scanner invoke that is itself
-  # allowed 300s -- so even the max timeout only fits ~2 findings per run on a
-  # cold scanner. Fixing that properly means fanning out one finding per
-  # invocation (SQS/Step Functions), not a bigger number here.
+  # Each finding is an Anthropic call plus a synchronous terraform-scanner
+  # invoke that is itself allowed 300s, so even the max timeout fits only a
+  # handful. The pipeline (step_functions.tf) invokes this once per file and
+  # the handler yields with a continuation before the clock runs out, so a
+  # file of any size is a sequence of invocations rather than one that does
+  # not fit. The number here just decides how many findings each one does.
   timeout = 900
   # I/O-bound, so no reason to buy the extra CPU terraform-scanner needs.
   memory_size = 512
@@ -51,6 +52,10 @@ resource "aws_lambda_function" "remediation_agent" {
       # Wired from the resource rather than reconstructed from locals so the
       # dependency is explicit in the graph.
       TERRAFORM_SCANNER_FUNCTION_NAME = aws_lambda_function.terraform_scanner.function_name
+      # Time the handler leaves on the clock before starting another finding:
+      # the scanner's timeout plus a worst-case model call. Tied to the
+      # scanner's timeout here so the two cannot drift apart silently.
+      FINDING_TIME_RESERVE_SECONDS = aws_lambda_function.terraform_scanner.timeout + 180
     }
   }
 

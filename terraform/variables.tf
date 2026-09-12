@@ -39,3 +39,9 @@ variable "dashboard_extra_origins" {
   type        = list(string)
   default     = ["http://localhost:5173"]
 }
+
+variable "remediation_concurrency" {
+  description = "How many files the pipeline remediates at once (the Map state's MaxConcurrency). Each iteration is a stream of model calls plus a scanner invocation per finding, so this bounds Anthropic API throughput and concurrent scanner cold starts rather than Lambda capacity."
+  type        = number
+  default     = 4
+}

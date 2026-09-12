@@ -608,6 +608,7 @@ def test_handler_marks_fix_proposed_on_clean_self_check(mock_dynamodb, mock_s3, 
         "needs_human_only_count": 0,
         "superseded_count": 0,
         "error_count": 0,
+        "remaining": 0,
     }
 
     mock_s3.put_object.assert_called_once()
@@ -664,6 +665,7 @@ def test_handler_marks_needs_human_only_when_fix_does_not_clear_finding(
         "needs_human_only_count": 1,
         "superseded_count": 0,
         "error_count": 0,
+        "remaining": 0,
     }
 
     update_kwargs = mock_table.update_item.call_args.kwargs
@@ -728,6 +730,7 @@ def test_handler_isolates_a_failing_finding_and_keeps_going(
         "needs_human_only_count": 0,
         "superseded_count": 0,
         "error_count": 1,
+        "remaining": 0,
     }
     # Only the surviving finding got written back -- the failed one is untouched.
     mock_table.update_item.assert_called_once()
@@ -1281,3 +1284,166 @@ def test_query_all_follows_last_evaluated_key():
     assert items == [{"n": 1}, {"n": 2}, {"n": 3}]
     assert table.query.call_count == 2
     assert table.query.call_args.kwargs["ExclusiveStartKey"] == {"pk": "PR#x", "sk": "FINDING#a"}
+
+
+# ---------- one file per invocation, and continuing a file across invocations ----------
+#
+# The pipeline's Map state (terraform/step_functions.tf) invokes the handler
+# once per file, and a file with more findings than fit in one invocation is
+# continued by feeding the output back in as the next input.
+
+def _context(*remaining_ms):
+    """A Lambda context whose clock reads each value in turn, then the last one."""
+    ctx = MagicMock()
+    ctx.get_remaining_time_in_millis.side_effect = list(remaining_ms) + [remaining_ms[-1]] * 50
+    return ctx
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_file_can_be_remediated_on_its_own(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """`file` narrows the mapped-findings query to that file, so the Map
+    state's iterations never touch each other's files, and the answer names
+    the file so the state machine's output is readable per iteration."""
+    before = _load_fixture("s3-bucket-encryption", "before")
+    after = _load_fixture("s3-bucket-encryption", "after")
+    finding = _mapped("aws-s3-enable-bucket-encryption", 1, "f1")
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": [finding]}, {"Items": before["findings"]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {
+        "Body": SimpleNamespace(read=lambda: _read_fixture_tf("s3-bucket-encryption", "before").encode())
+    }
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response({
+        "corrected_file_content": _read_fixture_tf("s3-bucket-encryption", "after"),
+        "rationale": "Added SSE.", "assumptions": [],
+    })
+    mock_lambda_client.invoke.return_value = _scan_reply(after)
+
+    result = handler.handler({"pr_id": "chain-1", "file": "main.tf"}, None)
+
+    mapped_query = mock_table.query.call_args_list[0].kwargs
+    assert "#file = :file" in mapped_query["FilterExpression"]
+    assert mapped_query["ExpressionAttributeValues"][":file"] == "main.tf"
+    assert result["file"] == "main.tf"
+    assert result["fix_proposed_count"] == 1
+    assert result["remaining"] == 0
+    assert "resume_from" not in result
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_yields_before_the_clock_runs_out_and_says_where_to_resume(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """Being killed by the timeout mid-finding loses the model call in flight
+    and, worse, returns nothing -- so the caller cannot tell where the chain
+    got to. Stopping *before* a finding costs nothing, and the answer carries
+    everything the next invocation needs."""
+    before = _load_fixture("s3-bucket-encryption", "before")
+    after = _load_fixture("s3-bucket-encryption", "after")
+    pair = _encryption_then_logging()
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": pair}, {"Items": before["findings"]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {
+        "Body": SimpleNamespace(read=lambda: _read_fixture_tf("s3-bucket-encryption", "before").encode())
+    }
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response({
+        "corrected_file_content": _read_fixture_tf("s3-bucket-encryption", "after"),
+        "rationale": "Added SSE.", "assumptions": [],
+    })
+    mock_lambda_client.invoke.return_value = _scan_reply(after)
+
+    # Plenty of time for the first finding, not enough for a second.
+    plenty = handler.FINDING_TIME_RESERVE_MS * 2
+    result = handler.handler(
+        {"pr_id": "chain-1", "file": "main.tf"}, _context(plenty, handler.FINDING_TIME_RESERVE_MS - 1),
+    )
+
+    assert mock_get_client.return_value.messages.create.call_count == 1
+    assert result["fix_proposed_count"] == 1
+    assert result["remaining"] == 1
+    # The chain resumes at the fix that was verified, not at the snapshot.
+    assert result["resume_from"] == pair[0]["finding_id"]
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_continuation_roots_at_the_fix_it_was_told_to(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """The previous invocation's output, fed back in. f1 is fix-proposed --
+    not accepted, nobody has reviewed it yet -- and the chain still roots at
+    it, because restarting from the snapshot would draft f2 as a competing
+    rewrite of the lines f1 just changed. The counts carry over too, so the
+    file's total is reported rather than this invocation's share."""
+    before = _load_fixture("s3-bucket-encryption", "before")
+    after = _load_fixture("s3-bucket-encryption", "after")
+    drafted = _accepted("f1", status="fix-proposed")
+    to_continue = _mapped(LOGGING_RULE, 2, "f2")
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [
+        {"Items": [to_continue]},                                # mapped, on this file
+        {"Items": before["findings"] + [drafted, to_continue]},  # on file
+    ]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: ACCEPTED_CONTENT.encode())}
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response({
+        "corrected_file_content": ACCEPTED_CONTENT + 'resource "aws_s3_bucket_logging" "l" {}\n',
+        "rationale": "Added logging.", "assumptions": [],
+    })
+    after_both = {"findings": [f for f in after["findings"] if f["rule_id"] != LOGGING_RULE]}
+    mock_lambda_client.invoke.side_effect = [
+        _scan_reply(after),        # rescan of the resumed root
+        _scan_reply(after_both),   # self-check of f2
+    ]
+
+    result = handler.handler({
+        "pr_id": "chain-1", "file": "main.tf", "resume_from": "f1", "remaining": 1,
+        "fix_proposed_count": 1, "needs_human_only_count": 0,
+        "superseded_count": 0, "error_count": 0,
+    }, None)
+
+    assert mock_s3.get_object.call_args.kwargs["Key"] == "fixes/chain-1/f1/main.tf"
+    assert ACCEPTED_CONTENT in _prompt_of(mock_get_client, 0)
+    assert _written(mock_table, 0)[":pf"]["applies_after"] == [
+        {"finding_id": "f1", "diff_sha256": handler._diff_sha256(ACCEPTED_DIFF)}
+    ]
+    assert result["fix_proposed_count"] == 2
+    assert result["remaining"] == 0
+    assert "resume_from" not in result
+
+
+@patch.object(handler, "dynamodb")
+def test_a_continuation_names_a_fix_that_was_never_drafted(mock_dynamodb):
+    """A resume point that is not a drafted fix on the file has no content to
+    root at. Failing the file is right: drafting against the snapshot instead
+    would silently produce the competing rewrites the chain exists to avoid."""
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [
+        {"Items": [_mapped(LOGGING_RULE, 2, "f2")]},
+        {"Items": [_mapped(LOGGING_RULE, 2, "f2")]},   # no f1 on the file
+    ]
+    mock_dynamodb.Table.return_value = mock_table
+
+    result = handler.handler({"pr_id": "chain-1", "file": "main.tf", "resume_from": "f1"}, None)
+
+    assert result["error_count"] == 1
+    assert result["remaining"] == 0
+
+
+def test_resume_from_needs_a_file():
+    with pytest.raises(ValueError):
+        handler.handler({"pr_id": "chain-1", "resume_from": "f1"}, None)
