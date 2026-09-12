@@ -60,9 +60,11 @@ python scripts/scan.py path/to/terraform --yes    # don't ask
 python corpus/eval/run_eval.py                    # detection recall over the labelled cases
 ```
 
-`scan.py` prints the dashboard URL for the run when it finishes. Remediation is
-the stage that costs model calls -- one per mapped finding -- which is why it
-asks first.
+`scan.py` uploads the directory, starts one execution of the pipeline state
+machine (scan → map → remediate, one remediation invocation per file in
+parallel), narrates it stage by stage, and prints the dashboard URL when it
+finishes. Remediation is the stage that costs model calls -- one per mapped
+finding -- which is why it asks first (`--no-remediate` stops after mapping).
 
 ## Status
 

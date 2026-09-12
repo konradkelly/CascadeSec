@@ -61,11 +61,13 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
 
 # remediation-agent is the one function that runs near its ceiling: the chain
 # makes one model call and one self-check scan per finding, and a cold scanner
-# is 60-100s of that. A run that stops just short of 900s is a run whose last
-# findings were silently never reached.
+# is 60-100s of that. The handler yields to the pipeline before its clock runs
+# out (FINDING_TIME_RESERVE_SECONDS), so a run this close to 900s means one
+# finding took longer than the reserve allows for -- the reserve is wrong, or
+# something hung -- and the next such run will be killed mid-finding.
 resource "aws_cloudwatch_metric_alarm" "remediation_near_timeout" {
   alarm_name          = "${aws_lambda_function.remediation_agent.function_name}-near-timeout"
-  alarm_description   = "remediation-agent ran within 10% of its timeout; later findings in the file may not have been reached"
+  alarm_description   = "remediation-agent ran within 10% of its timeout despite yielding early; one finding exceeded the time reserve"
   namespace           = "AWS/Lambda"
   metric_name         = "Duration"
   dimensions          = { FunctionName = aws_lambda_function.remediation_agent.function_name }
@@ -77,6 +79,27 @@ resource "aws_cloudwatch_metric_alarm" "remediation_near_timeout" {
   treat_missing_data  = "notBreaching"
 
   alarm_actions = [aws_sns_topic.alarms.arn]
+}
+
+# A failed execution is a PR the pipeline gave up on partway: a stage raised
+# past its retries, or the definition was fed input it could not read. The
+# Lambda error alarms above catch the first cause a stage at a time; this is
+# the one that says which PR, via the execution the console shows as failed.
+resource "aws_cloudwatch_metric_alarm" "pipeline_failed" {
+  alarm_name          = "${aws_sfn_state_machine.pipeline.name}-failed"
+  alarm_description   = "at least one pipeline execution failed in the last 5 minutes"
+  namespace           = "AWS/States"
+  metric_name         = "ExecutionsFailed"
+  dimensions          = { StateMachineArn = aws_sfn_state_machine.pipeline.arn }
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
+  ok_actions    = [aws_sns_topic.alarms.arn]
 }
 
 output "alarms_topic_arn" {

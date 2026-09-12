@@ -11,6 +11,12 @@ extending corpus/rule_mappings.json, not by relaxing this Lambda.
 
 Event shape:
 { "pr_id": "manual-test-1" }
+
+Returns {pr_id, mapped_count, skipped_count, files}. "files" is the sorted
+set of files a finding was mapped on in this run: the pipeline
+(terraform/step_functions.tf) fans remediation out one file per invocation,
+and this is its item list. A file is the unit, not a finding, because
+remediation-agent chains the fixes within a file -- see its module docstring.
 """
 
 import json
@@ -67,6 +73,7 @@ def handler(event, context):
 
     mapped_count = 0
     skipped_count = 0
+    files = set()
 
     for finding in raw_findings:
         candidate_refs = rule_mappings.get(f"{finding['source']}:{finding['rule_id']}")
@@ -82,8 +89,14 @@ def handler(event, context):
 
         _write_mapping(finding, mapping)
         mapped_count += 1
+        files.add(finding["file"])
 
-    return {"pr_id": pr_id, "mapped_count": mapped_count, "skipped_count": skipped_count}
+    return {
+        "pr_id": pr_id,
+        "mapped_count": mapped_count,
+        "skipped_count": skipped_count,
+        "files": sorted(files),
+    }
 
 
 def _query_all(table, **kwargs):

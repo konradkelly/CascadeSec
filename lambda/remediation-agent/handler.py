@@ -24,7 +24,23 @@ different arguments. proposed_fix.applies_after records the chain a fix was
 built on.
 
 Event shape:
-{ "pr_id": "manual-test-1" }
+{
+  "pr_id": "manual-test-1",
+  "file": "main.tf",              # optional: only this file's findings (the
+                                  # unit the pipeline's Map state fans out on)
+  "resume_from": "<finding_id>"   # optional: root the chain at this fix
+                                  # rather than at the last accepted one
+}
+
+The pipeline (terraform/step_functions.tf) invokes this once per file, and a
+file can hold more findings than fit in one invocation: every finding is a
+model call plus a self-check scan, so 900s is roughly four to seven of them.
+Rather than be killed mid-write, the handler stops when the time left would
+not safely cover another finding and returns `remaining` > 0 with
+`resume_from` set to the last scanner-verified fix. The state machine feeds
+that output straight back in as the next input -- a continuation token -- and
+the chain carries on from where it stopped instead of restarting from the
+snapshot. The counts are cumulative across continuations for the same reason.
 """
 
 import collections
@@ -48,6 +64,14 @@ ARTIFACTS_BUCKET = os.environ.get("ARTIFACTS_BUCKET")
 ANTHROPIC_SECRET_ARN = os.environ.get("ANTHROPIC_SECRET_ARN")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 TERRAFORM_SCANNER_FUNCTION_NAME = os.environ.get("TERRAFORM_SCANNER_FUNCTION_NAME")
+
+# Time to leave on the clock before starting another finding. The self-check
+# scan is allowed 300s (terraform-scanner's timeout), and the model call has
+# been observed at up to ~3 minutes for a large file, so this is the sum of
+# the two worst cases: a finding that starts with this much left cannot be cut
+# off by the Lambda timeout. Overridable so a longer function timeout or a
+# faster scanner does not need a code change.
+FINDING_TIME_RESERVE_MS = int(os.environ.get("FINDING_TIME_RESERVE_SECONDS", "480")) * 1000
 
 s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
@@ -108,17 +132,37 @@ RESOURCE_BLOCK_RE = re.compile(r'^\s*resource\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.
 
 def handler(event, context):
     pr_id = event["pr_id"]
+    only_file = event.get("file")
+    resume_from = event.get("resume_from")
+    if resume_from and not only_file:
+        # A fix belongs to one file, so a chain can only be resumed per file.
+        raise ValueError("resume_from requires file")
 
-    mapped_findings = _query_mapped_findings(pr_id)
+    mapped_findings = _query_mapped_findings(pr_id, only_file)
 
-    fix_proposed_count = 0
-    needs_human_count = 0
-    superseded_count = 0
-    error_count = 0
+    # Counters start from the previous continuation's, so the number the
+    # state machine reports for a file is the file's total, not the last
+    # invocation's share of it. A first invocation carries none of these.
+    fix_proposed_count = event.get("fix_proposed_count", 0)
+    needs_human_count = event.get("needs_human_only_count", 0)
+    superseded_count = event.get("superseded_count", 0)
+    error_count = event.get("error_count", 0)
+    # How many of this invocation's findings were left untouched, and the fix
+    # the next invocation should root at. Both stay at their defaults unless
+    # the time budget stops the loop.
+    remaining = 0
+    resume_at = None
 
     for file_path, findings in _group_by_file(mapped_findings):
+        if remaining:
+            # Out of time on an earlier file (whole-PR mode only; per-file
+            # mode has one file). Counted so the caller knows work is left.
+            remaining += len(findings)
+            continue
         try:
-            base_content, baseline_counts, applies_after = _chain_root(pr_id, file_path)
+            base_content, baseline_counts, applies_after = _chain_root(
+                pr_id, file_path, resume_from,
+            )
         except Exception:
             # Nothing in this file can be remediated without its base, and the
             # failure is the file's, not any one finding's.
@@ -132,7 +176,21 @@ def handler(event, context):
         # fix satisfies both.
         cleared_by = {}
 
-        for finding in findings:
+        for index, finding in enumerate(findings):
+            # Yield rather than be killed. A timeout mid-finding would lose
+            # the model call in flight and, worse, leave no return value, so
+            # the state machine could not tell where the chain got to. The
+            # check is before the finding starts because that is the only
+            # point where stopping costs nothing.
+            if _time_left_ms(context) < FINDING_TIME_RESERVE_MS:
+                remaining = len(findings) - index
+                resume_at = applies_after[-1]["finding_id"] if applies_after else None
+                logger.info(
+                    "yielding on %s with %d finding(s) left; chain resumes at %s",
+                    file_path, remaining, resume_at,
+                )
+                break
+
             # An earlier fix in this file already removed this rule, so there
             # is nothing left to fix. Remediating anyway is not just wasted:
             # the model is handed a file where the issue is already gone,
@@ -203,13 +261,30 @@ def handler(event, context):
                     "diff_sha256": _diff_sha256(outcome.diff),
                 })
 
-    return {
+    result = {
         "pr_id": pr_id,
         "fix_proposed_count": fix_proposed_count,
         "needs_human_only_count": needs_human_count,
         "superseded_count": superseded_count,
         "error_count": error_count,
+        # Non-zero means "invoke me again with this output as the input".
+        "remaining": remaining,
     }
+    if only_file:
+        result["file"] = only_file
+        # Only meaningful per file: a whole-PR invocation that ran out of time
+        # reports how much is left, and a re-invoke roots where it always did.
+        if remaining and resume_at:
+            result["resume_from"] = resume_at
+    return result
+
+
+def _time_left_ms(context):
+    """Milliseconds before Lambda kills this invocation. Unbounded outside
+    Lambda (the tests pass no context), where nothing is going to kill it."""
+    if context is None:
+        return float("inf")
+    return context.get_remaining_time_in_millis()
 
 
 def _group_by_file(findings):
@@ -344,7 +419,7 @@ def _query_all(table, **kwargs):
         kwargs["ExclusiveStartKey"] = last_key
 
 
-def _chain_root(pr_id, file_path):
+def _chain_root(pr_id, file_path, resume_from=None):
     """Where this file's chain starts: (content, finding counts, applies_after).
 
     The pristine snapshot, unless a fix on this file has already been accepted
@@ -360,29 +435,45 @@ def _chain_root(pr_id, file_path):
     file the last is the one with the longest chain: applies_after is
     cumulative, so the longest one has every other applied already.
 
+    resume_from overrides that: it names the fix a previous invocation of
+    this same run stopped after (see handler), and the chain roots there
+    regardless of its status. A fix drafted ten minutes ago and not yet
+    reviewed is exactly as good a base as it was when the previous invocation
+    built on it -- rooting at the accepted fix instead would redraft the rest
+    of the file as competing rewrites of the same lines, which is the problem
+    the chain exists to prevent.
+
     The counts for the root are the finding set of its content. For the
-    snapshot that is the original scan, already in the table. For an accepted
-    fix it is a rescan: the fix's own self-check counts are stale if a
-    reviewer edited it, and the difference is exactly the case this exists
-    for, so it is not worth the two code paths to skip the invoke when it
-    would be safe.
+    snapshot that is the original scan, already in the table. For a fix it is
+    a rescan: the fix's own self-check counts are stale if a reviewer edited
+    it, and the difference is exactly the case this exists for, so it is not
+    worth the two code paths to skip the invoke when it would be safe.
     """
     on_file = _query_findings_on_file(pr_id, file_path)
-    accepted = [
-        f for f in on_file
-        if f.get("status") == "resolved" and (f.get("proposed_fix") or {}).get("diff")
-    ]
-    if not accepted:
-        # The original scan's counts, across every status. Counts rather than
-        # a set: one file often carries several instances of the same rule
-        # (three open-ingress rules in one security group, say), and the
-        # self-check has to distinguish "one of them was fixed" from "none".
-        counts = collections.Counter((f["source"], f["rule_id"]) for f in on_file)
-        return _fetch_original_content(pr_id, file_path), counts, []
+    if resume_from:
+        root = next((f for f in on_file if f["finding_id"] == resume_from), None)
+        if root is None or not (root.get("proposed_fix") or {}).get("diff"):
+            raise RuntimeError(f"resume_from {resume_from} is not a drafted fix on {file_path}")
+    else:
+        accepted = [
+            f for f in on_file
+            if f.get("status") == "resolved" and (f.get("proposed_fix") or {}).get("diff")
+        ]
+        if not accepted:
+            # The original scan's counts, across every status. Counts rather
+            # than a set: one file often carries several instances of the same
+            # rule (three open-ingress rules in one security group, say), and
+            # the self-check has to distinguish "one of them was fixed" from
+            # "none".
+            counts = collections.Counter((f["source"], f["rule_id"]) for f in on_file)
+            return _fetch_original_content(pr_id, file_path), counts, []
+        root = max(accepted, key=lambda f: len(f["proposed_fix"].get("applies_after") or []))
 
-    root = max(accepted, key=lambda f: len(f["proposed_fix"].get("applies_after") or []))
     root_id = root["finding_id"]
-    logger.info("chain for %s roots at accepted fix %s", file_path, root_id)
+    logger.info(
+        "chain for %s roots at %s fix %s",
+        file_path, "resumed" if resume_from else "accepted", root_id,
+    )
 
     key = f"{_self_check_prefix(pr_id, root_id)}{file_path}"
     content = s3.get_object(Bucket=ARTIFACTS_BUCKET, Key=key)["Body"].read().decode("utf-8")
@@ -391,7 +482,7 @@ def _chain_root(pr_id, file_path):
     if scan_errors:
         # The accepted content does not parse. Most likely a reviewer's edit
         # broke it. Nothing can be drafted on a base the scanner cannot read.
-        raise RuntimeError(f"accepted fix {root_id} does not parse: {scan_errors}")
+        raise RuntimeError(f"root fix {root_id} does not parse: {scan_errors}")
     counts = collections.Counter((f["source"], f["rule_id"]) for f in rescan_findings)
 
     chain = list(root["proposed_fix"].get("applies_after") or [])
@@ -414,18 +505,21 @@ def _query_findings_on_file(pr_id, file_path):
     )
 
 
-def _query_mapped_findings(pr_id):
+def _query_mapped_findings(pr_id, only_file=None):
     table = dynamodb.Table(DYNAMODB_TABLE)
+    names = {"#status": "status"}
+    values = {":pk": f"PR#{pr_id}", ":sk_prefix": "FINDING#", ":status": "mapped"}
+    filter_expression = "#status = :status"
+    if only_file:
+        names["#file"] = "file"
+        values[":file"] = only_file
+        filter_expression += " AND #file = :file"
     return _query_all(
         table,
         KeyConditionExpression="pk = :pk AND begins_with(sk, :sk_prefix)",
-        FilterExpression="#status = :status",
-        ExpressionAttributeNames={"#status": "status"},
-        ExpressionAttributeValues={
-            ":pk": f"PR#{pr_id}",
-            ":sk_prefix": "FINDING#",
-            ":status": "mapped",
-        },
+        FilterExpression=filter_expression,
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=values,
     )
 
 
