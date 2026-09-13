@@ -4,11 +4,11 @@
   "findings": [
     {
       "pk": "PR#fixture-ssh-after",
-      "sk": "FINDING#73328b0ebaa00522",
-      "finding_id": "73328b0ebaa00522",
+      "sk": "FINDING#62a1412b8886dca5",
+      "finding_id": "62a1412b8886dca5",
       "iac_type": "terraform",
-      "source": "tfsec",
-      "rule_id": "aws-ec2-add-description-to-security-group",
+      "source": "trivy",
+      "rule_id": "AWS-0099",
       "file": "main.tf",
       "line_range": [
         1,
@@ -18,16 +18,16 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:25:00.779346+00:00",
-      "updated_at": "2026-09-01T19:25:00.779346+00:00"
+      "created_at": "2026-09-13T01:23:13.484799+00:00",
+      "updated_at": "2026-09-13T01:23:13.484799+00:00"
     },
     {
       "pk": "PR#fixture-ssh-after",
-      "sk": "FINDING#77b223ebf4d497bc",
-      "finding_id": "77b223ebf4d497bc",
+      "sk": "FINDING#a02407108560efd7",
+      "finding_id": "a02407108560efd7",
       "iac_type": "terraform",
-      "source": "tfsec",
-      "rule_id": "aws-ec2-add-description-to-security-group-rule",
+      "source": "trivy",
+      "rule_id": "AWS-0124",
       "file": "main.tf",
       "line_range": [
         4,
@@ -37,8 +37,8 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:25:00.779346+00:00",
-      "updated_at": "2026-09-01T19:25:00.779346+00:00"
+      "created_at": "2026-09-13T01:23:13.484799+00:00",
+      "updated_at": "2026-09-13T01:23:13.484799+00:00"
     },
     {
       "pk": "PR#fixture-ssh-after",
@@ -56,8 +56,8 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:25:00.779417+00:00",
-      "updated_at": "2026-09-01T19:25:00.779417+00:00"
+      "created_at": "2026-09-13T01:23:13.484882+00:00",
+      "updated_at": "2026-09-13T01:23:13.484882+00:00"
     },
     {
       "pk": "PR#fixture-ssh-after",
@@ -75,8 +75,9 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:25:00.779417+00:00",
-      "updated_at": "2026-09-01T19:25:00.779417+00:00"
+      "created_at": "2026-09-13T01:23:13.484882+00:00",
+      "updated_at": "2026-09-13T01:23:13.484882+00:00"
     }
-  ]
+  ],
+  "scan_errors": []
 }

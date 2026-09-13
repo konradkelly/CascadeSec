@@ -10,25 +10,28 @@ target finding(s). `before/main.tf` has the issue; `after/main.tf` is a
 hand-written fix for it. Each side's `scan-response.json` is **not
 hand-authored** — it's the real, captured response from actually invoking
 the deployed `terraform-scanner` (`persist: false`) against that exact
-file, on 2026-09-01, when the scanner ran tfsec; it runs Trivy since
-2026-09-12 and reports `source: trivy` with Trivy's ids, but the fixtures are
-kept as captured because the tests use their (source, rule_id) strings as
-opaque labels for the self-check comparison. If Trivy/Checkov versions change later and something
-here looks stale, regenerate by invoking the real Lambda rather than
-hand-editing these — that defeats the point of using captured ground truth.
+file. Captured 2026-09-01 against tfsec + Checkov, and re-captured
+2026-09-12 when the scanner moved to Trivy 0.74.0 + Checkov 3.3.16 (so
+findings are `source: trivy` with Trivy's ids, `AWS-0132`). If the
+Trivy/Checkov versions change later and something here looks stale,
+regenerate by invoking the real Lambda rather than hand-editing these —
+that defeats the point of using captured ground truth.
 
 - **`s3-bucket-encryption/`** — adding an
-  `aws_s3_bucket_server_side_encryption_configuration` resource clears
-  `tfsec:aws-s3-enable-bucket-encryption` (16 → 15 findings). The bucket's
-  other pre-existing findings (no versioning, no logging, no public-access
-  block, etc.) deliberately remain in `after/` — the fixture demonstrates
-  fixing *one* specific finding, not making the file fully compliant.
+  `aws_s3_bucket_server_side_encryption_configuration` resource with a KMS
+  key clears `trivy:AWS-0132` and `checkov:CKV_AWS_145` (15 → 13 findings).
+  The bucket's other pre-existing findings (no versioning, no logging, no
+  public-access block, etc.) deliberately remain in `after/` — the fixture
+  demonstrates fixing *one* specific finding, not making the file fully
+  compliant. (Until 2026-09-12 the fix was AES256 and cleared tfsec's
+  `aws-s3-enable-bucket-encryption`; Trivy has deprecated that check, since
+  AWS encrypts S3 by default, so the customer-managed-key check is the one
+  a bare bucket raises now, and the fix moved to KMS to clear it.)
 - **`open-ssh-ingress/`** — narrowing a security group's SSH ingress from
   `0.0.0.0/0` to `10.0.0.0/16` clears **both**
-  `checkov:CKV_AWS_24` and `tfsec:aws-ec2-no-public-ingress-sgr` at once
-  (6 → 4 findings) — a good case for testing that your self-check logic
-  handles a fix clearing findings from more than one scanner source
-  simultaneously.
+  `checkov:CKV_AWS_24` and `trivy:AWS-0107` at once (6 → 4 findings) — a
+  good case for testing that your self-check logic handles a fix clearing
+  findings from more than one scanner source simultaneously.
 
 Neither pair introduces a new rule_id in `after/` that wasn't already
 present in `before/` — both are "clean" fixes, useful for asserting
