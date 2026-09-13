@@ -1,0 +1,6 @@
+{
+  "description": "Security group ingress on 30000-32767/tcp (the Kubernetes NodePort range) from 0.0.0.0/0",
+  "category": "network-exposure",
+  "expected": [],
+  "note": "A labelled gap in both tools, counted nowhere. checkov's public-ingress rules are per well-known port (22, 3389, 80, 20/21, 23, ...) and have nothing for an arbitrary range; Trivy's AWS-0107 is SSH/RDP only. tfsec flagged this (it was one of the two PugetScope findings that motivated context-agent), so this is a detection regression from the Trivy swap, recorded so it is not mistaken for a clean rule. Closing it means a custom check, which is a different item."
+}
