@@ -15,21 +15,22 @@ Needs `boto3`, AWS credentials for the dev account, and the `terraform` CLI on
 
 ## Result
 
-**97.1% — 68 of 70 expected findings, across 41 positive cases and 2 clean
-controls.** Run 2026-09-12 against checkov 3.3.16 and Trivy 0.74.0, as
+**97.2% — 69 of 71 expected findings, across 43 positive cases and 2 clean
+controls.** Run 2026-09-13 against checkov 3.3.16 and Trivy 0.74.0, as
 packaged in the scanner image. Both misses are labelled tool gaps (`CKV_AWS_60` on a
 bare `"*"` principal; `CKV_SECRET_6` on a password with a `!` in it), so
-this is the ceiling for these two tools on these cases.
+this is the ceiling for these two tools on these cases. One further gap is
+labelled and counted nowhere: see "Public ingress on non-admin ports".
 
 | category | recall |
 |---|---|
-| network-exposure | 19/19 |
+| network-exposure | 20/20 |
 | missing-encryption | 22/22 |
 | logging-monitoring | 10/10 |
 | unpinned-modules | 2/2 |
 | iam-over-permissioning | 8/9 |
 | hardcoded-secrets | 7/8 |
-| **by source** | checkov 42/44 · trivy 26/26 |
+| **by source** | checkov 43/45 · trivy 26/26 |
 
 Both clean controls raised nothing.
 
@@ -87,6 +88,22 @@ pin this down; checkov's `CKV_AWS_88` covers all three resource types, so
 the pipeline as a whole still catches it. The two modern-form cases are
 labelled for checkov only, with the gap recorded in their `note`.
 
+### Public ingress on non-admin ports: a gap the Trivy swap opened
+
+tfsec's `aws-ec2-no-public-ingress-sgr` fired on any ingress rule open to
+`0.0.0.0/0`, whatever the port. Trivy's `AWS-0107` is the same check
+narrowed upstream to SSH and RDP (`net.is_ssh_or_rdp_port` in
+trivy-checks). Found on 2026-09-13, when the two PugetScope findings that
+motivated `context-agent` — port 80 and the NodePort range 30000-32767 open
+to the world — were simply not admitted after the swap.
+
+Two cases pin it down. `sg-http-from-anywhere` is caught by checkov's
+`CKV_AWS_260` (per-port rules exist for 80, 20/21, 23 and a few others), so
+it is labelled checkov-only. `sg-port-range-from-anywhere` is caught by
+neither tool — checkov has nothing for an arbitrary range — and is labelled
+with an empty expectation so the gap is on record without inflating recall.
+Closing it means a custom check, which is a different item.
+
 ### tfsec → Trivy, 2026-09-12
 
 The scanner swapped tfsec for Trivy (§8.2 item 6). Trivy's report carries
@@ -135,6 +152,8 @@ source-level reason.
 | tfsec→Trivy | every `tfsec` label (27 cases) | `tfsec <long-id>` | `trivy AWS-nnnn` | Trivy emits its own id only; translated from trivy-checks metadata, see above |
 | tfsec→Trivy | `s3-no-encryption`, `tf-json-unencrypted-bucket` | `aws-s3-enable-bucket-encryption` | `AWS-0132` | `AWS-0088` is deprecated in Trivy (AWS encrypts S3 by default since 2023) and off by default; `AWS-0132` (customer-managed key) is what fires on a bare bucket, and is the Trivy-side twin of the `CKV_AWS_145` the cases already expect |
 | tfsec→Trivy | `iam-policy-full-admin`, `iam-policy-document-full-admin` | + `aws-iam-no-policy-wildcards` | checkov only | `AWS-0057` is deprecated in Trivy with no replacement; nothing on the Trivy side fires on a `"*":"*"` policy |
+| 2026-09-13 | *(added)* `sg-http-from-anywhere` | — | `CKV_AWS_260` | Trivy's `AWS-0107` is SSH/RDP-only where tfsec's fired on any port; see the gap above |
+| 2026-09-13 | *(added)* `sg-port-range-from-anywhere` | — | *(nothing)* | neither tool covers an arbitrary port range open to the world; labelled empty so the gap is recorded and counted nowhere |
 
 ## What recall means here, and what it does not
 

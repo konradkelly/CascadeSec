@@ -284,7 +284,38 @@ detail (`minItems: 2` on `line_range` is rejected by structured outputs);
 the failure path behaved as designed, four errors and four findings left
 `mapped`, and the direct `--stages remediate` re-run picked them up.
 
-**Not yet measured:** §8's assumption-resolution rate over the findings
-already in the table. It needs a re-run of remediation over those PRs with
-the widened snapshot re-uploaded, since their snapshots predate the YAML
-upload.
+**Measured on PugetScope, 2026-09-13** (`pugetscope-ctx-1`: the full
+repository, 57 files including `k8s/`, remediation run on
+`terraform/modules/security_groups/main.tf` alone). The result is in two
+parts, and the second is the more important.
+
+*What was measurable:* 5 drafts, 5 questions, **5 answered yes/no with 10
+citations, 0 unknown, 0 citations rejected** (three context-agent
+invocations, `ContextCitationsRejected: 0` on each). The questions were the
+assumption-shaped ones §1 predicted — does `admin_cidrs` default to open,
+does any caller pass `0.0.0.0/0`, does the VPC module create endpoints that
+would make egress unnecessary, does a variable of this name already exist —
+and each was settled from the repository with verified citations
+(`variables.tf`, `main.tf`'s module call, `modules/vpc/main.tf`). The 5
+assumptions that survived are all about the running system: which outbound
+destinations the nodes and the RDS instance actually need. Those are the
+ones that should survive. On the one finding drafted in both runs
+(`CKV_AWS_24`), both drafts passed with zero assumptions; the new one spent
+two questions confirming that.
+
+*What was not measurable, and why it matters more:* the six assumptions in
+§1's table belonged to two findings — port 80 and the NodePort range open to
+the world — that **Trivy does not admit**. Its `AWS-0107` is the tfsec check
+narrowed upstream to SSH/RDP ports; checkov catches port 80 (`CKV_AWS_260`)
+but no control maps to it, and nothing catches the range. So the fixes that
+would have asked about ACME HTTP-01 and the ingress ports were never drafted,
+and the resolution rate on the original six is undefined. §8.1's admission
+rule is doing exactly what it says — no rule, no finding — and the gap is now
+recorded in the eval corpus (`corpus/eval/README.md`, "Public ingress on
+non-admin ports"). Closing it is a custom check, a different item; when it
+lands, this eval is the one to re-run, and the cert-manager `ClusterIssuer`
+is in the snapshot waiting for the question.
+
+*Cost of the run:* one file, 5 findings, 3 context invocations and 3
+redrafts on top of 5 drafts — roughly double the model calls of a run
+without questions, on a file where every draft had something to ask.
