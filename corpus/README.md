@@ -39,21 +39,23 @@ new rule_ids turn up in real scans.
 
 ## Coverage
 
-48 rules mapped, against 16 CIS controls and the two OWASP lists. Measured
-against `eval/`, whose 40 cases were all observed firing in a real scan:
-**48 of 67 labelled `(source, rule_id)` pairs have a candidate control (72%)**,
-from 9 rules before 2026-09-12.
+49 rules mapped, against 16 CIS controls and the two OWASP lists. Measured
+against `eval/`, whose 43 cases were all observed firing in a real scan:
+**45 of 62 labelled `(source, rule_id)` pairs have a candidate control (73%)**,
+from 9 rules before 2026-09-12. (Re-keyed from tfsec to Trivy ids the same
+day, which also retired one mapped rule: Trivy deprecated
+`aws-iam-no-policy-wildcards` and nothing replaces it.)
 
 | category | mapped |
 |---|---|
-| network-exposure | 18/19 |
-| logging-monitoring | 8/10 |
-| iam-over-permissioning | 7/11 |
 | missing-encryption | 10/21 |
-| hardcoded-secrets | 3/4 |
+| network-exposure | 15/16 |
+| logging-monitoring | 8/10 |
+| iam-over-permissioning | 5/8 |
+| hardcoded-secrets | 5/5 |
 | unpinned-modules | 2/2 |
 
-The 19 unmapped pairs are unmapped on purpose, and they cluster:
+The 17 unmapped pairs are unmapped on purpose, and they cluster:
 
 - **Encryption at rest for resources CIS AWS 1.4 does not cover** — SNS, SQS,
   DynamoDB, EFS, Lambda environment variables, CloudWatch log groups. The

@@ -7,8 +7,8 @@
       "rule_id": "CKV_AWS_46"
     },
     {
-      "source": "tfsec",
-      "rule_id": "aws-ec2-no-secrets-in-user-data"
+      "source": "trivy",
+      "rule_id": "AWS-0029"
     },
     {
       "source": "checkov",

@@ -15,7 +15,7 @@ IaCPosture scans Terraform for security misconfigurations, maps every finding to
 
 **The core design principle: the agent proposes, it never decides.**
 
-- A deterministic scanner (tfsec, Checkov) finds the issue — zero hallucination risk on detection
+- A deterministic scanner (Trivy, Checkov) finds the issue — zero hallucination risk on detection
 - An LLM agent maps the finding to the exact control it violates, with a citation
 - A second LLM agent drafts a minimal diff — then re-runs the same scanner against its own proposed fix before surfacing it. If the fix doesn't clear the finding, or introduces a new one, it never reaches a human as a suggestion.
 - Every finding and every fix is reviewed and approved by a human — nothing is auto-merged
@@ -31,7 +31,7 @@ GitHub PR → API Gateway → webhook-receiver (Lambda)
                                 │
                                 ▼
                      terraform-scanner (Lambda)
-                        tfsec + Checkov → raw findings
+                        Trivy + Checkov → raw findings
                                 │
                                 ▼
                       mapping-agent (Lambda)
@@ -80,7 +80,7 @@ finding -- which is why it asks first (`--no-remediate` stops after mapping).
 ## Tech stack
 
 - **Infra:** AWS Lambda, API Gateway, SQS, DynamoDB, S3, EventBridge, CloudWatch, X-Ray, CloudFront
-- **Scanning:** tfsec, Checkov (Terraform); kubesec, Helm (v2)
+- **Scanning:** Trivy, Checkov (Terraform); kubesec, Helm (v2)
 - **Agents:** Anthropic API, strict JSON-schema-constrained outputs
 - **Frontend:** React, Vite, TypeScript
 

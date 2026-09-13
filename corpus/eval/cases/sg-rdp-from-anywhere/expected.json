@@ -7,8 +7,8 @@
       "rule_id": "CKV_AWS_25"
     },
     {
-      "source": "tfsec",
-      "rule_id": "aws-ec2-no-public-ingress-sgr"
+      "source": "trivy",
+      "rule_id": "AWS-0107"
     }
   ]
 }

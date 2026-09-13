@@ -7,8 +7,8 @@
       "rule_id": "CKV_AWS_7"
     },
     {
-      "source": "tfsec",
-      "rule_id": "aws-kms-auto-rotate-keys"
+      "source": "trivy",
+      "rule_id": "AWS-0065"
     }
   ]
 }
