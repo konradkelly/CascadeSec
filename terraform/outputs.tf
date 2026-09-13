@@ -19,6 +19,7 @@ output "lambda_role_arns" {
     terraform_scanner = aws_iam_role.terraform_scanner.arn
     mapping_agent     = aws_iam_role.mapping_agent.arn
     remediation_agent = aws_iam_role.remediation_agent.arn
+    context_agent     = aws_iam_role.context_agent.arn
     review_api        = aws_iam_role.review_api.arn
   }
 }
@@ -45,6 +46,10 @@ output "remediation_agent_function_name" {
 
 output "remediation_agent_function_arn" {
   value = aws_lambda_function.remediation_agent.arn
+}
+
+output "context_agent_function_name" {
+  value = aws_lambda_function.context_agent.function_name
 }
 
 output "review_api_function_name" {

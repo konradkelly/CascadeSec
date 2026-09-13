@@ -1450,3 +1450,169 @@ def test_a_continuation_names_a_fix_that_was_never_drafted(mock_dynamodb):
 def test_resume_from_needs_a_file():
     with pytest.raises(ValueError):
         handler.handler({"pr_id": "chain-1", "resume_from": "f1"}, None)
+
+
+# ---------- questions: asking the repository instead of assuming ----------
+#
+# docs/context-agent-spec.md. The model may return `questions`; context-agent
+# answers them with citations; the fix is redrafted knowing the answers.
+
+QUESTION = "Does anything in this repository serve the bucket `data` anonymously?"
+
+
+def _answered(answer, explanation="A CloudFront origin reads it with OAC.", citations=None):
+    return {"question": QUESTION, "answer": answer, "explanation": explanation,
+            "citations": citations if citations is not None else
+            [{"file": "cdn.tf", "line_range": [12, 18], "excerpt": "origin_access_control_id ="}]}
+
+
+def _questions_run(mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, monkeypatch,
+                   first_reply, context_reply, second_reply):
+    monkeypatch.setattr(handler, "CONTEXT_AGENT_FUNCTION_NAME", "ctx-fn")
+    before = _load_fixture("s3-bucket-encryption", "before")
+    after = _load_fixture("s3-bucket-encryption", "after")
+    finding = {**next(f for f in before["findings"] if f["rule_id"] == "AWS-0132"), "status": "mapped"}
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": [finding]}, {"Items": before["findings"]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {
+        "Body": SimpleNamespace(read=lambda: _read_fixture_tf("s3-bucket-encryption", "before").encode())
+    }
+    mock_get_client.return_value.messages.create.side_effect = [
+        _fake_anthropic_response(first_reply), _fake_anthropic_response(second_reply),
+    ]
+    mock_lambda_client.invoke.side_effect = [
+        {"Payload": SimpleNamespace(read=lambda: json.dumps({"answers": context_reply}).encode())},
+        _scan_reply(after),
+    ]
+    result = handler.handler({"pr_id": "fixture-s3-enc-before"}, None)
+    return result, mock_table
+
+
+def _fix_reply(**overrides):
+    reply = {
+        "corrected_file_content": _read_fixture_tf("s3-bucket-encryption", "after"),
+        "rationale": "Encrypted with KMS.", "assumptions": [], "questions": [],
+    }
+    reply.update(overrides)
+    return reply
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_question_is_answered_and_the_fix_is_redrafted_on_the_answer(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, monkeypatch
+):
+    """The point of the component. The first draft asked; context-agent was
+    invoked with exactly that question; the second draft saw the cited
+    answer; the answered question is not an assumption, so the fix passes."""
+    result, mock_table = _questions_run(
+        mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, monkeypatch,
+        first_reply=_fix_reply(questions=[QUESTION], assumptions=[]),
+        context_reply=[_answered("no")],
+        second_reply=_fix_reply(),
+    )
+
+    # context-agent got the question, before the self-check scan.
+    ctx_call = mock_lambda_client.invoke.call_args_list[0].kwargs
+    assert ctx_call["FunctionName"] == "ctx-fn"
+    assert json.loads(ctx_call["Payload"]) == {
+        "pr_id": "fixture-s3-enc-before", "s3_prefix": "scans/fixture-s3-enc-before/",
+        "questions": [QUESTION],
+    }
+    # The redraft saw the answer and its citation, verbatim.
+    redraft_prompt = _prompt_of(mock_get_client, 1)
+    assert f"Q: {QUESTION}" in redraft_prompt
+    assert "A: no -- A CloudFront origin reads it with OAC." in redraft_prompt
+    assert "[cdn.tf:12-18] origin_access_control_id =" in redraft_prompt
+    assert "Draft the fix knowing this" in redraft_prompt
+    # And the first draft was asked to consider questions at all.
+    assert "put it in `questions`" in _prompt_of(mock_get_client, 0)
+
+    assert result["fix_proposed_count"] == 1
+    written = _written(mock_table, 0)
+    assert written[":status"] == "fix-proposed"
+    assert written[":pf"]["assumptions"] == []
+    assert written[":pf"]["questions"] == [_answered("no")]
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_an_unknown_answer_stays_an_assumption_and_holds_the_fix(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, monkeypatch
+):
+    """'We looked and the repository does not say' is still something the
+    fix rests on. It reaches the reviewer as an assumption -- and the question
+    record beside it is what shows it was asked, not guessed."""
+    result, mock_table = _questions_run(
+        mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, monkeypatch,
+        first_reply=_fix_reply(questions=[QUESTION]),
+        context_reply=[_answered("unknown", "Nothing in the snapshot references the bucket.", citations=[])],
+        second_reply=_fix_reply(),  # the redraft forgot to carry it as an assumption
+    )
+
+    assert result["needs_human_only_count"] == 1
+    written = _written(mock_table, 0)
+    assert written[":status"] == "needs-human-only"
+    assert written[":pf"]["assumptions"] == [QUESTION]
+    assert written[":pf"]["questions"][0]["answer"] == "unknown"
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_without_a_context_agent_questions_become_assumptions(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, monkeypatch
+):
+    """CONTEXT_AGENT_FUNCTION_NAME unset: one model call as before, no
+    invoke, and anything the model wanted to ask is an assumption."""
+    monkeypatch.setattr(handler, "CONTEXT_AGENT_FUNCTION_NAME", None)
+
+    result, mock_table = _run_one_finding(
+        mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client,
+        _fix_reply(questions=[QUESTION]),
+    )
+
+    assert mock_get_client.return_value.messages.create.call_count == 1
+    assert "Return an empty `questions` list." in _prompt_of(mock_get_client, 0)
+    # The only invoke was the self-check scan.
+    assert mock_lambda_client.invoke.call_count == 1
+    assert result["needs_human_only_count"] == 1
+    assert _written(mock_table, 0)[":pf"]["assumptions"] == [QUESTION]
+    assert _written(mock_table, 0)[":pf"]["questions"] == []
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_failed_context_lookup_leaves_the_finding_for_a_retry(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, monkeypatch
+):
+    """Drafting on an answer that was never given is worse than not drafting."""
+    monkeypatch.setattr(handler, "CONTEXT_AGENT_FUNCTION_NAME", "ctx-fn")
+    before = _load_fixture("s3-bucket-encryption", "before")
+    finding = {**next(f for f in before["findings"] if f["rule_id"] == "AWS-0132"), "status": "mapped"}
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": [finding]}, {"Items": before["findings"]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {
+        "Body": SimpleNamespace(read=lambda: _read_fixture_tf("s3-bucket-encryption", "before").encode())
+    }
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response(
+        _fix_reply(questions=[QUESTION])
+    )
+    mock_lambda_client.invoke.return_value = {
+        "FunctionError": "Unhandled",
+        "Payload": SimpleNamespace(read=lambda: b'{"errorType": "RuntimeError"}'),
+    }
+
+    result = handler.handler({"pr_id": "fixture-s3-enc-before"}, None)
+
+    assert result["error_count"] == 1
+    mock_table.update_item.assert_not_called()

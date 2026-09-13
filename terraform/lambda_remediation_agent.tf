@@ -52,10 +52,14 @@ resource "aws_lambda_function" "remediation_agent" {
       # Wired from the resource rather than reconstructed from locals so the
       # dependency is explicit in the graph.
       TERRAFORM_SCANNER_FUNCTION_NAME = aws_lambda_function.terraform_scanner.function_name
+      # A draft may ask the repository questions before it is final.
+      CONTEXT_AGENT_FUNCTION_NAME = aws_lambda_function.context_agent.function_name
       # Time the handler leaves on the clock before starting another finding:
-      # the scanner's timeout plus a worst-case model call. Tied to the
-      # scanner's timeout here so the two cannot drift apart silently.
-      FINDING_TIME_RESERVE_SECONDS = aws_lambda_function.terraform_scanner.timeout + 180
+      # the scanner's timeout, context-agent's timeout, and two model calls
+      # (the draft and, when questions were asked, the redraft) at a worst
+      # case of 120s each. Tied to the other functions' timeouts so the
+      # numbers cannot drift apart silently.
+      FINDING_TIME_RESERVE_SECONDS = aws_lambda_function.terraform_scanner.timeout + aws_lambda_function.context_agent.timeout + 240
     }
   }
 

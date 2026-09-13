@@ -40,6 +40,8 @@ GitHub PR → API Gateway → webhook-receiver (Lambda)
                                 ▼
                     remediation-agent (Lambda)
               proposes diff → self-checks against terraform-scanner
+                 ↳ asks context-agent (Lambda) about the rest of
+                   the repo; every answer cited to file:line
                                 │
                                 ▼
                   review dashboard (React + Vite + TS)

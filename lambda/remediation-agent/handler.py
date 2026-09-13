@@ -15,6 +15,14 @@ cleared. So a failed invocation is raised (the finding stays "mapped" for a
 retry) and a reported parse error short-circuits to needs-human-only before
 any verdict is computed.
 
+A draft may ask questions instead of guessing. The model returns
+`questions` -- facts about the rest of the repository it would otherwise
+have had to declare as assumptions -- and context-agent answers them from the
+snapshot with citations (docs/context-agent-spec.md). The fix is then
+redrafted knowing the answers. A draft with no questions costs exactly what
+it did before: one call. Whatever the repository could not settle comes back
+as `unknown` and stays an assumption, so the human-review gate is unchanged.
+
 Findings are remediated one file at a time, in a stable order, each fix
 drafted against the file as the previous accepted fix left it. Every file in
 the live table carries between 3 and 22 findings, so drafting each fix from
@@ -64,14 +72,18 @@ ARTIFACTS_BUCKET = os.environ.get("ARTIFACTS_BUCKET")
 ANTHROPIC_SECRET_ARN = os.environ.get("ANTHROPIC_SECRET_ARN")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 TERRAFORM_SCANNER_FUNCTION_NAME = os.environ.get("TERRAFORM_SCANNER_FUNCTION_NAME")
+# Unset means questions are not asked: the model is told not to raise any,
+# and a draft that does anyway is used as-is with its questions folded into
+# assumptions. Lets the two components deploy independently.
+CONTEXT_AGENT_FUNCTION_NAME = os.environ.get("CONTEXT_AGENT_FUNCTION_NAME")
 
-# Time to leave on the clock before starting another finding. The self-check
-# scan is allowed 300s (terraform-scanner's timeout), and the model call has
-# been observed at up to ~3 minutes for a large file, so this is the sum of
-# the two worst cases: a finding that starts with this much left cannot be cut
-# off by the Lambda timeout. Overridable so a longer function timeout or a
-# faster scanner does not need a code change.
-FINDING_TIME_RESERVE_MS = int(os.environ.get("FINDING_TIME_RESERVE_SECONDS", "480")) * 1000
+# Time to leave on the clock before starting another finding: the
+# self-check scan's timeout, context-agent's timeout, and two model calls
+# (draft and redraft) at a worst case of ~2 minutes each. A finding that
+# starts with this much left cannot be cut off by the Lambda timeout.
+# Terraform sets it from the other functions' timeouts so the numbers cannot
+# drift apart; the default here is only for a direct invoke without it.
+FINDING_TIME_RESERVE_MS = int(os.environ.get("FINDING_TIME_RESERVE_SECONDS", "690")) * 1000
 
 s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
@@ -120,8 +132,13 @@ REMEDIATION_OUTPUT_SCHEMA = {
         # clients", so nothing ever passed and the list became boilerplate to
         # skim past -- which is how the one that matters gets missed.
         "assumptions": {"type": "array", "items": {"type": "string"}},
+        # Assumptions the repository itself could settle. Each is answered by
+        # context-agent with a citation and the fix is redrafted; the ones
+        # the repository cannot settle come back as unknown and land in
+        # `assumptions` after all. See _remediate_finding.
+        "questions": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["corrected_file_content", "rationale", "assumptions"],
+    "required": ["corrected_file_content", "rationale", "assumptions", "questions"],
     "additionalProperties": False,
 }
 
@@ -323,9 +340,33 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
     # it, not the pristine snapshot, so the model is shown what it is actually
     # editing and the diff is minimal against that.
     remediation = _call_remediation_agent(finding, base_content)
+    questions = remediation.get("questions") or []
+    answers = []
+    if questions and CONTEXT_AGENT_FUNCTION_NAME:
+        # The draft above was made without knowing these. Ask, then draft
+        # again with the answers in front of the model. Any answer that is
+        # unknown is put back into the redraft's assumptions by the prompt.
+        answers = _ask_context_agent(pr_id, questions)
+        remediation = _call_remediation_agent(finding, base_content, answers)
+        # A redraft may not ask again; whatever it still wants to know is an
+        # assumption now.
+        leftovers = remediation.get("questions") or []
+    elif questions:
+        leftovers = questions
+    else:
+        leftovers = []
     corrected_content = remediation["corrected_file_content"]
     rationale = remediation["rationale"]
-    assumptions = remediation.get("assumptions") or []
+    assumptions = list(remediation.get("assumptions") or [])
+    for q in leftovers:
+        if q not in assumptions:
+            assumptions.append(q)
+    for a in answers:
+        # "We looked and the repository does not say" is still something the
+        # fix rests on; it reaches the reviewer as an assumption, with the
+        # question record beside it showing that it was asked.
+        if a["answer"] == "unknown" and a["question"] not in assumptions:
+            assumptions.append(a["question"])
 
     diff_text = _compute_diff(base_content, corrected_content, file_path)
 
@@ -341,6 +382,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
             finding, diff_text, rationale,
             self_check_passed=False, self_check_new_findings=[], cleared=False,
             suppression_attempt=suppressions, applies_after=applies_after,
+            questions=answers,
         )
         return _Outcome(False, False, None, None, None)
 
@@ -361,7 +403,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
             finding, diff_text, rationale,
             self_check_passed=False, self_check_new_findings=[], cleared=False,
             assumptions=assumptions, scan_errors=scan_errors,
-            applies_after=applies_after,
+            applies_after=applies_after, questions=answers,
         )
         return _Outcome(False, False, None, None, None)
 
@@ -393,7 +435,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
     _write_result(
         finding, diff_text, rationale, self_check_passed, self_check_new_findings, cleared,
         dropped_resources=dropped_resources, assumptions=assumptions,
-        applies_after=applies_after,
+        applies_after=applies_after, questions=answers,
     )
     return _Outcome(
         self_check_passed,
@@ -536,7 +578,34 @@ def _get_anthropic_client():
     return _anthropic_client
 
 
-def _call_remediation_agent(finding, original_content):
+def _ask_context_agent(pr_id, questions):
+    """context-agent's answers, in question order. A failed invocation is
+    raised: the finding stays "mapped" for a retry, which beats drafting on
+    an answer that was never given."""
+    payload = {"pr_id": pr_id, "s3_prefix": f"scans/{pr_id}/", "questions": questions}
+    response = lambda_client.invoke(
+        FunctionName=CONTEXT_AGENT_FUNCTION_NAME,
+        InvocationType="RequestResponse",
+        Payload=json.dumps(payload).encode("utf-8"),
+    )
+    result = json.loads(response["Payload"].read())
+    if "FunctionError" in response:
+        raise RuntimeError(f"context-agent invocation failed: {result}")
+    return result["answers"]
+
+
+def _format_answers(answers):
+    lines = []
+    for a in answers:
+        lines.append(f"Q: {a['question']}")
+        lines.append(f"A: {a['answer']} -- {a['explanation']}")
+        for c in a.get("citations") or []:
+            start, end = c["line_range"]
+            lines.append(f"   [{c['file']}:{start}-{end}] {c['excerpt']}")
+    return "\n".join(lines)
+
+
+def _call_remediation_agent(finding, original_content, answers=None):
     prompt = (
         "Scanner finding to fix:\n"
         f"  source: {finding['source']}\n"
@@ -594,6 +663,34 @@ def _call_remediation_agent(finding, original_content):
         "padded with things that cannot actually break anything is worse than "
         "no list at all -- it buries the one that matters."
     )
+    if answers is not None:
+        # The redraft. The answers are cited facts about the repository; the
+        # model is to use them, not to re-ask.
+        prompt += (
+            "\n\nYou asked about the rest of the repository and it was read for "
+            "you. Each answer below cites the file and lines it rests on; "
+            "`unknown` means the repository does not say.\n\n"
+            f"{_format_answers(answers)}\n\n"
+            "Draft the fix knowing this. A `yes` or `no` answer is established "
+            "and must not appear in `assumptions`. A question answered "
+            "`unknown` is still an assumption if the fix depends on it -- keep "
+            "it there, worded as the claim you are relying on. Return an empty "
+            "`questions` list: there is no second lookup."
+        )
+    elif CONTEXT_AGENT_FUNCTION_NAME:
+        prompt += (
+            "\n\nBefore settling an assumption, consider whether another file "
+            "in this repository would answer it: a variables file, a .tfvars, "
+            "the module that calls this one, a Kubernetes manifest, a bucket "
+            "policy. If so, put it in `questions` instead of `assumptions` -- "
+            "one specific question each, naming the identifier, answerable "
+            "yes or no from the repository's text. They will be answered with "
+            "citations and you will draft again. Questions that meet the "
+            "assumptions test above are the only ones worth asking; the same "
+            "rule about padding applies."
+        )
+    else:
+        prompt += "\n\nReturn an empty `questions` list."
 
     response = _get_anthropic_client().messages.create(
         model=MODEL,
@@ -819,7 +916,7 @@ def _diff_sha256(diff_text):
 def _write_result(
     finding, diff_text, rationale, self_check_passed, self_check_new_findings, cleared,
     suppression_attempt=None, dropped_resources=None, assumptions=None, scan_errors=None,
-    applies_after=None,
+    applies_after=None, questions=None,
 ):
     table = dynamodb.Table(DYNAMODB_TABLE)
     table.update_item(
@@ -856,6 +953,11 @@ def _write_result(
                 # verified and failed, which is what a reviewer would otherwise
                 # assume from self_check_passed=False.
                 "scan_errors": scan_errors or [],
+                # What the draft asked about the repository and what it was
+                # told, citations included. Distinct from assumptions: these
+                # were looked up. An unknown here is also in assumptions,
+                # and this record is what tells the reviewer it was asked.
+                "questions": questions or [],
             },
             ":status": "fix-proposed" if self_check_passed else "needs-human-only",
             ":now": datetime.now(timezone.utc).isoformat(),
