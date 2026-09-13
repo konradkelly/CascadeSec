@@ -17,7 +17,7 @@ Needs `boto3`, AWS credentials for the dev account, and the `terraform` CLI on
 
 **97.1% — 68 of 70 expected findings, across 41 positive cases and 2 clean
 controls.** Run 2026-09-12 against checkov 3.3.16 and Trivy 0.74.0, as
-packaged in `layers/`. Both misses are labelled tool gaps (`CKV_AWS_60` on a
+packaged in the scanner image. Both misses are labelled tool gaps (`CKV_AWS_60` on a
 bare `"*"` principal; `CKV_SECRET_6` on a password with a `!` in it), so
 this is the ceiling for these two tools on these cases.
 
@@ -104,8 +104,9 @@ before deploy: 26/26 fired, and the deployed run matched.
 
 This section exists so the number above is not circular.
 
-**checkov labels were verified a priori** against the vendored source in
-`layers/checkov/python/checkov/` — every `CKV_*` id in every `expected.json`
+**checkov labels were verified a priori** against the vendored source
+(`layers/checkov/python/checkov/` at the time; the same pinned version is now
+installed in the scanner image) — every `CKV_*` id in every `expected.json`
 appears as a check id in the exact version deployed. (Rule ids live in
 `.py`, `.yaml` **and** `.json` graph checks; an index that skips the JSON
 files misses the S3 rules entirely.)
@@ -160,9 +161,10 @@ cases/<name>/expected.json    # {description, category, expected: [{source, rule
 
 Keep `main.tf` minimal and valid — `terraform fmt -check -recursive cases/`
 must pass, which also proves every case parses. Verify a checkov id against
-`layers/checkov/python/checkov/` before labelling it, and a Trivy id against
-the check metadata in trivy-checks at the commit the pinned Trivy embeds
-(`layers/trivy/build.sh` names the version; its `go.mod` names the commit).
+the checkov source at the version `lambda/terraform-scanner/Dockerfile` pins
+before labelling it, and a Trivy id against the check metadata in
+trivy-checks at the commit the pinned Trivy embeds (the Dockerfile names the
+version; Trivy's `go.mod` names the commit).
 Trivy ids are the bare `AWS-nnnn` form the report emits, not `AVD-AWS-nnnn`
 and not the tfsec long id. If an id is a guess, say so in `note` and let the
 run decide.
