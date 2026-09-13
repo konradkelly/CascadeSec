@@ -54,6 +54,8 @@ for dirpath, dirnames, _ in os.walk(root):
 PY
 EOF
 
+# The project's own Trivy checks (handler.py: TRIVY_CHECKS_DIR).
+COPY checks/ /opt/checks/
 COPY handler.py ${LAMBDA_TASK_ROOT}/
 
 CMD ["handler.handler"]

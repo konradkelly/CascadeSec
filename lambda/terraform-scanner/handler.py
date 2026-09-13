@@ -48,6 +48,13 @@ TRIVY_BIN = "/opt/bin/trivy"
 # Trivy wants somewhere writable for its cache even when nothing is fetched;
 # /tmp is the only writable path in Lambda.
 TRIVY_CACHE_DIR = "/tmp/trivy-cache"
+# This project's own Rego checks, copied into the image next to the binary
+# (Dockerfile). Loaded alongside the embedded bundle; Trivy only evaluates
+# custom checks in the namespaces it is told to, hence --check-namespaces.
+# What is here and why: checks/*.rego, each with its rationale in its
+# metadata. They are admitted findings like any other rule (spec §8.1) and
+# versioned with the image, so a scan stays reproducible.
+TRIVY_CHECKS_DIR = "/opt/checks"
 LAYER_PYTHON_PATH = "/opt/python"
 DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ARTIFACTS_BUCKET = os.environ.get("ARTIFACTS_BUCKET")
@@ -223,6 +230,8 @@ def _run_trivy(work_dir):
             # layer's Trivy version, so a scan is reproducible.
             "--skip-check-update",
             "--cache-dir", TRIVY_CACHE_DIR,
+            "--config-check", TRIVY_CHECKS_DIR,
+            "--check-namespaces", "user",
         ],
         capture_output=True,
         text=True,

@@ -122,6 +122,23 @@ def test_trivy_parse_failure_is_reported_not_raised(mock_run):
 
 
 @patch.object(handler.subprocess, "run")
+def test_trivy_is_run_offline_with_the_projects_own_checks(mock_run):
+    """The flags that make a scan reproducible and complete: the embedded
+    bundle rather than a fetch, and the checks shipped in the image under
+    the namespace Trivy has to be told to evaluate -- without
+    --check-namespaces a check from disk loads and silently never fires."""
+    mock_run.return_value = _proc(stdout=json.dumps(_trivy_report()), returncode=0)
+
+    handler._run_trivy(WORK_DIR)
+
+    args = mock_run.call_args.args[0]
+    assert args[:3] == [handler.TRIVY_BIN, "config", WORK_DIR]
+    assert "--skip-check-update" in args
+    assert args[args.index("--config-check") + 1] == handler.TRIVY_CHECKS_DIR
+    assert args[args.index("--check-namespaces") + 1] == "user"
+
+
+@patch.object(handler.subprocess, "run")
 def test_trivy_report_without_results_is_a_clean_scan_not_an_error(mock_run):
     """Trivy's genuine clean scan: a report with no Results key at all. Must
     stay distinguishable from the failures above -- if this raised, every
