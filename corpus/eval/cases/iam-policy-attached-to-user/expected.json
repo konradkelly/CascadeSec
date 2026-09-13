@@ -7,8 +7,8 @@
       "rule_id": "CKV_AWS_40"
     },
     {
-      "source": "tfsec",
-      "rule_id": "aws-iam-no-user-attached-policies"
+      "source": "trivy",
+      "rule_id": "AWS-0143"
     }
   ]
 }

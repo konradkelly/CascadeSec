@@ -20,18 +20,42 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 WORK_DIR = "/tmp/scan-abc123"
 
-# Captured verbatim from the deployed terraform-scanner on 2026-09-09, invoked
-# against fixtures/unparseable/main.tf. tfsec does not report a parse failure as
-# JSON with empty results -- it prints this to stdout and abandons the scan. The
-# work dir is the real one from that run, kept so the path form (leading slash
-# stripped, unlike tfsec's findings) stays honest.
-TFSEC_WORK_DIR = "/tmp/scan-3e096e4b02db497fa9761136cbeed2e3"
-TFSEC_PARSE_FAILURE_STDOUT = (
-    "Error: scan failed: tmp/scan-3e096e4b02db497fa9761136cbeed2e3/main.tf:18,37-38: "
-    "Unclosed configuration block; There is no closing brace for this block before "
-    "the end of the file. This may be caused by incorrect brace nesting elsewhere "
-    "in this file.\n"
-)
+# Captured verbatim from trivy 0.74.0 on 2026-09-12, scanning a directory of
+# one good file and one with an unclosed block. Trivy reports the parse
+# failure on stderr, once per module that loads the file (twice here for the
+# root module), and carries on: stdout is still a full JSON report with the
+# good file's findings in it.
+TRIVY_PARSE_FAILURE_STDERR = (
+    '2026-09-12T16:44:07-07:00\tERROR\t[terraform parser] Error parsing file\t'
+    'module="root" file_path="bad.tf" cause="resource \\"aws_s3_bucket\\" \\"b\\" {" '
+    'err="bad.tf:1,30-31: Unclosed configuration block; There is no closing brace '
+    'for this block before the end of the file. This may be caused by incorrect '
+    'brace nesting elsewhere in this file."\n'
+) * 2
+
+# One misconfiguration as Trivy emits it (Code and References trimmed).
+TRIVY_SQS_MISCONF = {
+    "Type": "Terraform Security Check",
+    "ID": "AWS-0096",
+    "Title": "Unencrypted SQS queue.",
+    "Severity": "HIGH",
+    "Status": "FAIL",
+    "PrimaryURL": "https://avd.aquasec.com/misconfig/aws-0096",
+    "CauseMetadata": {"Resource": "aws_sqs_queue.plain", "Provider": "AWS", "Service": "sqs",
+                      "StartLine": 1, "EndLine": 3},
+}
+
+
+def _trivy_report(results=()):
+    """Trivy's JSON report shape: Results is absent when nothing was found,
+    and a scanned directory also gets a Result for "." with no findings."""
+    report = {"SchemaVersion": 2, "ArtifactName": ".", "ArtifactType": "filesystem"}
+    if results:
+        report["Results"] = [{"Target": ".", "Class": "config", "Type": "terraform"}] + [
+            {"Target": target, "Class": "config", "Type": "terraform", "Misconfigurations": list(misconfs)}
+            for target, misconfs in results
+        ]
+    return report
 
 
 def _proc(stdout="", stderr="", returncode=0):
@@ -56,48 +80,67 @@ def _checkov_report(failed_checks=(), parsing_errors=()):
 # ---------- a tool that failed is not a tool that found nothing ----------
 
 @patch.object(handler.subprocess, "run")
-def test_tfsec_producing_no_output_raises_rather_than_scanning_clean(mock_run):
-    """The false-pass path. tfsec always emits an object with --format json,
-    so empty stdout means the binary failed -- and returning [] for that would
-    tell remediation-agent the file is clean."""
+def test_trivy_producing_no_output_raises_rather_than_scanning_clean(mock_run):
+    """The false-pass path. Trivy always emits a report object with --format
+    json, so empty stdout means the binary failed -- and returning [] for that
+    would tell remediation-agent the file is clean."""
     mock_run.return_value = _proc(stdout="", stderr="fork/exec: permission denied", returncode=126)
 
-    with pytest.raises(handler.ScannerError, match="tfsec produced no output"):
-        handler._run_tfsec(WORK_DIR)
+    with pytest.raises(handler.ScannerError, match="trivy produced no output"):
+        handler._run_trivy(WORK_DIR)
 
 
 @patch.object(handler.subprocess, "run")
-def test_tfsec_output_that_is_neither_json_nor_a_parse_error_raises(mock_run):
-    """A genuine crash still has to raise -- only output that names the file it
-    choked on is downgraded to a reportable parse error."""
+def test_trivy_output_that_is_not_json_raises(mock_run):
+    """A genuine crash still has to raise. Trivy never puts a parse failure
+    on stdout, so unlike tfsec there is nothing to downgrade here."""
     mock_run.return_value = _proc(stdout="panic: runtime error\n", returncode=2)
 
     with pytest.raises(handler.ScannerError, match="unparseable"):
-        handler._run_tfsec(WORK_DIR)
+        handler._run_trivy(WORK_DIR)
 
 
 @patch.object(handler.subprocess, "run")
-def test_tfsec_parse_failure_is_reported_not_raised(mock_run):
+def test_trivy_parse_failure_is_reported_not_raised(mock_run):
     """Against the real captured output. Raising here would be safe but wrong:
     remediation-agent turns a raised error into a retry with the finding left
     at "mapped", so an agent that drops a brace would loop -- re-drafting, re-
     failing, and costing a model call each time -- while no reviewer ever sees
-    it. Reported, it becomes needs-human-only with the reason attached."""
-    mock_run.return_value = _proc(stdout=TFSEC_PARSE_FAILURE_STDOUT, returncode=1)
+    it. Reported, it becomes needs-human-only with the reason attached.
 
-    results, parse_errors = handler._run_tfsec(TFSEC_WORK_DIR)
+    And unlike tfsec, the other file's findings survive: Trivy skips the
+    broken file rather than abandoning the scan."""
+    mock_run.return_value = _proc(
+        stdout=json.dumps(_trivy_report([("good.tf", [TRIVY_SQS_MISCONF])])),
+        stderr=TRIVY_PARSE_FAILURE_STDERR, returncode=0,
+    )
 
-    assert results == []
-    assert parse_errors == ["main.tf"]
+    results, parse_errors = handler._run_trivy(WORK_DIR)
+
+    assert [(r["ID"], r["Target"]) for r in results] == [("AWS-0096", "good.tf")]
+    assert parse_errors == ["bad.tf"]
 
 
 @patch.object(handler.subprocess, "run")
-def test_tfsec_null_results_is_a_clean_scan_not_an_error(mock_run):
-    """tfsec's genuine clean scan. Must stay distinguishable from the failures
-    above -- if this raised, every clean self-check would fail."""
-    mock_run.return_value = _proc(stdout=json.dumps({"results": None}), returncode=0)
+def test_trivy_report_without_results_is_a_clean_scan_not_an_error(mock_run):
+    """Trivy's genuine clean scan: a report with no Results key at all. Must
+    stay distinguishable from the failures above -- if this raised, every
+    clean self-check would fail."""
+    mock_run.return_value = _proc(stdout=json.dumps(_trivy_report()), returncode=0)
 
-    assert handler._run_tfsec(WORK_DIR) == ([], [])
+    assert handler._run_trivy(WORK_DIR) == ([], [])
+
+
+def test_trivy_findings_normalize_to_the_record_shape():
+    """ID as Trivy emits it ("AWS-0096", the form rule_mappings.json is keyed
+    on), the per-Result Target as the file, and CauseMetadata's lines."""
+    [finding] = handler._normalize_trivy([{**TRIVY_SQS_MISCONF, "Target": "queues/main.tf"}], "pr-1")
+
+    assert finding["source"] == "trivy"
+    assert finding["rule_id"] == "AWS-0096"
+    assert finding["file"] == "queues/main.tf"
+    assert finding["line_range"] == [1, 3]
+    assert finding["severity"] == "HIGH"
 
 
 @patch.object(handler.subprocess, "run")
@@ -120,10 +163,10 @@ def test_checkov_producing_unparseable_output_raises(mock_run):
 def test_a_scan_timeout_propagates(mock_run):
     """Already the behaviour before ScannerError existed, and worth pinning:
     a timeout must not be swallowed into an empty result either."""
-    mock_run.side_effect = subprocess.TimeoutExpired(cmd="tfsec", timeout=240)
+    mock_run.side_effect = subprocess.TimeoutExpired(cmd="trivy", timeout=240)
 
     with pytest.raises(subprocess.TimeoutExpired):
-        handler._run_tfsec(WORK_DIR)
+        handler._run_trivy(WORK_DIR)
 
 
 # ---------- snapshot surface ----------
@@ -212,8 +255,9 @@ def test_parse_errors_are_reported_relative_to_the_work_dir():
 
 
 def test_paths_are_relativized_whether_or_not_the_leading_slash_survived():
-    """tfsec keeps the leading slash in its findings and drops it in its parse
-    errors, so both forms reach this from the same run."""
+    """checkov's parsing_errors are absolute; tfsec, before Trivy, kept the
+    leading slash in its findings and dropped it in its parse errors. Both
+    forms are still accepted."""
     assert handler._relativize_path(f"{WORK_DIR}/main.tf", WORK_DIR) == "main.tf"
     assert handler._relativize_path(f"{WORK_DIR.lstrip('/')}/main.tf", WORK_DIR) == "main.tf"
     assert handler._relativize_path("/main.tf", WORK_DIR) == "main.tf"
@@ -264,18 +308,17 @@ def _emf_lines(captured_out):
 
 @patch.object(handler, "_write_findings")
 @patch.object(handler, "_run_checkov")
-@patch.object(handler, "_run_tfsec")
+@patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
 def test_handler_surfaces_parse_errors_without_discarding_real_findings(
-    mock_download, mock_tfsec, mock_checkov, mock_write
+    mock_download, mock_trivy, mock_checkov, mock_write
 ):
     """One unparseable file among several doesn't invalidate the others'
     findings, so this is reported rather than raised."""
     mock_download.return_value = ["main.tf", "broken.tf"]
-    mock_tfsec.return_value = ([{
-        "long_id": "aws-s3-enable-bucket-encryption",
-        "location": {"filename": "main.tf", "start_line": 1, "end_line": 3},
-        "severity": "HIGH",
+    mock_trivy.return_value = ([{
+        "ID": "AWS-0132", "Target": "main.tf", "Severity": "HIGH",
+        "CauseMetadata": {"StartLine": 1, "EndLine": 3},
     }], [])
     mock_checkov.return_value = _checkov_report(parsing_errors=["broken.tf"])
 
@@ -288,19 +331,18 @@ def test_handler_surfaces_parse_errors_without_discarding_real_findings(
 
 @patch.object(handler, "_write_findings")
 @patch.object(handler, "_run_checkov")
-@patch.object(handler, "_run_tfsec")
+@patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
 def test_a_persisted_scan_emits_findings_per_scan_as_emf(
-    mock_download, mock_tfsec, mock_checkov, mock_write, capsys
+    mock_download, mock_trivy, mock_checkov, mock_write, capsys
 ):
     """Spec §4.1's findings-per-scan metric, as one Embedded Metric Format
     line on stdout. Printed rather than logged: Lambda prefixes logger output
     and EMF needs the whole event to be the JSON."""
     mock_download.return_value = ["main.tf"]
-    mock_tfsec.return_value = ([{
-        "long_id": "aws-s3-enable-bucket-encryption",
-        "location": {"filename": "main.tf", "start_line": 1, "end_line": 3},
-        "severity": "HIGH",
+    mock_trivy.return_value = ([{
+        "ID": "AWS-0132", "Target": "main.tf", "Severity": "HIGH",
+        "CauseMetadata": {"StartLine": 1, "EndLine": 3},
     }] * 3, [])
     mock_checkov.return_value = _checkov_report(parsing_errors=["broken.tf"])
 
@@ -317,16 +359,16 @@ def test_a_persisted_scan_emits_findings_per_scan_as_emf(
 
 @patch.object(handler, "_write_findings")
 @patch.object(handler, "_run_checkov")
-@patch.object(handler, "_run_tfsec")
+@patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
 def test_a_self_check_scan_emits_no_metric(
-    mock_download, mock_tfsec, mock_checkov, mock_write, capsys
+    mock_download, mock_trivy, mock_checkov, mock_write, capsys
 ):
     """persist=False is a rescan of one patched file for a self-check, not a
     scan of a PR. Counting it would make every remediation run look like a
     burst of tiny scans."""
     mock_download.return_value = ["main.tf"]
-    mock_tfsec.return_value = ([], [])
+    mock_trivy.return_value = ([], [])
     mock_checkov.return_value = _checkov_report()
 
     handler.handler({"pr_id": "pr-1", "s3_prefix": "fixes/pr-1/f1/", "persist": False}, None)
@@ -336,13 +378,13 @@ def test_a_self_check_scan_emits_no_metric(
 
 @patch.object(handler, "_write_findings")
 @patch.object(handler, "_run_checkov")
-@patch.object(handler, "_run_tfsec")
+@patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
 def test_handler_reports_no_scan_errors_on_a_clean_scan(
-    mock_download, mock_tfsec, mock_checkov, mock_write
+    mock_download, mock_trivy, mock_checkov, mock_write
 ):
     mock_download.return_value = ["main.tf"]
-    mock_tfsec.return_value = ([], [])
+    mock_trivy.return_value = ([], [])
     mock_checkov.return_value = _checkov_report()
 
     result = handler.handler({"pr_id": "pr-1", "s3_prefix": "scans/pr-1/", "persist": False}, None)
@@ -354,10 +396,10 @@ def test_handler_reports_no_scan_errors_on_a_clean_scan(
 
 @patch.object(handler, "_write_findings")
 @patch.object(handler, "_run_checkov")
-@patch.object(handler, "_run_tfsec")
+@patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
 def test_handler_merges_parse_errors_from_both_tools(
-    mock_download, mock_tfsec, mock_checkov, mock_write
+    mock_download, mock_trivy, mock_checkov, mock_write
 ):
     """The two parsers disagree on what they can read, so neither alone is the
     oracle -- and a file they both choke on must be listed once, not twice.
@@ -366,7 +408,7 @@ def test_handler_merges_parse_errors_from_both_tools(
     dir it names itself; relativizing the absolute forms the tools really emit
     is covered by _relativize_path and _checkov_parse_errors directly."""
     mock_download.return_value = ["main.tf", "odd.tf"]
-    mock_tfsec.return_value = ([], ["main.tf"])
+    mock_trivy.return_value = ([], ["main.tf"])
     mock_checkov.return_value = _checkov_report(parsing_errors=["main.tf", "odd.tf"])
 
     result = handler.handler({"pr_id": "pr-1", "s3_prefix": "scans/pr-1/", "persist": False}, None)
@@ -374,13 +416,13 @@ def test_handler_merges_parse_errors_from_both_tools(
     assert result["scan_errors"] == ["main.tf", "odd.tf"]
 
 
-@patch.object(handler, "_run_tfsec")
+@patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
-def test_handler_lets_a_scanner_failure_reach_the_caller(mock_download, mock_tfsec):
+def test_handler_lets_a_scanner_failure_reach_the_caller(mock_download, mock_trivy):
     """remediation-agent turns this into a failed Lambda invocation and leaves
     the finding at status "mapped" for a retry, rather than scoring the fix."""
     mock_download.return_value = ["main.tf"]
-    mock_tfsec.side_effect = handler.ScannerError("tfsec produced no output (exit 126)")
+    mock_trivy.side_effect = handler.ScannerError("trivy produced no output (exit 126)")
 
     with pytest.raises(handler.ScannerError):
         handler.handler({"pr_id": "pr-1", "s3_prefix": "scans/pr-1/"}, None)

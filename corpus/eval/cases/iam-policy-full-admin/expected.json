@@ -9,10 +9,7 @@
     {
       "source": "checkov",
       "rule_id": "CKV_AWS_63"
-    },
-    {
-      "source": "tfsec",
-      "rule_id": "aws-iam-no-policy-wildcards"
     }
-  ]
+  ],
+  "note": "Trivy has deprecated aws-iam-no-policy-wildcards (AWS-0057); it is off by default and nothing replaces it, so this case is checkov-only on that side."
 }

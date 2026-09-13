@@ -1,6 +1,6 @@
 """terraform-scanner Lambda (spec §4.1, §4.4 step 3).
 
-Runs tfsec + Checkov against a Terraform snapshot stored in S3 and writes
+Runs Trivy + Checkov against a Terraform snapshot stored in S3 and writes
 raw findings (status: "raw") to the DynamoDB findings table. Also used by
 remediation-agent (spec §4.4 step 5) to self-check a proposed fix — that
 call path passes persist=false and just reads the returned findings.
@@ -44,7 +44,10 @@ import boto3
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-TFSEC_BIN = "/opt/bin/tfsec"
+TRIVY_BIN = "/opt/bin/trivy"
+# Trivy wants somewhere writable for its cache even when nothing is fetched;
+# /tmp is the only writable path in Lambda.
+TRIVY_CACHE_DIR = "/tmp/trivy-cache"
 LAYER_PYTHON_PATH = "/opt/python"
 DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ARTIFACTS_BUCKET = os.environ.get("ARTIFACTS_BUCKET")
@@ -58,7 +61,7 @@ METRIC_NAMESPACE = "IaCPosture"
 SCAN_TIMEOUT_SECONDS = 240
 
 # What a snapshot is. Both tools parse .tf.json natively, and both read
-# .tfvars: tfsec auto-loads terraform.tfvars and *.auto.tfvars to resolve
+# .tfvars: Trivy auto-loads terraform.tfvars and *.auto.tfvars to resolve
 # variables, and checkov's secrets framework scans them for literals. Until
 # 2026-09-12 this was .tf alone, which is exactly where a hardcoded password
 # is *not* -- it is in the .tfvars that was never uploaded. scripts/scan.py
@@ -81,13 +84,17 @@ s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
 
 
-# tfsec reports an HCL parse failure as plain text on stdout rather than JSON,
-# and abandons the whole scan rather than skipping the one file:
-#   Error: scan failed: tmp/scan-<id>/main.tf:18,37-38: Unclosed configuration
-#   block; There is no closing brace for this block before the end of the file.
-# Captured from the deployed function on 2026-09-09. Note the path has had its
-# leading slash stripped, which is why _relativize_path has to match both forms.
-TFSEC_PARSE_ERROR_RE = re.compile(r"([^\s:]+\.tf):\d+,\d+-\d+:")
+# Trivy reports an HCL parse failure as a log line on stderr, skips that file
+# and scans the rest -- an improvement on tfsec, which abandoned the whole
+# scan. The JSON on stdout says nothing about it, so stderr is the only place
+# the failure is visible:
+#   2026-09-12T16:44:07-07:00  ERROR  [terraform parser] Error parsing file
+#   module="root" file_path="bad.tf" cause="..." err="bad.tf:1,30-31: Unclosed
+#   configuration block; ..."
+# Captured from trivy 0.74.0 on 2026-09-12. file_path is relative to the
+# scanned directory. Trivy logs the same failure once per module that loads
+# the file, hence the set in _run_trivy.
+TRIVY_PARSE_ERROR_RE = re.compile(r'\[terraform parser\] Error parsing file.*?file_path="([^"]+)"')
 
 
 class ScannerError(RuntimeError):
@@ -120,12 +127,12 @@ def handler(event, context):
         if not downloaded:
             raise ValueError(f"no Terraform files found under s3://{ARTIFACTS_BUCKET}/{s3_prefix}")
 
-        tfsec_results, tfsec_parse_errors = _run_tfsec(work_dir)
+        trivy_results, trivy_parse_errors = _run_trivy(work_dir)
         checkov_report = _run_checkov(work_dir)
 
-        findings = _normalize_tfsec(tfsec_results, pr_id, work_dir) + _normalize_checkov(checkov_report, pr_id)
+        findings = _normalize_trivy(trivy_results, pr_id) + _normalize_checkov(checkov_report, pr_id)
 
-        scan_errors = sorted(set(tfsec_parse_errors) | set(_checkov_parse_errors(checkov_report, work_dir)))
+        scan_errors = sorted(set(trivy_parse_errors) | set(_checkov_parse_errors(checkov_report, work_dir)))
         if scan_errors:
             # Reported, not raised: the other files in the snapshot scanned
             # fine and their findings are real. Raising would throw those away
@@ -200,41 +207,54 @@ def _download_snapshot(bucket, prefix, dest_dir):
     return downloaded
 
 
-def _run_tfsec(work_dir):
-    """Returns (results, parse_errors)."""
+def _run_trivy(work_dir):
+    """Returns (misconfigurations, parse_errors).
+
+    Each misconfiguration is Trivy's own object plus a "Target" key: the file
+    it was found in, relative to work_dir, which Trivy reports per Result
+    rather than per finding.
+    """
     proc = subprocess.run(
-        [TFSEC_BIN, work_dir, "--format", "json", "--no-color"],
+        [
+            TRIVY_BIN, "config", work_dir,
+            "--format", "json",
+            # The checks embedded in the binary, never a registry fetch: no
+            # egress from the function, and the rule set is pinned to the
+            # layer's Trivy version, so a scan is reproducible.
+            "--skip-check-update",
+            "--cache-dir", TRIVY_CACHE_DIR,
+        ],
         capture_output=True,
         text=True,
         timeout=SCAN_TIMEOUT_SECONDS,
     )
-    # tfsec exits non-zero when it finds issues -- that's expected, not a failure.
-    # Empty stdout is not: with --format json tfsec always emits an object, even
-    # for a clean scan (as {"results": null}), so nothing at all means the binary
-    # itself failed.
+    # Trivy exits 0 whether or not it found issues (no --exit-code), so the
+    # code says nothing. Empty stdout does: --format json always emits a
+    # report object, even for an empty directory, so nothing at all means the
+    # binary itself failed.
     if not proc.stdout.strip():
         raise ScannerError(
-            f"tfsec produced no output (exit {proc.returncode}): {proc.stderr.strip()[:500]}"
+            f"trivy produced no output (exit {proc.returncode}): {proc.stderr.strip()[:500]}"
         )
     try:
-        parsed = json.loads(proc.stdout)
+        report = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        parse_errors = sorted({
-            _relativize_path(path, work_dir)
-            for path in TFSEC_PARSE_ERROR_RE.findall(proc.stdout)
-        })
-        if not parse_errors:
-            raise ScannerError(f"tfsec produced unparseable output: {proc.stdout[:500]}") from exc
-        # A parse failure is reported, not raised, for the same reason
-        # checkov's is: the caller decides what an unscannable file means.
-        # Unlike checkov, tfsec abandons the entire scan rather than skipping
-        # the one file, so no tfsec results survive for the other files in the
-        # snapshot either -- coverage is degraded snapshot-wide, and saying so
-        # is exactly what reporting rather than raising makes possible.
-        logger.warning("tfsec could not parse %s; abandoned the scan", parse_errors)
-        return [], parse_errors
-    # "results": null is tfsec's clean scan, distinct from the failures above.
-    return parsed.get("results") or [], []
+        raise ScannerError(f"trivy produced unparseable output: {proc.stdout[:500]}") from exc
+
+    # Reported, not raised, for the same reason checkov's are: the caller
+    # decides what an unscannable file means. The other files' findings are
+    # real and are returned alongside.
+    parse_errors = sorted(set(TRIVY_PARSE_ERROR_RE.findall(proc.stderr)))
+    if parse_errors:
+        logger.warning("trivy could not parse %s", parse_errors)
+
+    results = []
+    # A clean scan has no "Results" key at all; a scanned directory also gets
+    # a Result for "." (the root module) that carries no misconfigurations.
+    for result in report.get("Results") or []:
+        for misconf in result.get("Misconfigurations") or []:
+            results.append({**misconf, "Target": result.get("Target", "")})
+    return results, parse_errors
 
 
 def _run_checkov(work_dir):
@@ -267,11 +287,12 @@ def _run_checkov(work_dir):
 def _relativize_path(file_path, work_dir):
     """Strip the scratch directory back off a path a tool reported.
 
-    Handles every form the tools emit: tfsec echoes the absolute path it was
-    invoked with in its findings (/tmp/scan-x/main.tf) but drops the leading
-    slash in its parse errors (tmp/scan-x/main.tf); checkov's parsing_errors
-    carry the absolute path, while its check records are already root-relative
-    (/main.tf).
+    Handles every form the tools emit: checkov's parsing_errors carry the
+    absolute path, while its check records are already root-relative
+    (/main.tf). Trivy reports everything relative to the scanned directory
+    and does not need this. (tfsec, before it, echoed the absolute path in
+    findings and dropped the leading slash in parse errors, which is why both
+    prefix forms are still matched.)
     """
     for prefix in (work_dir.rstrip("/") + "/", work_dir.strip("/") + "/"):
         if file_path.startswith(prefix):
@@ -279,19 +300,22 @@ def _relativize_path(file_path, work_dir):
     return file_path.lstrip("/")
 
 
-def _normalize_tfsec(results, pr_id, work_dir):
+def _normalize_trivy(results, pr_id):
     now = datetime.now(timezone.utc).isoformat()
     findings = []
     for r in results:
-        location = r.get("location") or {}
+        cause = r.get("CauseMetadata") or {}
         findings.append(_build_finding(
             pr_id=pr_id,
-            source="tfsec",
-            rule_id=r.get("long_id") or r.get("rule_id", "unknown"),
-            # tfsec reports the full local path it was invoked with (work_dir/main.tf).
-            file_path=_relativize_path(location.get("filename", ""), work_dir),
-            line_range=[location.get("start_line"), location.get("end_line")],
-            severity=(r.get("severity") or "UNKNOWN").upper(),
+            source="trivy",
+            # "AWS-0086". The tfsec long id this check used to be known by
+            # (aws-s3-block-public-acls) is only an alias for ignore comments
+            # and is not in the report; corpus/rule_mappings.json is keyed on
+            # this form. "AVD-AWS-0086" is the same id with an older prefix.
+            rule_id=r.get("ID", "unknown"),
+            file_path=r.get("Target", ""),
+            line_range=[cause.get("StartLine"), cause.get("EndLine")],
+            severity=(r.get("Severity") or "UNKNOWN").upper(),
             now=now,
         ))
     return findings
@@ -300,11 +324,10 @@ def _normalize_tfsec(results, pr_id, work_dir):
 def _checkov_parse_errors(report, work_dir):
     """Files checkov could not parse, relative to work_dir.
 
-    Both tools are consulted, because they fail differently: tfsec aborts the
-    whole scan and says so in plain text (see TFSEC_PARSE_ERROR_RE), while
-    checkov skips the file, scans the rest, and reports the casualty here as
-    data. checkov is therefore the only source for a file that it alone cannot
-    read -- the two parsers do not agree on every input.
+    Both tools are consulted: Trivy says so on stderr (see
+    TRIVY_PARSE_ERROR_RE), checkov reports the casualty here as data. Each
+    skips the file and scans the rest, and each is the only source for a file
+    that it alone cannot read -- the two parsers do not agree on every input.
 
     A file that fails to parse contributes no findings, so without this a
     syntactically broken .tf scans exactly like a compliant one -- and

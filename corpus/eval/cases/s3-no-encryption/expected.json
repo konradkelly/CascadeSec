@@ -7,9 +7,9 @@
       "rule_id": "CKV_AWS_145"
     },
     {
-      "source": "tfsec",
-      "rule_id": "aws-s3-enable-bucket-encryption"
+      "source": "trivy",
+      "rule_id": "AWS-0132"
     }
   ],
-  "note": "Fires many other S3 rules too; only the encryption pair is expected here."
+  "note": "Fires many other S3 rules too; only the encryption pair is expected here. Trivy deprecated aws-s3-enable-bucket-encryption (AWS-0088) once AWS began encrypting S3 by default; AWS-0132 (customer-managed key) is what fires on a bare bucket and is the Trivy-side twin of CKV_AWS_145."
 }

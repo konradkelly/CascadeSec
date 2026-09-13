@@ -1,5 +1,5 @@
 # terraform-scanner Lambda (spec §4.1, §4.4 step 3). Layer zips are built
-# locally by layers/tfsec/build.sh and layers/checkov/build.sh -- run those
+# locally by layers/trivy/build.sh and layers/checkov/build.sh -- run those
 # before `terraform apply` if either layer's zip is missing or stale.
 
 data "archive_file" "terraform_scanner_handler" {
@@ -8,12 +8,16 @@ data "archive_file" "terraform_scanner_handler" {
   output_path = "${path.module}/../lambda/terraform-scanner/handler.zip"
 }
 
-resource "aws_lambda_layer_version" "tfsec" {
-  layer_name          = "${var.project}-${var.environment}-tfsec"
-  filename            = "${path.module}/../layers/tfsec/tfsec-layer.zip"
-  source_code_hash    = filebase64sha256("${path.module}/../layers/tfsec/tfsec-layer.zip")
+# Replaced tfsec on 2026-09-12 (spec §8.2 item 6). The binary is ~161MB
+# unzipped, and with checkov's ~86MB the function sits ~7MB under Lambda's
+# 250MB function+layers ceiling -- see layers/trivy/build.sh before bumping
+# either.
+resource "aws_lambda_layer_version" "trivy" {
+  layer_name          = "${var.project}-${var.environment}-trivy"
+  filename            = "${path.module}/../layers/trivy/trivy-layer.zip"
+  source_code_hash    = filebase64sha256("${path.module}/../layers/trivy/trivy-layer.zip")
   compatible_runtimes = ["python3.12"]
-  description         = "tfsec static binary (linux-amd64) under bin/"
+  description         = "Trivy static binary (linux-amd64) under bin/, checks bundle embedded"
 }
 
 resource "aws_lambda_layer_version" "checkov" {
@@ -48,7 +52,7 @@ resource "aws_lambda_function" "terraform_scanner" {
 
   layers = [
     aws_lambda_layer_version.checkov.arn,
-    aws_lambda_layer_version.tfsec.arn,
+    aws_lambda_layer_version.trivy.arn,
   ]
 
   # Checkov's own module import is the dominant cost (~50-100s observed

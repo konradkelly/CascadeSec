@@ -1,5 +1,5 @@
 {
-  "_comment": "Maps a scanner finding's (source, rule_id) to candidate controls in frameworks/*.json. mapping-agent uses this as a deterministic first pass -- it looks up candidates here, pulls their text from S3, and only asks the LLM to pick/cite/explain among those candidates rather than freely guessing a control_id. Entries are grounded in rule_ids actually observed from lambda/terraform-scanner/fixtures/vulnerable-sample; extend as new rule_ids show up in real scans rather than guessing ahead of evidence. A rule with no confident mapping (e.g. pure hygiene checks like missing descriptions) is deliberately left out rather than force-mapped.",
+  "_comment": "Maps a scanner finding's (source, rule_id) to candidate controls in frameworks/*.json. mapping-agent uses this as a deterministic first pass -- it looks up candidates here, pulls their text from S3, and only asks the LLM to pick/cite/explain among those candidates rather than freely guessing a control_id. Trivy entries are keyed on the id Trivy emits (\"trivy:AWS-0086\"; the tfsec long id aws-s3-block-public-acls it replaced is not in Trivy's report). Entries are grounded in rule_ids actually observed from lambda/terraform-scanner/fixtures/vulnerable-sample; extend as new rule_ids show up in real scans rather than guessing ahead of evidence. A rule with no confident mapping (e.g. pure hygiene checks like missing descriptions) is deliberately left out rather than force-mapped.",
   "mappings": {
     "checkov:CKV2_AWS_11": [
       {
@@ -213,49 +213,49 @@
         "control_id": "CICD-SEC-9"
       }
     ],
-    "tfsec:aws-cloudtrail-enable-all-regions": [
+    "trivy:AWS-0014": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "3.1"
       }
     ],
-    "tfsec:aws-cloudtrail-enable-at-rest-encryption": [
+    "trivy:AWS-0015": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "3.7"
       }
     ],
-    "tfsec:aws-cloudtrail-enable-log-validation": [
+    "trivy:AWS-0016": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "3.2"
       }
     ],
-    "tfsec:aws-ec2-enable-volume-encryption": [
+    "trivy:AWS-0026": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.2.1"
       }
     ],
-    "tfsec:aws-ec2-no-public-egress-sgr": [
+    "trivy:AWS-0104": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
       }
     ],
-    "tfsec:aws-ec2-no-public-ingress-sgr": [
+    "trivy:AWS-0107": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "5.2"
       }
     ],
-    "tfsec:aws-ec2-no-public-ip-subnet": [
+    "trivy:AWS-0164": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-1"
       }
     ],
-    "tfsec:aws-ec2-no-secrets-in-user-data": [
+    "trivy:AWS-0029": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-5"
@@ -265,73 +265,67 @@
         "control_id": "CICD-SEC-6"
       }
     ],
-    "tfsec:aws-ec2-require-vpc-flow-logs-for-all-vpcs": [
+    "trivy:AWS-0178": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "3.9"
       }
     ],
-    "tfsec:aws-eks-no-public-cluster-access": [
+    "trivy:AWS-0040": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
       }
     ],
-    "tfsec:aws-eks-no-public-cluster-access-to-cidr": [
+    "trivy:AWS-0041": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
       }
     ],
-    "tfsec:aws-iam-no-policy-wildcards": [
-      {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "1.16"
-      }
-    ],
-    "tfsec:aws-iam-no-user-attached-policies": [
+    "trivy:AWS-0143": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "1.15"
       }
     ],
-    "tfsec:aws-kms-auto-rotate-keys": [
+    "trivy:AWS-0065": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "3.8"
       }
     ],
-    "tfsec:aws-rds-encrypt-instance-storage-data": [
+    "trivy:AWS-0080": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.3.1"
       }
     ],
-    "tfsec:aws-rds-no-public-db-access": [
+    "trivy:AWS-0180": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
       }
     ],
-    "tfsec:aws-s3-block-public-acls": [
+    "trivy:AWS-0086": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.1.5"
       }
     ],
-    "tfsec:aws-s3-block-public-policy": [
+    "trivy:AWS-0087": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.1.5"
       }
     ],
-    "tfsec:aws-s3-enable-bucket-encryption": [
+    "trivy:AWS-0132": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.1.1"
       }
     ],
-    "tfsec:aws-s3-enable-bucket-logging": [
+    "trivy:AWS-0089": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "3.6"

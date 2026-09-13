@@ -10,7 +10,10 @@ target finding(s). `before/main.tf` has the issue; `after/main.tf` is a
 hand-written fix for it. Each side's `scan-response.json` is **not
 hand-authored** — it's the real, captured response from actually invoking
 the deployed `terraform-scanner` (`persist: false`) against that exact
-file, on 2026-09-01. If tfsec/Checkov versions change later and something
+file, on 2026-09-01, when the scanner ran tfsec; it runs Trivy since
+2026-09-12 and reports `source: trivy` with Trivy's ids, but the fixtures are
+kept as captured because the tests use their (source, rule_id) strings as
+opaque labels for the self-check comparison. If Trivy/Checkov versions change later and something
 here looks stale, regenerate by invoking the real Lambda rather than
 hand-editing these — that defeats the point of using captured ground truth.
 

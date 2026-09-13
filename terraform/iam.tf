@@ -23,7 +23,7 @@ data "aws_iam_policy_document" "lambda_assume_role" {
 }
 
 # ---------- terraform-scanner ----------
-# Runs tfsec + Checkov against snapshots in S3, writes raw findings to DynamoDB.
+# Runs Trivy + Checkov against snapshots in S3, writes raw findings to DynamoDB.
 
 resource "aws_iam_role" "terraform_scanner" {
   name               = "${local.lambda_function_names.terraform_scanner}-role"
