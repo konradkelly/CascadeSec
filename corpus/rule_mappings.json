@@ -71,6 +71,12 @@
         "control_id": "5.2"
       }
     ],
+    "checkov:CKV_AWS_260": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
+      }
+    ],
     "checkov:CKV_AWS_277": [
       {
         "framework": "CIS-AWS-1.4",
@@ -237,24 +243,6 @@
         "control_id": "2.2.1"
       }
     ],
-    "trivy:AWS-0104": [
-      {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
-      }
-    ],
-    "trivy:AWS-0107": [
-      {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "5.2"
-      }
-    ],
-    "trivy:AWS-0164": [
-      {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-1"
-      }
-    ],
     "trivy:AWS-0029": [
       {
         "framework": "OWASP-CloudNative",
@@ -263,12 +251,6 @@
       {
         "framework": "OWASP-CICD-Top10",
         "control_id": "CICD-SEC-6"
-      }
-    ],
-    "trivy:AWS-0178": [
-      {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "3.9"
       }
     ],
     "trivy:AWS-0040": [
@@ -283,12 +265,6 @@
         "control_id": "CNAS-6"
       }
     ],
-    "trivy:AWS-0143": [
-      {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "1.15"
-      }
-    ],
     "trivy:AWS-0065": [
       {
         "framework": "CIS-AWS-1.4",
@@ -299,12 +275,6 @@
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.3.1"
-      }
-    ],
-    "trivy:AWS-0180": [
-      {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
       }
     ],
     "trivy:AWS-0086": [
@@ -319,16 +289,58 @@
         "control_id": "2.1.5"
       }
     ],
+    "trivy:AWS-0089": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "3.6"
+      }
+    ],
+    "trivy:AWS-0104": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
+      }
+    ],
+    "trivy:AWS-0107": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "5.2"
+      }
+    ],
     "trivy:AWS-0132": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.1.1"
       }
     ],
-    "trivy:AWS-0089": [
+    "trivy:AWS-0143": [
       {
         "framework": "CIS-AWS-1.4",
-        "control_id": "3.6"
+        "control_id": "1.15"
+      }
+    ],
+    "trivy:AWS-0164": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-1"
+      }
+    ],
+    "trivy:AWS-0178": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "3.9"
+      }
+    ],
+    "trivy:AWS-0180": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
+      }
+    ],
+    "trivy:IACP-0001": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
       }
     ]
   }

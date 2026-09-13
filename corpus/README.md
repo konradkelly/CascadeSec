@@ -39,9 +39,9 @@ new rule_ids turn up in real scans.
 
 ## Coverage
 
-49 rules mapped, against 16 CIS controls and the two OWASP lists. Measured
+51 rules mapped, against 16 CIS controls and the two OWASP lists. Measured
 against `eval/`, whose 45 cases were all observed in a real scan:
-**45 of 63 labelled `(source, rule_id)` pairs have a candidate control (71%)**,
+**47 of 64 labelled `(source, rule_id)` pairs have a candidate control (73%)**,
 from 9 rules before 2026-09-12. (Re-keyed from tfsec to Trivy ids the same
 day, which also retired one mapped rule: Trivy deprecated
 `aws-iam-no-policy-wildcards` and nothing replaces it.)
@@ -49,18 +49,13 @@ day, which also retired one mapped rule: Trivy deprecated
 | category | mapped |
 |---|---|
 | missing-encryption | 10/21 |
-| network-exposure | 15/16 |
+| network-exposure | 17/18 |
 | logging-monitoring | 8/10 |
 | iam-over-permissioning | 5/8 |
 | hardcoded-secrets | 5/5 |
 | unpinned-modules | 2/2 |
 
-The 18 unmapped pairs are unmapped on purpose, and they cluster:
-
-- **Port 80 open to the world** (`CKV_AWS_260`) — CIS 5.2 covers remote
-  administration ports, and a public web tier looks exactly like this
-  finding. Mapping it to 5.2 would be force-mapping; a control that says
-  "expose only through a load balancer" does not exist in the corpus.
+The 17 unmapped pairs are unmapped on purpose, and they cluster:
 
 - **Encryption at rest for resources CIS AWS 1.4 does not cover** — SNS, SQS,
   DynamoDB, EFS, Lambda environment variables, CloudWatch log groups. The

@@ -5,7 +5,11 @@
     {
       "source": "checkov",
       "rule_id": "CKV_AWS_260"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "IACP-0001"
     }
   ],
-  "note": "checkov only. tfsec's aws-ec2-no-public-ingress-sgr fired on any port; Trivy's AWS-0107 (the same check, narrowed upstream) fires only on SSH and RDP ports -- net.is_ssh_or_rdp_port in trivy-checks. Found 2026-09-13 when the two PugetScope findings that motivated context-agent (port 80 and the NodePort range open to the world) stopped being admitted after the Trivy swap. CKV_AWS_260 has no candidate control: CIS 5.2 is about remote-administration ports, and port 80 open to the world is what a public web tier looks like, so it is unmapped rather than force-mapped."
+  "note": "Trivy's AWS-0107 (tfsec's aws-ec2-no-public-ingress-sgr, narrowed upstream) fires only on SSH and RDP ports; IACP-0001 is this project's own check for every other port, shipped in the scanner image (lambda/terraform-scanner/checks/). Both rules map to OWASP CNAS-6, default-deny network access controls -- the same control as the egress twin AWS-0104. That a public web tier looks exactly like this finding is the point: whether port 80 open to the world is intended is the reviewer's call, not the scanner's."
 }
