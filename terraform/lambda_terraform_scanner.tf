@@ -1,31 +1,52 @@
-# terraform-scanner Lambda (spec §4.1, §4.4 step 3). Layer zips are built
-# locally by layers/trivy/build.sh and layers/checkov/build.sh -- run those
-# before `terraform apply` if either layer's zip is missing or stale.
+# terraform-scanner Lambda (spec §4.1, §4.4 step 3), packaged as a container
+# image since 2026-09-13. The image is built and pushed by
+# lambda/terraform-scanner/build-image.sh; this file resolves what was pushed.
+#
+# Why an image (spec §4.3, revised): the zip-plus-layers packaging reached
+# Lambda's 250MB unzipped ceiling when Trivy replaced tfsec -- 247MB of 250,
+# with the next bump of Trivy or checkov certain to fail the deploy. An image
+# is allowed 10GB. Everything else about the function is unchanged: same
+# handler, role, Step Functions integration and alarms. The other functions
+# stay zip-packaged; they are small and the anthropic layer fits with room.
 
-data "archive_file" "terraform_scanner_handler" {
-  type        = "zip"
-  source_file = "${path.module}/../lambda/terraform-scanner/handler.py"
-  output_path = "${path.module}/../lambda/terraform-scanner/handler.zip"
+resource "aws_ecr_repository" "terraform_scanner" {
+  name = local.lambda_function_names.terraform_scanner
+  # `latest` is re-pointed on every push; the digest below is what pins the
+  # function, so mutability here costs nothing.
+  image_tag_mutability = "MUTABLE"
+  # Dev: let `terraform destroy` take the images with it.
+  force_delete = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 }
 
-# Replaced tfsec on 2026-09-12 (spec §8.2 item 6). The binary is ~161MB
-# unzipped, and with checkov's ~86MB the function sits ~7MB under Lambda's
-# 250MB function+layers ceiling -- see layers/trivy/build.sh before bumping
-# either.
-resource "aws_lambda_layer_version" "trivy" {
-  layer_name          = "${var.project}-${var.environment}-trivy"
-  filename            = "${path.module}/../layers/trivy/trivy-layer.zip"
-  source_code_hash    = filebase64sha256("${path.module}/../layers/trivy/trivy-layer.zip")
-  compatible_runtimes = ["python3.12"]
-  description         = "Trivy static binary (linux-amd64) under bin/, checks bundle embedded"
+# The tag per build is the git commit, so old images are reproducible; keep
+# a few for rollback and let the rest expire.
+resource "aws_ecr_lifecycle_policy" "terraform_scanner" {
+  repository = aws_ecr_repository.terraform_scanner.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep the last 5 images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 5
+      }
+      action = { type = "expire" }
+    }]
+  })
 }
 
-resource "aws_lambda_layer_version" "checkov" {
-  layer_name          = "${var.project}-${var.environment}-checkov"
-  filename            = "${path.module}/../layers/checkov/checkov-layer.zip"
-  source_code_hash    = filebase64sha256("${path.module}/../layers/checkov/checkov-layer.zip")
-  compatible_runtimes = ["python3.12"]
-  description         = "Checkov + deps (numpy, boto3/botocore stripped) under python/"
+# Resolves `latest` to a digest at plan time, so a push followed by an apply
+# rolls the function, and an apply with nothing pushed changes nothing. On a
+# first deploy this fails until build-image.sh has run -- see the order in
+# that script's header.
+data "aws_ecr_image" "terraform_scanner" {
+  repository_name = aws_ecr_repository.terraform_scanner.name
+  image_tag       = "latest"
 }
 
 resource "aws_cloudwatch_log_group" "terraform_scanner" {
@@ -37,10 +58,10 @@ resource "aws_lambda_function" "terraform_scanner" {
   function_name = local.lambda_function_names.terraform_scanner
   role          = aws_iam_role.terraform_scanner.arn
 
-  filename         = data.archive_file.terraform_scanner_handler.output_path
-  source_code_hash = data.archive_file.terraform_scanner_handler.output_base64sha256
-  handler          = "handler.handler"
-  runtime          = "python3.12"
+  package_type = "Image"
+  # By digest, not tag: the function is pinned to exactly the image the plan
+  # showed, and Lambda's own image cache keys on it.
+  image_uri = "${aws_ecr_repository.terraform_scanner.repository_url}@${data.aws_ecr_image.terraform_scanner.image_digest}"
 
   # Spec §4.1: one trace from the trigger through scan -> map -> remediate,
   # including remediation-agent's synchronous self-check invoke of the
@@ -49,11 +70,6 @@ resource "aws_lambda_function" "terraform_scanner" {
   tracing_config {
     mode = "Active"
   }
-
-  layers = [
-    aws_lambda_layer_version.checkov.arn,
-    aws_lambda_layer_version.trivy.arn,
-  ]
 
   # Checkov's own module import is the dominant cost (~50-100s observed
   # locally, see handler.py) -- generous timeout and higher memory (which
@@ -75,4 +91,8 @@ resource "aws_lambda_function" "terraform_scanner" {
     aws_cloudwatch_log_group.terraform_scanner,
     aws_iam_role_policy.terraform_scanner,
   ]
+}
+
+output "scanner_ecr_repository_url" {
+  value = aws_ecr_repository.terraform_scanner.repository_url
 }
