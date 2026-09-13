@@ -28,6 +28,12 @@ variable "remediation_agent_model" {
   default     = "claude-opus-5"
 }
 
+variable "context_agent_model" {
+  description = "Anthropic model ID for context-agent. Defaults to Opus: reading a repository to answer a question with a correct citation is closer to remediation's task than to mapping's. Override to trade answer quality for cost."
+  type        = string
+  default     = "claude-opus-5"
+}
+
 variable "alarm_email" {
   description = "Address to subscribe to the alarms SNS topic. SNS emails a confirmation link that must be clicked before anything is delivered; until then the alarms still fire, they just reach nobody. Leave null to create the topic with no subscriber."
   type        = string

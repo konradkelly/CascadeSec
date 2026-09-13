@@ -7,6 +7,7 @@ locals {
     terraform_scanner = "${var.project}-${var.environment}-terraform-scanner"
     mapping_agent     = "${var.project}-${var.environment}-mapping-agent"
     remediation_agent = "${var.project}-${var.environment}-remediation-agent"
+    context_agent     = "${var.project}-${var.environment}-context-agent"
     review_api        = "${var.project}-${var.environment}-review-api"
   }
 }
@@ -161,9 +162,13 @@ data "aws_iam_policy_document" "remediation_agent" {
   }
 
   statement {
-    sid       = "SelfCheckInvokeScanner"
-    actions   = ["lambda:InvokeFunction"]
-    resources = ["arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.lambda_function_names.terraform_scanner}"]
+    sid     = "InvokeScannerAndContext"
+    actions = ["lambda:InvokeFunction"]
+    # The scanner for the self-check; context-agent for a draft's questions.
+    resources = [
+      "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.lambda_function_names.terraform_scanner}",
+      "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.lambda_function_names.context_agent}",
+    ]
   }
 
   statement {
@@ -191,6 +196,56 @@ resource "aws_iam_role_policy" "remediation_agent" {
   name   = "${local.lambda_function_names.remediation_agent}-policy"
   role   = aws_iam_role.remediation_agent.id
   policy = data.aws_iam_policy_document.remediation_agent.json
+}
+
+# ---------- context-agent ----------
+# Reads the repository snapshot and calls the Anthropic API. Nothing else: no
+# DynamoDB, no writes -- it answers questions and cites; it decides nothing.
+resource "aws_iam_role" "context_agent" {
+  name               = "${local.lambda_function_names.context_agent}-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+data "aws_iam_policy_document" "context_agent" {
+  statement {
+    sid       = "Logs"
+    actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.lambda_function_names.context_agent}:*"]
+  }
+  # The pristine snapshot only. A draft's questions are about the rest of
+  # the repository, which no fix changes; the finding's own file is already
+  # in the model's context via remediation-agent.
+  statement {
+    sid       = "SnapshotRead"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/scans/*"]
+  }
+  statement {
+    sid       = "SnapshotList"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.artifacts.arn]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["scans/*"]
+    }
+  }
+  statement {
+    sid       = "AnthropicApiKeyRead"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.anthropic_api_key.arn]
+  }
+  statement {
+    sid       = "XRayWrite"
+    actions   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "context_agent" {
+  name   = "${local.lambda_function_names.context_agent}-policy"
+  role   = aws_iam_role.context_agent.id
+  policy = data.aws_iam_policy_document.context_agent.json
 }
 
 # ---------- review-api ----------

@@ -14,15 +14,17 @@ and fans remediation out one file at a time.
 
 Stages, each printed as the execution reaches it:
 
-  upload     every .tf, .tf.json, .tfvars and .tfvars.json under the
-             directory -> s3://<bucket>/scans/<pr_id>/  (.tfvars is where
-             hardcoded secrets actually live, and where variables resolve)
+  upload     every .tf, .tf.json, .tfvars, .tfvars.json, .yaml and .yml
+             under the directory -> s3://<bucket>/scans/<pr_id>/  (.tfvars is
+             where hardcoded secrets live and variables resolve; the YAML is
+             for context-agent -- the scanner ignores it)
   scan       terraform-scanner, persist=true -> raw findings in DynamoDB
   map        mapping-agent -> control citations, status "mapped"
   remediate  remediation-agent, once per file in parallel -> one model call
-             per mapped finding, plus a self-check scan per fix. This is the
-             stage that costs money and minutes, so it asks first unless
-             --yes or --no-remediate.
+             per mapped finding (two, plus a context-agent lookup, when the
+             draft asks the repository a question), plus a self-check scan
+             per fix. This is the stage that costs money and minutes, so it
+             asks first unless --yes or --no-remediate.
 
 --stages bypasses the state machine and invokes the Lambdas directly, one
 synchronous call per stage, the way this script worked before the pipeline
@@ -53,9 +55,11 @@ from botocore.config import Config
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
-# Must match terraform-scanner's SNAPSHOT_SUFFIXES: the scanner only downloads
-# what it recognises, so anything uploaded outside this set is ignored.
-SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json")
+# terraform-scanner's SNAPSHOT_SUFFIXES plus the manifests context-agent may
+# read (its CONTEXT_SUFFIXES). Each function downloads only what it
+# recognises, so a .yaml here never reaches the scanner and anything outside
+# both sets is never uploaded.
+SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".yaml", ".yml")
 
 # remediation-agent may run for its full 900s. The read timeout has to
 # outlast it, and retries have to be OFF: a retried RequestResponse invoke of
