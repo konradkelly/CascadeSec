@@ -4,12 +4,12 @@
 Uploads every case under cases/ to one S3 prefix, invokes the deployed
 scanner ONCE with persist=false, and compares what fired against each case's
 expected.json. One invocation rather than one per case: the scanner walks
-the prefix recursively and tfsec/checkov treat each subdirectory as its own
+the prefix recursively and Trivy/checkov treat each subdirectory as its own
 module, so 37 cases cost one cold start instead of 37.
 
 The deployed function is used rather than local binaries on purpose. Recall
 against the tools as actually packaged and versioned in the layer is the
-number that matters; a local tfsec of a different version would measure
+number that matters; a local Trivy of a different version would measure
 something else. It also means the harness needs AWS credentials and the
 dev stack up.
 

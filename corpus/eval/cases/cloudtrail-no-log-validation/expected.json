@@ -7,8 +7,8 @@
       "rule_id": "CKV_AWS_36"
     },
     {
-      "source": "tfsec",
-      "rule_id": "aws-cloudtrail-enable-log-validation"
+      "source": "trivy",
+      "rule_id": "AWS-0016"
     }
   ]
 }

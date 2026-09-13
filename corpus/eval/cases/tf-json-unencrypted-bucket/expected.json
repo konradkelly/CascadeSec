@@ -3,9 +3,9 @@
   "category": "missing-encryption",
   "expected": [
     {
-      "source": "tfsec",
-      "rule_id": "aws-s3-enable-bucket-encryption"
+      "source": "trivy",
+      "rule_id": "AWS-0132"
     }
   ],
-  "note": "Proves .tf.json is in the snapshot. tfsec parses it; checkov 3.3.16 does not scan .tf.json on a directory walk -- terraform/tf_parser.py:580 carries `# TODO: add support for .tf.json` -- so CKV_AWS_145 is dropped from the label as a tool gap, the same way aws_instance is tfsec-blind for public IPs."
+  "note": "Proves .tf.json is in the snapshot. tfsec parses it; checkov 3.3.16 does not scan .tf.json on a directory walk -- terraform/tf_parser.py:580 carries `# TODO: add support for .tf.json` -- so CKV_AWS_145 is dropped from the label as a tool gap, the same way aws_instance is tfsec-blind for public IPs. Trivy deprecated aws-s3-enable-bucket-encryption (AWS-0088) once AWS began encrypting S3 by default; AWS-0132 (customer-managed key) is what fires on a bare bucket and is the Trivy-side twin of CKV_AWS_145."
 }

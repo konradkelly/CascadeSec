@@ -11,12 +11,12 @@
       "rule_id": "CKV_AWS_39"
     },
     {
-      "source": "tfsec",
-      "rule_id": "aws-eks-no-public-cluster-access"
+      "source": "trivy",
+      "rule_id": "AWS-0040"
     },
     {
-      "source": "tfsec",
-      "rule_id": "aws-eks-no-public-cluster-access-to-cidr"
+      "source": "trivy",
+      "rule_id": "AWS-0041"
     }
   ]
 }
