@@ -78,10 +78,16 @@ def tf_output(name):
     return out.stdout.strip()
 
 
+# Directories that are never the repository's own configuration. A real repo
+# carries hundreds of YAML files under node_modules alone, and every one
+# would be listed to context-agent as somewhere it might look.
+SKIP_DIRS = {".terraform", ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"}
+
+
 def collect_tf_files(root):
     files = sorted(
         p for p in root.rglob("*")
-        if p.is_file() and p.name.endswith(SNAPSHOT_SUFFIXES) and ".terraform" not in p.parts
+        if p.is_file() and p.name.endswith(SNAPSHOT_SUFFIXES) and not (SKIP_DIRS & set(p.parts))
     )
     if not files:
         sys.exit(f"no Terraform files under {root}")
