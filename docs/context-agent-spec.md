@@ -1,11 +1,13 @@
-# context-agent — spec (draft)
+# context-agent — spec
 
-Answers the questions `remediation-agent` currently has to declare it cannot
-answer, by reading the rest of the repository.
+Answers the questions `remediation-agent` would otherwise have to declare it
+cannot answer, by reading the rest of the repository.
 
-Deferred: see §9 for what has to land first. This is written now because the
-evidence for it is strongest while the assumptions that motivate it are still
-in the table.
+**Built 2026-09-12** — `lambda/context-agent/`, `terraform/lambda_context_agent.tf`,
+and the questions step in `remediation-agent`. §9's prerequisites landed the
+same day (§8.2 items 4 and 5). §12 records what was decided and what the
+first live run showed; the sections before it are the design as written, and
+still describe what was built.
 
 ## 1. Why: the assumptions are queries
 
@@ -200,14 +202,89 @@ it does not move.
 
 ## 11. Open decisions
 
-- [ ] Whether questions are answered per-finding or batched per-file. Batching
-      is cheaper and shares retrieval; per-finding keeps the audit trail
-      simple.
-- [ ] Whether answers are cached on the `FindingRecord` or recomputed. A cached
-      answer can go stale against an edited base, which is the same class of
-      problem `diff_sha256` solves for chains.
-- [ ] Secrets handling on a widened snapshot (§10).
-- [ ] Whether `unknown` answers should still be surfaced to the reviewer as
-      "asked, unanswerable" rather than folded back into `assumptions`
-      indistinguishably. Leaning yes — "we looked and the repo does not say"
-      is more useful to a reviewer than "we assumed".
+All four decided at build time; the reasoning is in §12.
+
+- [x] Per-finding, not batched per file.
+- [x] Recomputed per draft; the answers are stored on the record for the
+      reviewer, never reused as an input.
+- [x] Secrets: redacted at retrieval, `.tfvars` stays in.
+- [x] `unknown` is surfaced as "asked, unanswerable": it lands in
+      `assumptions` *and* in the `questions` record beside it.
+
+## 12. As built
+
+**Shape.** A separate Lambda with its own least-privilege role: read
+`scans/*`, read the API key, nothing else — no DynamoDB, no writes. Invoked
+synchronously by `remediation-agent` with `{pr_id, s3_prefix, questions}`.
+Inside, a manual tool loop over the snapshot with two tools, `search`
+(regex, case-insensitive, `file:line: text`) and `read_file` (numbered
+lines, paged), and the answer schema of §4 enforced as structured output on
+every turn. Caps: 8 tool calls, 40 matches per search, 300 lines per read,
+200KB returned in total, 400 files downloaded. Each cap is announced to the
+model when hit, with `unknown` named as the correct answer for anything it
+cut off.
+
+**Citations are verified in code.** For every citation the excerpt, with
+whitespace squashed, must be a substring of the cited lines (with one line
+of slack either side, since models are routinely one line off on a block
+boundary). A failed citation is dropped and counted; a `yes`/`no` left
+without one becomes `unknown` with the downgrade stated in its explanation.
+`ContextCitationsRejected` is emitted as a metric so §8's citation-validity
+number is a CloudWatch query.
+
+**Questions come from the draft.** `remediation-agent`'s output schema gained
+`questions`; the prompt tells the model to put an assumption there instead
+when another file in the repository would settle it. A draft with none costs
+one call, as before. A draft with some triggers one context-agent invocation
+and one redraft whose prompt carries the answers with their citations. A
+question answered `unknown` is put back into the redraft's `assumptions` by
+code, not by trusting the model to carry it, so the human-review gate is
+unchanged. If `CONTEXT_AGENT_FUNCTION_NAME` is unset the model is told not
+to ask and any questions it raises anyway become assumptions — the two
+functions deploy independently. A failed lookup raises, leaving the finding
+`mapped` for a retry; drafting on an answer that was never given is worse
+than not drafting.
+
+**Per finding.** Batching per file would share retrieval, but the questions
+are the draft's own and the audit trail — this fix asked this, was told
+this — is the point. Recomputed per draft for the reason §11 gave: an answer
+is about the snapshot, and the snapshot does not change, but the *question*
+does with every redraft.
+
+**Secrets.** `.tfvars` stays in the retrieval surface because it answers the
+"is this variable populated" class of question. Values on lines whose key
+looks like a credential (`password`, `secret`, `token`, `api_key`,
+`access_key`, `private_key`) are replaced with `"<redacted>"` in every tool
+result; a value that is a reference (`var.x`, `data.x`) is left alone so the
+agent can follow it. A citation of a redacted line cannot verify — the
+model saw text the file does not contain — which is the intended outcome:
+no answer rests on a secret's value.
+
+**Snapshot widening.** `scripts/scan.py` uploads `.yaml`/`.yml` alongside the
+Terraform. The scanner's suffix set is unchanged, so it never sees them;
+context-agent's `CONTEXT_SUFFIXES` does.
+
+**Time budget.** `remediation-agent`'s per-finding reserve now counts the
+scanner's timeout, context-agent's timeout (150s) and two model calls, set
+from those functions' timeouts in Terraform so the numbers cannot drift.
+
+**First live run** (`ctx-demo-1`: a security group with SSH and HTTP open to
+the world, a `variables.tf` declaring `admin_cidrs`, a `terraform.tfvars`
+populating it, a cert-manager `ClusterIssuer` using HTTP-01). All four
+drafts asked questions. On `CKV_AWS_24` the draft asked whether any
+`.tfvars` or caller specified the operator CIDR ranges for port 22;
+context-agent answered **yes**, citing `terraform.tfvars:1-2` and the
+variable's description in `variables.tf`, and the redraft replaced
+`0.0.0.0/0` with `var.admin_cidrs` rather than inventing a new variable —
+the PugetScope-shaped outcome §1 was written for. Every citation in the run
+verified (`ContextCitationsRejected: 0`). The assumptions that survived are
+about the running system — that operators actually connect from those
+ranges — which is what should survive. The first attempt failed on a schema
+detail (`minItems: 2` on `line_range` is rejected by structured outputs);
+the failure path behaved as designed, four errors and four findings left
+`mapped`, and the direct `--stages remediate` re-run picked them up.
+
+**Not yet measured:** §8's assumption-resolution rate over the findings
+already in the table. It needs a re-run of remediation over those PRs with
+the widened snapshot re-uploaded, since their snapshots predate the YAML
+upload.

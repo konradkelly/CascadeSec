@@ -31,6 +31,7 @@ locals {
     terraform_scanner = aws_lambda_function.terraform_scanner.function_name
     mapping_agent     = aws_lambda_function.mapping_agent.function_name
     remediation_agent = aws_lambda_function.remediation_agent.function_name
+    context_agent     = aws_lambda_function.context_agent.function_name
     review_api        = aws_lambda_function.review_api.function_name
   }
 }
