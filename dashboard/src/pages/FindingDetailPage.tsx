@@ -10,6 +10,7 @@ import {
 } from '../api/client'
 import { AuditTrail } from '../components/AuditTrail'
 import { ControlMapping } from '../components/ControlMapping'
+import { RepositoryQuestions } from '../components/RepositoryQuestions'
 import { DiffViewer } from '../components/DiffViewer'
 import { ReviewActions } from '../components/ReviewActions'
 import { SelfCheckBadge } from '../components/SelfCheckBadge'
@@ -200,6 +201,15 @@ export function FindingDetailPage() {
   const showDiff =
     finding.proposed_fix?.diff &&
     (finding.status === 'fix-proposed' || finding.status === 'resolved')
+  // An assumption that was asked and came back unknown is listed under both
+  // assumptions and questions (remediation-agent puts it back by code). The
+  // assumptions list marks those, so "assumed" and "asked, unanswered" do
+  // not read the same.
+  const askedUnanswered = new Set(
+    (finding.proposed_fix?.questions ?? [])
+      .filter((q) => q.answer === 'unknown')
+      .map((q) => q.question),
+  )
 
   return (
     <div className="page finding-page">
@@ -382,13 +392,29 @@ export function FindingDetailPage() {
             finding.proposed_fix.assumptions.length > 0 && (
               <div className="alert alert--warn">
                 <p>
-                  <strong>This fix rests on facts the agent could not check.</strong> It saw only
-                  this one file — not the rest of the repository, nor the running system. Verify
-                  each of these before approving:
+                  <strong>This fix rests on facts the agent could not check.</strong>{' '}
+                  {finding.proposed_fix.questions?.length ? (
+                    <>
+                      It saw this one file and what it asked the repository (below) — not the
+                      running system. An assumption marked <em>asked</em> was looked for and the
+                      repository does not say.
+                    </>
+                  ) : (
+                    <>
+                      It saw only this one file — not the rest of the repository, nor the running
+                      system.
+                    </>
+                  )}{' '}
+                  Verify each of these before approving:
                 </p>
                 <ul>
                   {finding.proposed_fix.assumptions.map((a) => (
-                    <li key={a}>{a}</li>
+                    <li key={a}>
+                      {a}
+                      {askedUnanswered.has(a) && (
+                        <span className="badge badge--muted assumption__asked">asked</span>
+                      )}
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -433,6 +459,19 @@ export function FindingDetailPage() {
                 )}
             </div>
           )}
+        </section>
+      )}
+
+      {finding.proposed_fix?.questions && finding.proposed_fix.questions.length > 0 && (
+        <section className="panel">
+          <h2>What the agent checked in the repository</h2>
+          <p className="muted">
+            Questions the draft asked instead of assuming. A <strong>yes</strong> or{' '}
+            <strong>no</strong> cites the file and lines it rests on, verified against the
+            snapshot before it was accepted; <strong>unknown</strong> means the repository does
+            not say, and that question stays an assumption above.
+          </p>
+          <RepositoryQuestions questions={finding.proposed_fix.questions} />
         </section>
       )}
 

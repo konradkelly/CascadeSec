@@ -687,6 +687,79 @@ textarea {
   font-size: 0.9rem;
 }
 
+/* Repository questions -- same shape as the control list, since both are
+   "here is what the agent cited". */
+
+.question-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.question-item {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.question-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.question-item__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.question-item__question {
+  font-weight: 600;
+}
+
+.question-item__explanation {
+  font-size: 0.9rem;
+  margin: 0 0 0.35rem;
+}
+
+.question-item__citations {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.question-item__citations li {
+  margin-top: 0.35rem;
+}
+
+.question-item__ref {
+  font-size: 0.8rem;
+}
+
+.question-item__excerpt {
+  margin: 0.2rem 0 0;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--accent);
+  color: var(--text-muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}
+
+/* yes and no are established facts with citations behind them; the accent
+   colour says "answered" without saying "good" or "bad", since either can
+   be either. */
+.badge--answered {
+  background: var(--bg-elevated);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.assumption__asked {
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
 /* Diff viewer */
 
 .diff-viewer {

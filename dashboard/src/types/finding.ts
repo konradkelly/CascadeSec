@@ -28,6 +28,29 @@ export interface ControlMapping {
   rationale?: string
 }
 
+/** Where a repository answer came from. The excerpt was checked against the
+ *  cited lines by context-agent before the answer was accepted; a citation
+ *  that did not verify was dropped, and an answer left without one became
+ *  'unknown'. So what reaches the UI is verified, and it can be shown as
+ *  fact rather than as a claim. */
+export interface RepositoryCitation {
+  file: string
+  line_range: [number, number]
+  excerpt: string
+}
+
+/** A question the draft asked about the rest of the repository instead of
+ *  guessing, and what context-agent found. 'yes' and 'no' always carry at
+ *  least one citation. 'unknown' means the repository does not say; that
+ *  question is also listed in `assumptions`, and this record is what tells
+ *  the reviewer it was asked rather than assumed. */
+export interface RepositoryQuestion {
+  question: string
+  answer: 'yes' | 'no' | 'unknown'
+  explanation: string
+  citations: RepositoryCitation[]
+}
+
 export interface ProposedFix {
   diff?: string
   /** The agent's original diff, preserved the first time a reviewer edits the
@@ -54,9 +77,14 @@ export interface ProposedFix {
    *  always satisfies the scanner, so these are held for review however clean
    *  the rescan came back. */
   dropped_resources?: string[]
-  /** Facts the fix depends on that the agent could not verify from the single
-   *  file it was shown. Non-empty forces human review. */
+  /** Facts the fix depends on that the agent could not verify -- from the
+   *  file it was shown, nor by asking the repository (see `questions`).
+   *  Non-empty forces human review. */
   assumptions?: string[]
+  /** What the draft asked about the repository and what it was told, with
+   *  citations. Absent on records written before context-agent existed;
+   *  empty when the draft had nothing to ask. */
+  questions?: RepositoryQuestion[]
   /** The fixes, in order, this one is drafted on top of -- empty means it
    *  applies to the pristine file. Every file in this project carries several
    *  findings, so most fixes are not independent: this diff will not apply
