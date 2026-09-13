@@ -42,7 +42,7 @@ def _pairs(scan_response):
 def test_self_check_clean_fix_single_rule_clears():
     before = _load_fixture("s3-bucket-encryption", "before")
     after = _load_fixture("s3-bucket-encryption", "after")
-    finding = next(f for f in before["findings"] if f["rule_id"] == "aws-s3-enable-bucket-encryption")
+    finding = next(f for f in before["findings"] if f["rule_id"] == "AWS-0132")
     baseline_pairs = _pairs(before)
 
     passed, new_findings, cleared = handler._evaluate_self_check(finding, after["findings"], baseline_pairs)
@@ -52,7 +52,7 @@ def test_self_check_clean_fix_single_rule_clears():
     assert cleared is True
 
 
-@pytest.mark.parametrize("rule_id", ["CKV_AWS_24", "aws-ec2-no-public-ingress-sgr"])
+@pytest.mark.parametrize("rule_id", ["CKV_AWS_24", "AWS-0107"])
 def test_self_check_clean_fix_clears_multiple_sources_at_once(rule_id):
     before = _load_fixture("open-ssh-ingress", "before")
     after = _load_fixture("open-ssh-ingress", "after")
@@ -68,7 +68,7 @@ def test_self_check_clean_fix_clears_multiple_sources_at_once(rule_id):
 
 def test_self_check_fails_when_original_finding_not_cleared():
     before = _load_fixture("s3-bucket-encryption", "before")
-    finding = next(f for f in before["findings"] if f["rule_id"] == "aws-s3-enable-bucket-encryption")
+    finding = next(f for f in before["findings"] if f["rule_id"] == "AWS-0132")
     baseline_pairs = _pairs(before)
 
     # Rescan identical to the baseline -- as if the "fix" changed nothing.
@@ -83,17 +83,17 @@ def test_self_check_fails_when_original_finding_not_cleared():
 def test_self_check_fails_when_fix_introduces_a_new_finding():
     before = _load_fixture("s3-bucket-encryption", "before")
     after = _load_fixture("s3-bucket-encryption", "after")
-    finding = next(f for f in before["findings"] if f["rule_id"] == "aws-s3-enable-bucket-encryption")
+    finding = next(f for f in before["findings"] if f["rule_id"] == "AWS-0132")
     baseline_pairs = _pairs(before)
 
     rescan_findings = after["findings"] + [
-        {"source": "tfsec", "rule_id": "aws-s3-new-thing-introduced-by-fix"}
+        {"source": "trivy", "rule_id": "AWS-9999"}
     ]
 
     passed, new_findings, cleared = handler._evaluate_self_check(finding, rescan_findings, baseline_pairs)
 
     assert passed is False
-    assert new_findings == ["tfsec:aws-s3-new-thing-introduced-by-fix"]
+    assert new_findings == ["trivy:AWS-9999"]
     # The other failure mode: the original cleared, the fix just brought new
     # findings with it. Collapsing this into "self-check failed" like cleared
     # is False would misreport a fix that's most of the way there.
@@ -105,7 +105,7 @@ def test_self_check_clears_when_one_of_several_instances_is_fixed():
     leaves the others firing, and presence-based comparison would call that
     an uncleared finding."""
     before = _load_fixture("open-ssh-ingress", "before")
-    finding = next(f for f in before["findings"] if f["rule_id"] == "aws-ec2-no-public-ingress-sgr")
+    finding = next(f for f in before["findings"] if f["rule_id"] == "AWS-0107")
     target = (finding["source"], finding["rule_id"])
 
     baseline = collections.Counter({target: 3})
@@ -120,7 +120,7 @@ def test_self_check_clears_when_one_of_several_instances_is_fixed():
 
 def test_self_check_does_not_clear_when_instance_count_is_unchanged():
     before = _load_fixture("open-ssh-ingress", "before")
-    finding = next(f for f in before["findings"] if f["rule_id"] == "aws-ec2-no-public-ingress-sgr")
+    finding = next(f for f in before["findings"] if f["rule_id"] == "AWS-0107")
     target = (finding["source"], finding["rule_id"])
 
     baseline = collections.Counter({target: 3})
@@ -136,9 +136,9 @@ def test_extra_instance_of_an_existing_rule_counts_as_a_new_finding():
     """A fix that doubles a problem already present isn't clean, even though
     the rule was in the baseline."""
     before = _load_fixture("s3-bucket-encryption", "before")
-    finding = next(f for f in before["findings"] if f["rule_id"] == "aws-s3-enable-bucket-encryption")
+    finding = next(f for f in before["findings"] if f["rule_id"] == "AWS-0132")
     target = (finding["source"], finding["rule_id"])
-    other = ("tfsec", "aws-s3-enable-bucket-logging")
+    other = ("trivy", "AWS-0089")
 
     baseline = collections.Counter({target: 1, other: 1})
     rescan = [{"source": other[0], "rule_id": other[1]}] * 2  # target gone, other doubled
@@ -146,7 +146,7 @@ def test_extra_instance_of_an_existing_rule_counts_as_a_new_finding():
     passed, new_findings, cleared = handler._evaluate_self_check(finding, rescan, baseline)
 
     assert cleared is True
-    assert new_findings == ["tfsec:aws-s3-enable-bucket-logging"]
+    assert new_findings == ["trivy:AWS-0089"]
     assert passed is False
 
 
@@ -217,7 +217,7 @@ def test_a_suppressing_fix_is_rejected_before_it_is_ever_scanned(
     to be refused before the scanner ever runs on it."""
     before = _load_fixture("s3-bucket-encryption", "before")
     finding = {**next(f for f in before["findings"]
-                      if f["rule_id"] == "aws-s3-enable-bucket-encryption"),
+                      if f["rule_id"] == "AWS-0132"),
                "status": "mapped"}
 
     mock_table = MagicMock()
@@ -322,7 +322,7 @@ def _run_one_finding(mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
     before = _load_fixture("s3-bucket-encryption", "before")
     after = _load_fixture("s3-bucket-encryption", "after")
     finding = {**next(f for f in before["findings"]
-                      if f["rule_id"] == "aws-s3-enable-bucket-encryption"),
+                      if f["rule_id"] == "AWS-0132"),
                "status": "mapped"}
 
     mock_table = MagicMock()
@@ -415,7 +415,7 @@ def test_an_empty_rescan_reads_as_a_cleared_finding():
     rescan is its job, deciding whether a rescan happened is not. Delete the
     gate and this is the behaviour that takes over."""
     before = _load_fixture("s3-bucket-encryption", "before")
-    finding = next(f for f in before["findings"] if f["rule_id"] == "aws-s3-enable-bucket-encryption")
+    finding = next(f for f in before["findings"] if f["rule_id"] == "AWS-0132")
 
     passed, new_findings, cleared = handler._evaluate_self_check(finding, [], _pairs(before))
 
@@ -494,7 +494,7 @@ def test_a_scanner_crash_leaves_the_finding_for_a_retry(
     written at all -- it stays "mapped" and a re-run picks it up again."""
     before = _load_fixture("s3-bucket-encryption", "before")
     finding = {**next(f for f in before["findings"]
-                      if f["rule_id"] == "aws-s3-enable-bucket-encryption"),
+                      if f["rule_id"] == "AWS-0132"),
                "status": "mapped"}
 
     mock_table = MagicMock()
@@ -511,7 +511,7 @@ def test_a_scanner_crash_leaves_the_finding_for_a_retry(
     mock_lambda_client.invoke.return_value = {
         "FunctionError": "Unhandled",
         "Payload": SimpleNamespace(read=lambda: json.dumps(
-            {"errorType": "ScannerError", "errorMessage": "tfsec produced no output (exit 126)"}
+            {"errorType": "ScannerError", "errorMessage": "trivy produced no output (exit 126)"}
         ).encode()),
     }
 
@@ -532,8 +532,11 @@ def test_a_response_without_scan_errors_is_not_treated_as_a_failure(
 ):
     """Backwards compatibility with scanner responses predating the field --
     absent means "none reported", not "unknown, fail closed". Failing closed
-    here would reject every fix until the scanner Lambda was redeployed."""
-    after = _load_fixture("s3-bucket-encryption", "after")
+    here would reject every fix until the scanner Lambda was redeployed.
+
+    The fixtures were re-captured after the field existed, so the old shape
+    is made here by dropping it."""
+    after = {k: v for k, v in _load_fixture("s3-bucket-encryption", "after").items() if k != "scan_errors"}
     assert "scan_errors" not in after
 
     result, mock_table = _run_one_finding(
@@ -577,7 +580,7 @@ def _fake_anthropic_response(payload_dict):
 def test_handler_marks_fix_proposed_on_clean_self_check(mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client):
     before = _load_fixture("s3-bucket-encryption", "before")
     after = _load_fixture("s3-bucket-encryption", "after")
-    finding = next(f for f in before["findings"] if f["rule_id"] == "aws-s3-enable-bucket-encryption")
+    finding = next(f for f in before["findings"] if f["rule_id"] == "AWS-0132")
     finding = {**finding, "status": "mapped"}
 
     mock_table = MagicMock()
@@ -632,7 +635,7 @@ def test_handler_marks_needs_human_only_when_fix_does_not_clear_finding(
     mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
 ):
     before = _load_fixture("s3-bucket-encryption", "before")
-    finding = next(f for f in before["findings"] if f["rule_id"] == "aws-s3-enable-bucket-encryption")
+    finding = next(f for f in before["findings"] if f["rule_id"] == "AWS-0132")
     finding = {**finding, "status": "mapped"}
 
     mock_table = MagicMock()
@@ -690,9 +693,9 @@ def test_handler_isolates_a_failing_finding_and_keeps_going(
     before = _load_fixture("s3-bucket-encryption", "before")
     after = _load_fixture("s3-bucket-encryption", "after")
     pair = [
-        {**next(f for f in before["findings"] if f["rule_id"] == "aws-s3-enable-bucket-encryption"),
+        {**next(f for f in before["findings"] if f["rule_id"] == "AWS-0132"),
          "status": "mapped"},
-        {**next(f for f in before["findings"] if f["rule_id"] != "aws-s3-enable-bucket-encryption"),
+        {**next(f for f in before["findings"] if f["rule_id"] != "AWS-0132"),
          "status": "mapped"},
     ]
     # Remediation order is deterministic, so which one gets the failing call is
@@ -749,12 +752,12 @@ def test_handler_isolates_a_failing_finding_and_keeps_going(
 # of after/, so "is the base content in this prompt" cannot tell the two apart.
 SSE_MARKER = "aws_s3_bucket_server_side_encryption_configuration"
 
-LOGGING_RULE = "aws-s3-enable-bucket-logging"
+LOGGING_RULE = "AWS-0089"
 
 SUPPRESSION_LINE = "#tfsec:ignore:aws-s3-enable-bucket-encryption"
 
 
-def _mapped(rule_id, line_start, finding_id, file="main.tf", source="tfsec"):
+def _mapped(rule_id, line_start, finding_id, file="main.tf", source="trivy"):
     return {
         "pk": "PR#chain-1", "sk": f"FINDING#{finding_id}", "finding_id": finding_id,
         "file": file, "source": source, "rule_id": rule_id,
@@ -780,7 +783,7 @@ def _written(mock_table, call_index):
 def _encryption_then_logging():
     """Two findings on one file, in the order the chain will process them."""
     return sorted(
-        [_mapped("aws-s3-enable-bucket-encryption", 1, "f1"),
+        [_mapped("AWS-0132", 1, "f1"),
          _mapped(LOGGING_RULE, 2, "f2")],
         key=handler._remediation_order,
     )
@@ -1082,7 +1085,7 @@ ACCEPTED_CONTENT = "accepted\n"
 
 def _accepted(finding_id, applies_after=(), status="resolved"):
     return {
-        **_mapped("aws-s3-enable-bucket-encryption", 1, finding_id),
+        **_mapped("AWS-0132", 1, finding_id),
         "status": status,
         "proposed_fix": {"diff": ACCEPTED_DIFF, "applies_after": list(applies_after)},
     }
@@ -1149,7 +1152,7 @@ def test_a_rejected_fix_is_not_a_root(
     before = _load_fixture("s3-bucket-encryption", "before")
     after = _load_fixture("s3-bucket-encryption", "after")
     rejected = _accepted("f1", status="needs-human-only")
-    to_redraft = _mapped("aws-s3-enable-bucket-encryption", 1, "f2")
+    to_redraft = _mapped("AWS-0132", 1, "f2")
     original = _read_fixture_tf("s3-bucket-encryption", "before")
 
     mock_table = MagicMock()
@@ -1192,7 +1195,7 @@ def test_a_rule_the_accepted_root_already_cleared_is_superseded_by_it(
     accepted = _accepted("f1")
     # The accepted fix cleared encryption. This finding is on that very rule,
     # reopened to mapped (its superseder was edited) and back for a fix.
-    already_cleared = _mapped("aws-s3-enable-bucket-encryption", 1, "s1")
+    already_cleared = _mapped("AWS-0132", 1, "s1")
 
     mock_table = MagicMock()
     mock_table.query.side_effect = [
@@ -1311,7 +1314,7 @@ def test_a_file_can_be_remediated_on_its_own(
     the file so the state machine's output is readable per iteration."""
     before = _load_fixture("s3-bucket-encryption", "before")
     after = _load_fixture("s3-bucket-encryption", "after")
-    finding = _mapped("aws-s3-enable-bucket-encryption", 1, "f1")
+    finding = _mapped("AWS-0132", 1, "f1")
 
     mock_table = MagicMock()
     mock_table.query.side_effect = [{"Items": [finding]}, {"Items": before["findings"]}]

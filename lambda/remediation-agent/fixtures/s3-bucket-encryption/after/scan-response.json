@@ -1,14 +1,14 @@
 {
   "pr_id": "fixture-s3-enc-after",
-  "finding_count": 15,
+  "finding_count": 13,
   "findings": [
     {
       "pk": "PR#fixture-s3-enc-after",
-      "sk": "FINDING#108fc2350eb1384e",
-      "finding_id": "108fc2350eb1384e",
+      "sk": "FINDING#e480c7de8ff528aa",
+      "finding_id": "e480c7de8ff528aa",
       "iac_type": "terraform",
-      "source": "tfsec",
-      "rule_id": "aws-s3-block-public-acls",
+      "source": "trivy",
+      "rule_id": "AWS-0086",
       "file": "main.tf",
       "line_range": [
         1,
@@ -18,16 +18,16 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192515+00:00",
-      "updated_at": "2026-09-01T19:24:29.192515+00:00"
+      "created_at": "2026-09-13T01:22:41.366836+00:00",
+      "updated_at": "2026-09-13T01:22:41.366836+00:00"
     },
     {
       "pk": "PR#fixture-s3-enc-after",
-      "sk": "FINDING#fcb538f663bab6fd",
-      "finding_id": "fcb538f663bab6fd",
+      "sk": "FINDING#d0f6569f71ea95b1",
+      "finding_id": "d0f6569f71ea95b1",
       "iac_type": "terraform",
-      "source": "tfsec",
-      "rule_id": "aws-s3-block-public-policy",
+      "source": "trivy",
+      "rule_id": "AWS-0087",
       "file": "main.tf",
       "line_range": [
         1,
@@ -37,111 +37,16 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192515+00:00",
-      "updated_at": "2026-09-01T19:24:29.192515+00:00"
+      "created_at": "2026-09-13T01:22:41.366836+00:00",
+      "updated_at": "2026-09-13T01:22:41.366836+00:00"
     },
     {
       "pk": "PR#fixture-s3-enc-after",
-      "sk": "FINDING#22d6377ed9ea38fc",
-      "finding_id": "22d6377ed9ea38fc",
+      "sk": "FINDING#e6ce91c3cd537a52",
+      "finding_id": "e6ce91c3cd537a52",
       "iac_type": "terraform",
-      "source": "tfsec",
-      "rule_id": "aws-s3-enable-bucket-logging",
-      "file": "main.tf",
-      "line_range": [
-        1,
-        3
-      ],
-      "severity": "MEDIUM",
-      "control_mappings": [],
-      "status": "raw",
-      "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192515+00:00",
-      "updated_at": "2026-09-01T19:24:29.192515+00:00"
-    },
-    {
-      "pk": "PR#fixture-s3-enc-after",
-      "sk": "FINDING#33370c5bd053cfbb",
-      "finding_id": "33370c5bd053cfbb",
-      "iac_type": "terraform",
-      "source": "tfsec",
-      "rule_id": "aws-s3-enable-versioning",
-      "file": "main.tf",
-      "line_range": [
-        1,
-        3
-      ],
-      "severity": "MEDIUM",
-      "control_mappings": [],
-      "status": "raw",
-      "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192515+00:00",
-      "updated_at": "2026-09-01T19:24:29.192515+00:00"
-    },
-    {
-      "pk": "PR#fixture-s3-enc-after",
-      "sk": "FINDING#a31c9271851829f6",
-      "finding_id": "a31c9271851829f6",
-      "iac_type": "terraform",
-      "source": "tfsec",
-      "rule_id": "aws-s3-encryption-customer-key",
-      "file": "main.tf",
-      "line_range": [
-        5,
-        13
-      ],
-      "severity": "HIGH",
-      "control_mappings": [],
-      "status": "raw",
-      "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192515+00:00",
-      "updated_at": "2026-09-01T19:24:29.192515+00:00"
-    },
-    {
-      "pk": "PR#fixture-s3-enc-after",
-      "sk": "FINDING#79493948ef41ad4a",
-      "finding_id": "79493948ef41ad4a",
-      "iac_type": "terraform",
-      "source": "tfsec",
-      "rule_id": "aws-s3-ignore-public-acls",
-      "file": "main.tf",
-      "line_range": [
-        1,
-        3
-      ],
-      "severity": "HIGH",
-      "control_mappings": [],
-      "status": "raw",
-      "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192515+00:00",
-      "updated_at": "2026-09-01T19:24:29.192515+00:00"
-    },
-    {
-      "pk": "PR#fixture-s3-enc-after",
-      "sk": "FINDING#8e1ef54248645198",
-      "finding_id": "8e1ef54248645198",
-      "iac_type": "terraform",
-      "source": "tfsec",
-      "rule_id": "aws-s3-no-public-buckets",
-      "file": "main.tf",
-      "line_range": [
-        1,
-        3
-      ],
-      "severity": "HIGH",
-      "control_mappings": [],
-      "status": "raw",
-      "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192515+00:00",
-      "updated_at": "2026-09-01T19:24:29.192515+00:00"
-    },
-    {
-      "pk": "PR#fixture-s3-enc-after",
-      "sk": "FINDING#e42fc673a6446361",
-      "finding_id": "e42fc673a6446361",
-      "iac_type": "terraform",
-      "source": "tfsec",
-      "rule_id": "aws-s3-specify-public-access-block",
+      "source": "trivy",
+      "rule_id": "AWS-0089",
       "file": "main.tf",
       "line_range": [
         1,
@@ -151,8 +56,84 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192515+00:00",
-      "updated_at": "2026-09-01T19:24:29.192515+00:00"
+      "created_at": "2026-09-13T01:22:41.366836+00:00",
+      "updated_at": "2026-09-13T01:22:41.366836+00:00"
+    },
+    {
+      "pk": "PR#fixture-s3-enc-after",
+      "sk": "FINDING#dd50ea055d4d6b77",
+      "finding_id": "dd50ea055d4d6b77",
+      "iac_type": "terraform",
+      "source": "trivy",
+      "rule_id": "AWS-0090",
+      "file": "main.tf",
+      "line_range": [
+        1,
+        3
+      ],
+      "severity": "MEDIUM",
+      "control_mappings": [],
+      "status": "raw",
+      "proposed_fix": null,
+      "created_at": "2026-09-13T01:22:41.366836+00:00",
+      "updated_at": "2026-09-13T01:22:41.366836+00:00"
+    },
+    {
+      "pk": "PR#fixture-s3-enc-after",
+      "sk": "FINDING#4ddd3215a981c526",
+      "finding_id": "4ddd3215a981c526",
+      "iac_type": "terraform",
+      "source": "trivy",
+      "rule_id": "AWS-0091",
+      "file": "main.tf",
+      "line_range": [
+        1,
+        3
+      ],
+      "severity": "HIGH",
+      "control_mappings": [],
+      "status": "raw",
+      "proposed_fix": null,
+      "created_at": "2026-09-13T01:22:41.366836+00:00",
+      "updated_at": "2026-09-13T01:22:41.366836+00:00"
+    },
+    {
+      "pk": "PR#fixture-s3-enc-after",
+      "sk": "FINDING#69022a9819343a7c",
+      "finding_id": "69022a9819343a7c",
+      "iac_type": "terraform",
+      "source": "trivy",
+      "rule_id": "AWS-0093",
+      "file": "main.tf",
+      "line_range": [
+        1,
+        3
+      ],
+      "severity": "HIGH",
+      "control_mappings": [],
+      "status": "raw",
+      "proposed_fix": null,
+      "created_at": "2026-09-13T01:22:41.366836+00:00",
+      "updated_at": "2026-09-13T01:22:41.366836+00:00"
+    },
+    {
+      "pk": "PR#fixture-s3-enc-after",
+      "sk": "FINDING#7d4e5f4e893fa8d5",
+      "finding_id": "7d4e5f4e893fa8d5",
+      "iac_type": "terraform",
+      "source": "trivy",
+      "rule_id": "AWS-0094",
+      "file": "main.tf",
+      "line_range": [
+        1,
+        3
+      ],
+      "severity": "LOW",
+      "control_mappings": [],
+      "status": "raw",
+      "proposed_fix": null,
+      "created_at": "2026-09-13T01:22:41.366836+00:00",
+      "updated_at": "2026-09-13T01:22:41.366836+00:00"
     },
     {
       "pk": "PR#fixture-s3-enc-after",
@@ -170,8 +151,8 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192609+00:00",
-      "updated_at": "2026-09-01T19:24:29.192609+00:00"
+      "created_at": "2026-09-13T01:22:41.366921+00:00",
+      "updated_at": "2026-09-13T01:22:41.366921+00:00"
     },
     {
       "pk": "PR#fixture-s3-enc-after",
@@ -189,27 +170,8 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192609+00:00",
-      "updated_at": "2026-09-01T19:24:29.192609+00:00"
-    },
-    {
-      "pk": "PR#fixture-s3-enc-after",
-      "sk": "FINDING#8bfddee4ae7654a6",
-      "finding_id": "8bfddee4ae7654a6",
-      "iac_type": "terraform",
-      "source": "checkov",
-      "rule_id": "CKV2_AWS_61",
-      "file": "main.tf",
-      "line_range": [
-        1,
-        3
-      ],
-      "severity": "UNKNOWN",
-      "control_mappings": [],
-      "status": "raw",
-      "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192609+00:00",
-      "updated_at": "2026-09-01T19:24:29.192609+00:00"
+      "created_at": "2026-09-13T01:22:41.366921+00:00",
+      "updated_at": "2026-09-13T01:22:41.366921+00:00"
     },
     {
       "pk": "PR#fixture-s3-enc-after",
@@ -227,8 +189,8 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192609+00:00",
-      "updated_at": "2026-09-01T19:24:29.192609+00:00"
+      "created_at": "2026-09-13T01:22:41.366921+00:00",
+      "updated_at": "2026-09-13T01:22:41.366921+00:00"
     },
     {
       "pk": "PR#fixture-s3-enc-after",
@@ -246,8 +208,8 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192609+00:00",
-      "updated_at": "2026-09-01T19:24:29.192609+00:00"
+      "created_at": "2026-09-13T01:22:41.366921+00:00",
+      "updated_at": "2026-09-13T01:22:41.366921+00:00"
     },
     {
       "pk": "PR#fixture-s3-enc-after",
@@ -265,16 +227,16 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192609+00:00",
-      "updated_at": "2026-09-01T19:24:29.192609+00:00"
+      "created_at": "2026-09-13T01:22:41.366921+00:00",
+      "updated_at": "2026-09-13T01:22:41.366921+00:00"
     },
     {
       "pk": "PR#fixture-s3-enc-after",
-      "sk": "FINDING#2a2b71aee31f5535",
-      "finding_id": "2a2b71aee31f5535",
+      "sk": "FINDING#8bfddee4ae7654a6",
+      "finding_id": "8bfddee4ae7654a6",
       "iac_type": "terraform",
       "source": "checkov",
-      "rule_id": "CKV_AWS_145",
+      "rule_id": "CKV2_AWS_61",
       "file": "main.tf",
       "line_range": [
         1,
@@ -284,8 +246,9 @@
       "control_mappings": [],
       "status": "raw",
       "proposed_fix": null,
-      "created_at": "2026-09-01T19:24:29.192609+00:00",
-      "updated_at": "2026-09-01T19:24:29.192609+00:00"
+      "created_at": "2026-09-13T01:22:41.366921+00:00",
+      "updated_at": "2026-09-13T01:22:41.366921+00:00"
     }
-  ]
+  ],
+  "scan_errors": []
 }
