@@ -1128,7 +1128,9 @@ def test_a_chain_roots_at_the_last_accepted_fix_not_the_snapshot(
 
     assert result["fix_proposed_count"] == 1
     # The base was read from the accepted fix's content, not the snapshot.
-    assert mock_s3.get_object.call_args.kwargs["Key"] == "fixes/chain-1/f1/main.tf"
+    assert "fixes/chain-1/f1/main.tf" in [
+        c.kwargs["Key"] for c in mock_s3.get_object.call_args_list
+    ]  # the pristine file is also read, for the finding's flagged lines
     assert ACCEPTED_CONTENT in _prompt_of(mock_get_client, 0)
     # The root was rescanned to get its counts, then the redraft self-checked.
     assert mock_lambda_client.invoke.call_count == 2
@@ -1419,7 +1421,9 @@ def test_a_continuation_roots_at_the_fix_it_was_told_to(
         "superseded_count": 0, "error_count": 0,
     }, None)
 
-    assert mock_s3.get_object.call_args.kwargs["Key"] == "fixes/chain-1/f1/main.tf"
+    assert "fixes/chain-1/f1/main.tf" in [
+        c.kwargs["Key"] for c in mock_s3.get_object.call_args_list
+    ]  # the pristine file is also read, for the finding's flagged lines
     assert ACCEPTED_CONTENT in _prompt_of(mock_get_client, 0)
     assert _written(mock_table, 0)[":pf"]["applies_after"] == [
         {"finding_id": "f1", "diff_sha256": handler._diff_sha256(ACCEPTED_DIFF)}
@@ -1616,3 +1620,86 @@ def test_a_failed_context_lookup_leaves_the_finding_for_a_retry(
 
     assert result["error_count"] == 1
     mock_table.update_item.assert_not_called()
+
+
+# ---------- line drift: a finding's lines vs the chain's content ----------
+#
+# Observed on pugetscope-ctx-2: the first fix on the file inserted a locals
+# block near the top, and every later finding -- whose line_range is from the
+# pristine snapshot -- was drafted against lines that had moved. "Line 48"
+# (port 80) pointed into the 6443 rule, and that is what got fixed.
+
+DRIFT_ORIGINAL = "\n".join(f"line {n}" for n in range(1, 21)) + "\n"
+
+
+def test_flagged_lines_are_taken_from_the_original_with_their_numbers():
+    finding = _mapped("r", 10, "f1")
+    finding["line_range"] = [10, 11]
+
+    out = handler._flagged_lines(DRIFT_ORIGINAL, finding)
+
+    assert out.splitlines() == ["8: line 8", "9: line 9", "10: line 10", "11: line 11",
+                                "12: line 12", "13: line 13"]
+
+
+def test_flagged_lines_clip_to_the_file_and_tolerate_a_missing_end():
+    finding = _mapped("r", 1, "f1")
+    finding["line_range"] = [1, None]
+
+    assert handler._flagged_lines(DRIFT_ORIGINAL, finding).splitlines() == [
+        "1: line 1", "2: line 2", "3: line 3",
+    ]
+
+
+def test_flagged_lines_are_empty_without_a_line_or_past_the_end():
+    no_line = {**_mapped("r", None, "f1"), "line_range": [None, None]}
+    past_end = {**_mapped("r", 99, "f1"), "line_range": [99, 99]}
+
+    assert handler._flagged_lines(DRIFT_ORIGINAL, no_line) == ""
+    assert handler._flagged_lines(DRIFT_ORIGINAL, past_end) == ""
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_draft_on_a_shifted_base_is_shown_the_original_lines(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """Two findings on one file. The first fix prepends a block, so the
+    second finding's line numbers no longer point at its rule in the base
+    the second draft is given. That draft's prompt must carry the flagged
+    lines as they were, numbered as the scanner numbered them, and say the
+    file may have moved."""
+    before = _load_fixture("s3-bucket-encryption", "before")
+    after = _load_fixture("s3-bucket-encryption", "after")
+    original = _read_fixture_tf("s3-bucket-encryption", "before")
+    # The first fix inserts three lines at the top of the file.
+    first_fix = 'locals {\n  x = 1\n}\n' + _read_fixture_tf("s3-bucket-encryption", "after")
+    second_fix = first_fix + '\nresource "aws_s3_bucket_logging" "l" {}\n'
+    after_both = {"findings": [f for f in after["findings"] if f["rule_id"] != LOGGING_RULE]}
+    pair = _encryption_then_logging()
+    pair[1]["line_range"] = [2, 3]  # the logging finding, at its pristine lines
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": pair}, {"Items": before["findings"]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: original.encode())}
+    mock_get_client.return_value.messages.create.side_effect = [
+        _fake_anthropic_response({"corrected_file_content": first_fix, "rationale": "SSE.", "assumptions": [], "questions": []}),
+        _fake_anthropic_response({"corrected_file_content": second_fix, "rationale": "Logging.", "assumptions": [], "questions": []}),
+    ]
+    mock_lambda_client.invoke.side_effect = [_scan_reply(after), _scan_reply(after_both)]
+
+    result = handler.handler({"pr_id": "chain-1"}, None)
+
+    assert result["fix_proposed_count"] == 2
+    second_prompt = _prompt_of(mock_get_client, 1)
+    original_lines = original.splitlines()
+    # The pristine lines 2-3, numbered as the scanner numbered them ...
+    assert f"2: {original_lines[1]}" in second_prompt
+    assert f"3: {original_lines[2]}" in second_prompt
+    # ... with the instruction, and against the shifted base.
+    assert "lines may have moved" in second_prompt
+    assert "Locate that configuration in the file below by its content" in second_prompt
+    assert "locals {" in second_prompt

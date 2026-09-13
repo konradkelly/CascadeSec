@@ -180,6 +180,9 @@ def handler(event, context):
             base_content, baseline_counts, applies_after = _chain_root(
                 pr_id, file_path, resume_from,
             )
+            # The scanner's line numbers refer to this, not to the chain's
+            # content -- see _flagged_lines.
+            original_content = _fetch_original_content(pr_id, file_path)
         except Exception:
             # Nothing in this file can be remediated without its base, and the
             # failure is the file's, not any one finding's.
@@ -237,6 +240,7 @@ def handler(event, context):
             try:
                 outcome = _remediate_finding(
                     pr_id, finding, base_content, baseline_counts, list(applies_after),
+                    _flagged_lines(original_content, finding),
                 )
             except Exception:
                 # One finding's failure shouldn't abandon the rest of the file.
@@ -332,14 +336,14 @@ def _remediation_order(finding):
     )
 
 
-def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_after):
+def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_after, flagged=""):
     finding_id = finding["finding_id"]
     file_path = finding["file"]
 
     # base_content is the file as the previous accepted fix in this file left
     # it, not the pristine snapshot, so the model is shown what it is actually
     # editing and the diff is minimal against that.
-    remediation = _call_remediation_agent(finding, base_content)
+    remediation = _call_remediation_agent(finding, base_content, flagged=flagged)
     questions = remediation.get("questions") or []
     answers = []
     if questions and CONTEXT_AGENT_FUNCTION_NAME:
@@ -347,7 +351,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
         # again with the answers in front of the model. Any answer that is
         # unknown is put back into the redraft's assumptions by the prompt.
         answers = _ask_context_agent(pr_id, questions)
-        remediation = _call_remediation_agent(finding, base_content, answers)
+        remediation = _call_remediation_agent(finding, base_content, answers, flagged=flagged)
         # A redraft may not ask again; whatever it still wants to know is an
         # assumption now.
         leftovers = remediation.get("questions") or []
@@ -565,6 +569,35 @@ def _query_mapped_findings(pr_id, only_file=None):
     )
 
 
+def _flagged_lines(original_content, finding, context=2):
+    """The finding's lines as they were in the file the scanner read, numbered.
+
+    A finding's line_range is relative to the pristine snapshot, but every
+    fix after the first in a file is drafted against the chain's content,
+    and a fix that inserts lines above the finding moves everything below it.
+    Observed on pugetscope-ctx-2: the first fix added a locals block near the
+    top, and the port-80 finding's "line 48" then pointed into the 6443
+    rule, which is what got fixed. The model is given the original text and
+    told to find it by content, not by number.
+
+    Empty when the finding has no line (some rules name a file) or the range
+    is off the end of the file, which is a different problem from drift and
+    is left to the model to notice.
+    """
+    line_range = finding.get("line_range") or []
+    start = line_range[0] if line_range else None
+    if start is None:
+        return ""
+    lines = original_content.splitlines()
+    start = int(start)
+    end = int(line_range[1]) if len(line_range) > 1 and line_range[1] is not None else start
+    if start < 1 or start > len(lines):
+        return ""
+    lo = max(start - context, 1)
+    hi = min(end + context, len(lines))
+    return "\n".join(f"{n}: {lines[n - 1]}" for n in range(lo, hi + 1))
+
+
 def _fetch_original_content(pr_id, file_path):
     obj = s3.get_object(Bucket=ARTIFACTS_BUCKET, Key=f"scans/{pr_id}/{file_path}")
     return obj["Body"].read().decode("utf-8")
@@ -605,7 +638,7 @@ def _format_answers(answers):
     return "\n".join(lines)
 
 
-def _call_remediation_agent(finding, original_content, answers=None):
+def _call_remediation_agent(finding, original_content, answers=None, flagged=""):
     prompt = (
         "Scanner finding to fix:\n"
         f"  source: {finding['source']}\n"
@@ -613,6 +646,19 @@ def _call_remediation_agent(finding, original_content, answers=None):
         f"  severity: {finding['severity']}\n"
         f"  file: {finding['file']}\n"
         f"  line_range: {finding['line_range']}\n\n"
+    )
+    if flagged:
+        prompt += (
+            "The line numbers above are from the file as the scanner read it. "
+            "The file below may differ: earlier fixes in this file have been "
+            "applied to it, and lines may have moved. The flagged lines, as "
+            "they were when scanned, with their original numbers:\n"
+            f"{flagged}\n\n"
+            "Locate that configuration in the file below by its content, not by "
+            "line number, and fix that -- not whatever now sits at those "
+            "numbers.\n\n"
+        )
+    prompt += (
         f"Current file contents:\n{original_content}\n\n"
         "Return the complete corrected file content with a minimal fix for "
         "this specific finding only -- do not restructure unrelated code or "
@@ -674,8 +720,14 @@ def _call_remediation_agent(finding, original_content, answers=None):
             "Draft the fix knowing this. A `yes` or `no` answer is established "
             "and must not appear in `assumptions`. A question answered "
             "`unknown` is still an assumption if the fix depends on it -- keep "
-            "it there, worded as the claim you are relying on. Return an empty "
-            "`questions` list: there is no second lookup."
+            "it there, worded as the claim you are relying on. If an answer "
+            "shows the flagged configuration is required by the system as the "
+            "repository describes it -- a port a certificate solver needs open, "
+            "a source a caller depends on -- do not gate it off behind a new "
+            "input that defaults to closed: that satisfies the scanner and "
+            "breaks the deployment. Say so in the rationale and return the file "
+            "unchanged; a human decides. Return an empty `questions` list: there "
+            "is no second lookup."
         )
     elif CONTEXT_AGENT_FUNCTION_NAME:
         prompt += (
