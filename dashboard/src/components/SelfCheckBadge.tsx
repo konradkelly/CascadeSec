@@ -4,6 +4,31 @@ interface SelfCheckBadgeProps {
   proposedFix?: ProposedFix | null
 }
 
+/** Why a fix whose rescan came back clean is still not `fix-proposed`.
+ *
+ *  remediation-agent overrides a passing rescan for two human-review gates
+ *  (a deleted resource, a declared assumption) and records the override as
+ *  self_check_passed=false with cleared=true and nothing new. That is a
+ *  different thing from a fix the scanner rejected, and the two must not
+ *  read the same: one has a verified diff waiting for a decision, the other
+ *  has a diff that does not work. Empty when the fix is not in that state. */
+export function humanGates(proposedFix?: ProposedFix | null): string[] {
+  if (
+    !proposedFix ||
+    proposedFix.self_check_passed !== false ||
+    proposedFix.cleared !== true ||
+    proposedFix.self_check_new_findings?.length ||
+    proposedFix.scan_errors?.length ||
+    proposedFix.suppression_attempt?.length
+  ) {
+    return []
+  }
+  const gates: string[] = []
+  if (proposedFix.dropped_resources?.length) gates.push('deletes a resource')
+  if (proposedFix.assumptions?.length) gates.push('rests on assumptions')
+  return gates
+}
+
 export function SelfCheckBadge({ proposedFix }: SelfCheckBadgeProps) {
   if (!proposedFix || proposedFix.self_check_passed === undefined) {
     return <span className="badge badge--muted">No self-check</span>
@@ -11,6 +36,18 @@ export function SelfCheckBadge({ proposedFix }: SelfCheckBadgeProps) {
 
   if (proposedFix.self_check_passed) {
     return <span className="badge badge--pass">Self-check passed</span>
+  }
+
+  const gates = humanGates(proposedFix)
+  if (gates.length > 0) {
+    return (
+      <span
+        className="badge badge--needs-human-only"
+        title={`The rescan cleared the finding and introduced nothing; held because the fix ${gates.join(' and ')}`}
+      >
+        Rescan clean, held for review
+      </span>
+    )
   }
 
   // A parse failure has to be read before cleared/newCount, not alongside them:

@@ -13,7 +13,7 @@ import { ControlMapping } from '../components/ControlMapping'
 import { RepositoryQuestions } from '../components/RepositoryQuestions'
 import { DiffViewer } from '../components/DiffViewer'
 import { ReviewActions } from '../components/ReviewActions'
-import { SelfCheckBadge } from '../components/SelfCheckBadge'
+import { SelfCheckBadge, humanGates } from '../components/SelfCheckBadge'
 import { SeverityBadge } from '../components/SeverityBadge'
 import { StatusBadge } from '../components/StatusBadge'
 import type { Finding, Prerequisite, ReviewEvent } from '../types/finding'
@@ -198,9 +198,16 @@ export function FindingDetailPage() {
   // previously-viewed finding must not block this one.
   const activeUnmet = chain.length > 0 ? unmet : []
   const blockedByChain = activeUnmet.length > 0
+  // Any drafted diff is shown, including one the self-check rejected: a fix
+  // held for review has a verified diff waiting for a decision, and a fix
+  // that introduced one new finding is often one edit from passing -- the
+  // reviewer can only make that edit if they can see it. The alerts above
+  // say which case this is.
   const showDiff =
-    finding.proposed_fix?.diff &&
-    (finding.status === 'fix-proposed' || finding.status === 'resolved')
+    Boolean(finding.proposed_fix?.diff) &&
+    (finding.status === 'fix-proposed' ||
+      finding.status === 'needs-human-only' ||
+      finding.status === 'resolved')
   // An assumption that was asked and came back unknown is listed under both
   // assumptions and questions (remediation-agent puts it back by code). The
   // assumptions list marks those, so "assumed" and "asked, unanswered" do
@@ -234,10 +241,9 @@ export function FindingDetailPage() {
               <>
                 <span>·</span>
                 <span>
-                  line{finding.line_range[0]}
                   {finding.line_range[1] != null && finding.line_range[1] !== finding.line_range[0]
-                    ? `–${finding.line_range[1]}`
-                    : ''}
+                    ? `lines ${finding.line_range[0]}–${finding.line_range[1]}`
+                    : `line ${finding.line_range[0]}`}
                 </span>
               </>
             )}
@@ -420,11 +426,15 @@ export function FindingDetailPage() {
               </div>
             )}
 
+          {/* Shown when the scanner itself rejected the fix. A clean rescan
+              held by a human gate is not that, and says so through the badge
+              and the assumptions / deletion alerts instead -- but a fix can
+              be held by a gate *and* have introduced a new finding, and then
+              the reviewer needs to see both. */}
           {finding.proposed_fix.self_check_passed === false &&
             !finding.proposed_fix.suppression_attempt?.length &&
             !finding.proposed_fix.scan_errors?.length &&
-            !finding.proposed_fix.dropped_resources?.length &&
-            !finding.proposed_fix.assumptions?.length && (
+            humanGates(finding.proposed_fix).length === 0 && (
             <div className="alert alert--warn">
               {/* cleared distinguishes two different failures: the fix missed
                   the original finding, or it cleared the original but
@@ -479,8 +489,7 @@ export function FindingDetailPage() {
         <section className="panel">
           <h2>Proposed fix</h2>
           <div className="alert alert--warn">
-            Self-check did not pass — no diff is attached. Review the rationale and address this
-            finding manually.
+            No diff was drafted for this finding. Review the rationale and address it manually.
           </div>
         </section>
       )}
