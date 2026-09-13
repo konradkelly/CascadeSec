@@ -358,3 +358,29 @@ def test_a_citation_without_a_line_pair_is_rejected(snapshot):
     out, rejected = handler._verify_citations([cited], snapshot)
 
     assert rejected == 1 and out[0]["answer"] == "unknown"
+
+
+def test_a_paraphrased_question_is_aligned_by_position():
+    """The model quotes questions verbatim when asked, mostly. When it
+    returns one answer per question, a reworded question is that question,
+    and the record keeps the wording the draft actually asked."""
+    q1, q2 = "Is var.admin_cidrs populated anywhere?", "Does anything serve the bucket publicly?"
+    answers = [
+        {"question": "Is `admin_cidrs` set in any tfvars?", "answer": "yes", "explanation": "e1", "citations": []},
+        {"question": q2, "answer": "no", "explanation": "e2", "citations": []},
+    ]
+
+    out = handler._align([q1, q2], answers)
+
+    assert [a["question"] for a in out] == [q1, q2]
+    assert [a["answer"] for a in out] == ["yes", "no"]
+
+
+def test_a_count_mismatch_falls_back_to_exact_text():
+    q1, q2 = "First?", "Second?"
+    answers = [{"question": q2, "answer": "no", "explanation": "e", "citations": []}]
+
+    out = handler._align([q1, q2], answers)
+
+    assert out[0]["answer"] == "unknown" and "no answer" in out[0]["explanation"]
+    assert out[1]["answer"] == "no"

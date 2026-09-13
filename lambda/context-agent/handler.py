@@ -177,14 +177,7 @@ def handler(event, context):
         snapshot = Snapshot(work_dir, files)
         answers = _ask(snapshot, questions)
 
-        # Alignment with the input is part of the contract: remediation-agent
-        # pairs answers with questions by position. Anything the model
-        # dropped or reordered is put back as unknown.
-        by_question = {a["question"]: a for a in answers}
-        result = [
-            by_question.get(q) or _unknown(q, "The agent returned no answer for this question.")
-            for q in questions
-        ]
+        result = _align(questions, answers)
         # Verified while the files are still on disk.
         verified, rejected = _verify_citations(result, snapshot)
     finally:
@@ -347,6 +340,28 @@ def _ask(snapshot, questions):
                 content = f"unknown tool {use.name}"
             results.append({"type": "tool_result", "tool_use_id": use.id, "content": content})
         messages.append({"role": "user", "content": results})
+
+
+def _align(questions, answers):
+    """One answer per input question, in input order, each carrying the
+    question as it was asked.
+
+    Alignment is part of the contract: remediation-agent pairs answers with
+    questions by position, and stores the question text the reviewer will
+    read. The model is told to quote each question verbatim, and mostly
+    does; when it returned exactly one answer per question, position is
+    trusted over wording, because a paraphrase is not a missing answer.
+    Observed on pugetscope-ctx-2: one reworded question was recorded as
+    "the agent returned no answer" under exact-text matching. With any other
+    count, exact text is the only safe key and the rest are unknown.
+    """
+    if len(answers) == len(questions):
+        return [{**a, "question": q} for q, a in zip(questions, answers)]
+    by_question = {a["question"]: a for a in answers}
+    return [
+        by_question.get(q) or _unknown(q, "The agent returned no answer for this question.")
+        for q in questions
+    ]
 
 
 def _verify_citations(answers, snapshot):
