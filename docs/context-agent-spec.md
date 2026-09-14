@@ -284,7 +284,7 @@ detail (`minItems: 2` on `line_range` is rejected by structured outputs);
 the failure path behaved as designed, four errors and four findings left
 `mapped`, and the direct `--stages remediate` re-run picked them up.
 
-**Measured on PugetScope, 2026-09-13** (`pugetscope-ctx-1`: the full
+**Measured on PugetScope, 2026-09-13 — superseded by the run below** (`pugetscope-ctx-1`: the full
 repository, 57 files including `k8s/`, remediation run on
 `terraform/modules/security_groups/main.tf` alone). The result is in two
 parts, and the second is the more important.
@@ -319,3 +319,55 @@ is in the snapshot waiting for the question.
 *Cost of the run:* one file, 5 findings, 3 context invocations and 3
 redrafts on top of 5 drafts — roughly double the model calls of a run
 without questions, on a file where every draft had something to ask.
+
+## 13. The eval, once the findings were admitted
+
+The run above could not measure the thing this component was built for: the
+two findings whose assumptions fill §1's table — port 80 and the NodePort
+range open to the world — were not admitted by Trivy at all. §8.4 item 2's
+custom check `IACP-0001` fixed that, and the eval was re-run on
+`pugetscope-ctx-3` (2026-09-14, the whole repository, remediation on
+`terraform/modules/security_groups/main.tf`).
+
+**9 drafts, 17 questions, 16 answered `yes`/`no` with 33 verified citations,
+1 `unknown`, 0 citations rejected.** 8 assumptions survived across the nine,
+against 4 on the same file's 5 drafts before — fewer per draft, and all
+about the running system rather than about the repository.
+
+**The headline, at last.** The port-80 finding asked *"do the repository's
+Kubernetes manifests configure cert-manager with an HTTP-01 solver, which
+would require port 80 open to the internet on the nodes?"* and was told
+**yes**, citing `k8s/overlays/ec2/cluster-issuer.yaml:14-17` and the
+overlay's own comment. The fix **returned the file unchanged**, with the
+reason: Let's Encrypt validates from source addresses that are deliberately
+unpublished, so there is no narrower CIDR to substitute, and the nodes are
+the front door. That is what §8 predicted — *"the right outcome is not a
+passing fix but a better one that keeps port 80 open"* — and it is the exact
+assumption §1's table opens with, inverted: the agent had assumed DNS-01.
+The checkov twin `CKV_AWS_260` reached the same conclusion from the same
+citation, independently.
+
+Three of §1's six assumptions were answered outright (`admin_cidrs` is
+empty-defaulted; HTTP-01 is in use; nothing exposes the ingress controller
+as a NodePort Service), one was superseded (`public_http_cidrs` is no longer
+proposed), one survives as the honest residue (public traffic arrives on
+80/443), and one belongs to a different file. The NodePort rule, having
+established that no manifest needs it, *was* narrowed.
+
+**Five of the nine drafts returned the file unchanged** — port 80, 443, and
+three egress rules — each with a cited reason why the flagged configuration
+is load-bearing. Before the prompt change in the same commit, the port-80
+draft instead gated the port behind a new input defaulting to closed and
+pushed the breakage into an assumption: scanner satisfied, deployment
+broken. The rule added to the redraft — a configuration the repository shows
+to be required is not gated off; say so and let a human decide — is what
+turned that around, and it is worth more than the fixes it prevented.
+
+*Also fixed for this run, both found by it:* a finding's `line_range` is
+relative to the snapshot, but later fixes are drafted against the chain's
+content, so an early fix that inserted lines sent every later finding's
+numbers ten lines high (the port-80 finding's "line 48" landed in the 6443
+rule and that is what got fixed). Drafts now carry the flagged lines as the
+scanner saw them and are told to match by content. And context-agent aligned
+answers to questions by exact text, so one reworded question was recorded as
+unanswered; when the count matches, position wins.
