@@ -755,11 +755,6 @@ textarea {
   color: var(--accent);
 }
 
-.assumption__asked {
-  margin-left: 0.5rem;
-  vertical-align: middle;
-}
-
 /* Diff viewer */
 
 .diff-viewer {

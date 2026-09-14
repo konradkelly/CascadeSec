@@ -208,8 +208,11 @@ All four decided at build time; the reasoning is in §12.
 - [x] Recomputed per draft; the answers are stored on the record for the
       reviewer, never reused as an input.
 - [x] Secrets: redacted at retrieval, `.tfvars` stays in.
-- [x] `unknown` is surfaced as "asked, unanswerable": it lands in
-      `assumptions` *and* in the `questions` record beside it.
+- [x] `unknown` is surfaced as "asked, unanswerable", from the `questions`
+      record, where it holds the fix for review exactly as an assumption
+      does. It is *not* copied into `assumptions` — revised 2026-09-14, see
+      §13 — so `assumptions` stays the model's own claims and a question is
+      never shown as a fact.
 
 ## 12. As built
 
@@ -237,10 +240,13 @@ number is a CloudWatch query.
 when another file in the repository would settle it. A draft with none costs
 one call, as before. A draft with some triggers one context-agent invocation
 and one redraft whose prompt carries the answers with their citations. A
-question answered `unknown` is put back into the redraft's `assumptions` by
-code, not by trusting the model to carry it, so the human-review gate is
-unchanged. If `CONTEXT_AGENT_FUNCTION_NAME` is unset the model is told not
-to ask and any questions it raises anyway become assumptions — the two
+question answered `unknown` holds the fix by code, not by trusting the model
+to carry it as an assumption, so the human-review gate is unchanged. *(It
+was originally copied into `assumptions`; that put question-shaped entries
+in a list of claims and duplicated any the model had already restated. Since
+2026-09-14 it holds from the `questions` record instead.)* If
+`CONTEXT_AGENT_FUNCTION_NAME` is unset the model is told not to ask, and any
+questions it raises anyway are recorded as `unknown` with the reason — the two
 functions deploy independently. A failed lookup raises, leaving the finding
 `mapped` for a retry; drafting on an answer that was never given is worse
 than not drafting.

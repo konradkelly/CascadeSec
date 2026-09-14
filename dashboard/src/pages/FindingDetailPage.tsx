@@ -208,15 +208,12 @@ export function FindingDetailPage() {
     (finding.status === 'fix-proposed' ||
       finding.status === 'needs-human-only' ||
       finding.status === 'resolved')
-  // An assumption that was asked and came back unknown is listed under both
-  // assumptions and questions (remediation-agent puts it back by code). The
-  // assumptions list marks those, so "assumed" and "asked, unanswered" do
-  // not read the same.
-  const askedUnanswered = new Set(
-    (finding.proposed_fix?.questions ?? [])
-      .filter((q) => q.answer === 'unknown')
-      .map((q) => q.question),
-  )
+  // A question the repository could not answer holds the fix just as an
+  // assumption does, but it is a question, not a claim, and lives in the
+  // questions record rather than being copied into assumptions. The alert
+  // shows both, each as what it is.
+  const assumptions = finding.proposed_fix?.assumptions ?? []
+  const unanswered = (finding.proposed_fix?.questions ?? []).filter((q) => q.answer === 'unknown')
 
   return (
     <div className="page finding-page">
@@ -394,37 +391,48 @@ export function FindingDetailPage() {
               </div>
             )}
 
-          {finding.proposed_fix.assumptions &&
-            finding.proposed_fix.assumptions.length > 0 && (
-              <div className="alert alert--warn">
-                <p>
-                  <strong>This fix rests on facts the agent could not check.</strong>{' '}
-                  {finding.proposed_fix.questions?.length ? (
-                    <>
-                      It saw this one file and what it asked the repository (below) — not the
-                      running system. An assumption marked <em>asked</em> was looked for and the
-                      repository does not say.
-                    </>
-                  ) : (
-                    <>
-                      It saw only this one file — not the rest of the repository, nor the running
-                      system.
-                    </>
-                  )}{' '}
-                  Verify each of these before approving:
-                </p>
+          {(assumptions.length > 0 || unanswered.length > 0) && (
+            <div className="alert alert--warn">
+              <p>
+                <strong>This fix rests on facts the agent could not check.</strong>{' '}
+                {finding.proposed_fix.questions?.length ? (
+                  <>
+                    It saw this one file and what it asked the repository (below) — not the
+                    running system.
+                  </>
+                ) : (
+                  <>
+                    It saw only this one file — not the rest of the repository, nor the running
+                    system.
+                  </>
+                )}{' '}
+                Verify each of these before approving:
+              </p>
+              {assumptions.length > 0 && (
                 <ul>
-                  {finding.proposed_fix.assumptions.map((a) => (
-                    <li key={a}>
-                      {a}
-                      {askedUnanswered.has(a) && (
-                        <span className="badge badge--muted assumption__asked">asked</span>
-                      )}
-                    </li>
+                  {assumptions.map((a) => (
+                    <li key={a}>{a}</li>
                   ))}
                 </ul>
-              </div>
-            )}
+              )}
+              {unanswered.length > 0 && (
+                <>
+                  <p>
+                    <strong>Asked, and the repository does not say</strong> — settle these from
+                    the running system:
+                  </p>
+                  <ul>
+                    {unanswered.map((q) => (
+                      <li key={q.question}>
+                        {q.question}
+                        {q.explanation && <span className="muted"> — {q.explanation}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
 
           {/* Shown when the scanner itself rejected the fix. A clean rescan
               held by a human gate is not that, and says so through the badge

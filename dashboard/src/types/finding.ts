@@ -41,9 +41,10 @@ export interface RepositoryCitation {
 
 /** A question the draft asked about the rest of the repository instead of
  *  guessing, and what context-agent found. 'yes' and 'no' always carry at
- *  least one citation. 'unknown' means the repository does not say; that
- *  question is also listed in `assumptions`, and this record is what tells
- *  the reviewer it was asked rather than assumed. */
+ *  least one citation. 'unknown' means the repository does not say (or the
+ *  question was never put to it -- the explanation says which); it holds
+ *  the fix for review the way an assumption does, from here, and is not
+ *  copied into `assumptions`, which are the model's own claims. */
 export interface RepositoryQuestion {
   question: string
   answer: 'yes' | 'no' | 'unknown'
@@ -77,9 +78,9 @@ export interface ProposedFix {
    *  always satisfies the scanner, so these are held for review however clean
    *  the rescan came back. */
   dropped_resources?: string[]
-  /** Facts the fix depends on that the agent could not verify -- from the
-   *  file it was shown, nor by asking the repository (see `questions`).
-   *  Non-empty forces human review. */
+  /** Facts the fix depends on that the agent could not verify: its own
+   *  claims, worded as claims. Non-empty forces human review, as does an
+   *  'unknown' in `questions`. */
   assumptions?: string[]
   /** What the draft asked about the repository and what it was told, with
    *  citations. Absent on records written before context-agent existed;

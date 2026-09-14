@@ -1546,31 +1546,34 @@ def test_a_question_is_answered_and_the_fix_is_redrafted_on_the_answer(
 @patch.object(handler, "lambda_client")
 @patch.object(handler, "s3")
 @patch.object(handler, "dynamodb")
-def test_an_unknown_answer_stays_an_assumption_and_holds_the_fix(
+def test_an_unknown_answer_holds_the_fix_without_becoming_an_assumption(
     mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, monkeypatch
 ):
     """'We looked and the repository does not say' is still something the
-    fix rests on. It reaches the reviewer as an assumption -- and the question
-    record beside it is what shows it was asked, not guessed."""
+    fix may rest on, so it holds the fix like an assumption does -- but from
+    the questions record, where it reads as what it is. It is not copied
+    into assumptions as a question-shaped fact, even when the redraft did
+    not restate it as a claim."""
     result, mock_table = _questions_run(
         mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, monkeypatch,
         first_reply=_fix_reply(questions=[QUESTION]),
         context_reply=[_answered("unknown", "Nothing in the snapshot references the bucket.", citations=[])],
-        second_reply=_fix_reply(),  # the redraft forgot to carry it as an assumption
+        second_reply=_fix_reply(),  # the redraft did not carry it as an assumption
     )
 
     assert result["needs_human_only_count"] == 1
     written = _written(mock_table, 0)
     assert written[":status"] == "needs-human-only"
-    assert written[":pf"]["assumptions"] == [QUESTION]
+    assert written[":pf"]["assumptions"] == []
     assert written[":pf"]["questions"][0]["answer"] == "unknown"
+    assert written[":pf"]["cleared"] is True  # the scanner was satisfied; the hold is the gate
 
 
 @patch.object(handler, "_get_anthropic_client")
 @patch.object(handler, "lambda_client")
 @patch.object(handler, "s3")
 @patch.object(handler, "dynamodb")
-def test_without_a_context_agent_questions_become_assumptions(
+def test_without_a_context_agent_questions_are_recorded_unanswered_and_hold(
     mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, monkeypatch
 ):
     """CONTEXT_AGENT_FUNCTION_NAME unset: one model call as before, no
@@ -1587,8 +1590,11 @@ def test_without_a_context_agent_questions_become_assumptions(
     # The only invoke was the self-check scan.
     assert mock_lambda_client.invoke.call_count == 1
     assert result["needs_human_only_count"] == 1
-    assert _written(mock_table, 0)[":pf"]["assumptions"] == [QUESTION]
-    assert _written(mock_table, 0)[":pf"]["questions"] == []
+    # Recorded as asked and unanswered, with the reason; not as an assumption.
+    assert _written(mock_table, 0)[":pf"]["assumptions"] == []
+    [q] = _written(mock_table, 0)[":pf"]["questions"]
+    assert q["question"] == QUESTION and q["answer"] == "unknown"
+    assert "No context-agent" in q["explanation"]
 
 
 @patch.object(handler, "_get_anthropic_client")

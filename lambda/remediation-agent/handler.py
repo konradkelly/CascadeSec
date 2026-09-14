@@ -21,7 +21,9 @@ have had to declare as assumptions -- and context-agent answers them from the
 snapshot with citations (docs/context-agent-spec.md). The fix is then
 redrafted knowing the answers. A draft with no questions costs exactly what
 it did before: one call. Whatever the repository could not settle comes back
-as `unknown` and stays an assumption, so the human-review gate is unchanged.
+as `unknown` and holds the fix for review just as an assumption does, so the
+human-review gate is unchanged -- but from the questions record, where it
+reads as what it is, not copied into assumptions as a question-shaped fact.
 
 Findings are remediated one file at a time, in a stable order, each fix
 drafted against the file as the previous accepted fix left it. Every file in
@@ -73,8 +75,9 @@ ANTHROPIC_SECRET_ARN = os.environ.get("ANTHROPIC_SECRET_ARN")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 TERRAFORM_SCANNER_FUNCTION_NAME = os.environ.get("TERRAFORM_SCANNER_FUNCTION_NAME")
 # Unset means questions are not asked: the model is told not to raise any,
-# and a draft that does anyway is used as-is with its questions folded into
-# assumptions. Lets the two components deploy independently.
+# and a draft that does anyway is used as-is, its questions recorded as
+# asked-and-unanswered (which holds the fix). Lets the two components deploy
+# independently.
 CONTEXT_AGENT_FUNCTION_NAME = os.environ.get("CONTEXT_AGENT_FUNCTION_NAME")
 
 # Time to leave on the clock before starting another finding: the
@@ -134,8 +137,8 @@ REMEDIATION_OUTPUT_SCHEMA = {
         "assumptions": {"type": "array", "items": {"type": "string"}},
         # Assumptions the repository itself could settle. Each is answered by
         # context-agent with a citation and the fix is redrafted; the ones
-        # the repository cannot settle come back as unknown and land in
-        # `assumptions` after all. See _remediate_finding.
+        # the repository cannot settle come back as unknown and hold the fix
+        # from the questions record. See _remediate_finding.
         "questions": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["corrected_file_content", "rationale", "assumptions", "questions"],
@@ -348,29 +351,24 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
     answers = []
     if questions and CONTEXT_AGENT_FUNCTION_NAME:
         # The draft above was made without knowing these. Ask, then draft
-        # again with the answers in front of the model. Any answer that is
-        # unknown is put back into the redraft's assumptions by the prompt.
+        # again with the answers in front of the model.
         answers = _ask_context_agent(pr_id, questions)
         remediation = _call_remediation_agent(finding, base_content, answers, flagged=flagged)
-        # A redraft may not ask again; whatever it still wants to know is an
-        # assumption now.
-        leftovers = remediation.get("questions") or []
+        # A redraft may not ask again: there is no second lookup, so whatever
+        # it still wants to know is recorded as asked and unanswered.
+        answers += [_not_looked_up(q, "Asked after the lookup; there is no second one.")
+                    for q in remediation.get("questions") or []]
     elif questions:
-        leftovers = questions
-    else:
-        leftovers = []
+        answers = [_not_looked_up(q, "No context-agent is deployed to answer it.") for q in questions]
     corrected_content = remediation["corrected_file_content"]
     rationale = remediation["rationale"]
+    # The model's own claims, and nothing else. A question the repository
+    # could not settle is not folded in here as a question-shaped "fact":
+    # it stays in the questions record as unknown, and holds the fix from
+    # there (below). One list, one meaning -- and no duplicate when the model
+    # has already restated the unanswered question as the claim it relies on.
     assumptions = list(remediation.get("assumptions") or [])
-    for q in leftovers:
-        if q not in assumptions:
-            assumptions.append(q)
-    for a in answers:
-        # "We looked and the repository does not say" is still something the
-        # fix rests on; it reaches the reviewer as an assumption, with the
-        # question record beside it showing that it was asked.
-        if a["answer"] == "unknown" and a["question"] not in assumptions:
-            assumptions.append(a["question"])
+    unanswered = [a["question"] for a in answers if a["answer"] == "unknown"]
 
     diff_text = _compute_diff(base_content, corrected_content, file_path)
 
@@ -429,10 +427,13 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
     # even when the scanner is satisfied. Scanned first regardless -- the
     # rescan result is still worth showing the reviewer.
     dropped_resources = _find_dropped_resources(base_content, corrected_content)
-    if dropped_resources or assumptions:
+    # An unanswered question is the third gate: "we looked and the
+    # repository does not say" is still something the fix may rest on, and
+    # the model is not trusted to decide that it does not.
+    if dropped_resources or assumptions or unanswered:
         logger.info(
-            "finding %s held for human review (dropped=%s, assumptions=%s)",
-            finding_id, dropped_resources, assumptions,
+            "finding %s held for human review (dropped=%s, assumptions=%s, unanswered=%s)",
+            finding_id, dropped_resources, assumptions, unanswered,
         )
         self_check_passed = False
 
@@ -625,6 +626,13 @@ def _ask_context_agent(pr_id, questions):
     if "FunctionError" in response:
         raise RuntimeError(f"context-agent invocation failed: {result}")
     return result["answers"]
+
+
+def _not_looked_up(question, why):
+    """A question that was asked but never put to the repository, in the
+    shape of an answer, so the questions record is the one place every
+    question the draft raised can be found."""
+    return {"question": question, "answer": "unknown", "explanation": why, "citations": []}
 
 
 def _format_answers(answers):
@@ -1006,9 +1014,11 @@ def _write_result(
                 # assume from self_check_passed=False.
                 "scan_errors": scan_errors or [],
                 # What the draft asked about the repository and what it was
-                # told, citations included. Distinct from assumptions: these
-                # were looked up. An unknown here is also in assumptions,
-                # and this record is what tells the reviewer it was asked.
+                # told, citations included. Distinct from assumptions, which
+                # are the model's own claims: these were put to the
+                # repository. An unknown here holds the fix on its own, the
+                # same way an assumption does; it is not copied into
+                # assumptions as a question-shaped fact.
                 "questions": questions or [],
             },
             ":status": "fix-proposed" if self_check_passed else "needs-human-only",
