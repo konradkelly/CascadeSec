@@ -26,6 +26,9 @@ export function humanGates(proposedFix?: ProposedFix | null): string[] {
   const gates: string[] = []
   if (proposedFix.dropped_resources?.length) gates.push('deletes a resource')
   if (proposedFix.assumptions?.length) gates.push('rests on assumptions')
+  if (proposedFix.questions?.some((q) => q.answer === 'unknown')) {
+    gates.push('asked the repository something it could not answer')
+  }
   return gates
 }
 
