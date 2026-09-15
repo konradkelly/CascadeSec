@@ -114,6 +114,14 @@ export function FindingsTable({
                 </td>
                 <td>
                   <SelfCheckBadge proposedFix={finding.proposed_fix} />
+                  {finding.no_longer_detected && (
+                    <span
+                      className="badge badge--muted"
+                      title={`Not reported by a scan since ${finding.no_longer_detected}`}
+                    >
+                      Gone from the code
+                    </span>
+                  )}
                 </td>
               </tr>
             ))}

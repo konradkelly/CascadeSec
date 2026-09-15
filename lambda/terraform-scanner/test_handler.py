@@ -323,7 +323,7 @@ def _emf_lines(captured_out):
 
 # ---------- handler() ----------
 
-@patch.object(handler, "_write_findings")
+@patch.object(handler, "_write_findings", return_value=(0, 0))
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -346,7 +346,7 @@ def test_handler_surfaces_parse_errors_without_discarding_real_findings(
     mock_write.assert_called_once()
 
 
-@patch.object(handler, "_write_findings")
+@patch.object(handler, "_write_findings", return_value=(0, 0))
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -374,7 +374,7 @@ def test_a_persisted_scan_emits_findings_per_scan_as_emf(
     assert rec["pr_id"] == "pr-1"
 
 
-@patch.object(handler, "_write_findings")
+@patch.object(handler, "_write_findings", return_value=(0, 0))
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -393,7 +393,7 @@ def test_a_self_check_scan_emits_no_metric(
     assert _emf_lines(capsys.readouterr().out) == []
 
 
-@patch.object(handler, "_write_findings")
+@patch.object(handler, "_write_findings", return_value=(0, 0))
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -411,7 +411,7 @@ def test_handler_reports_no_scan_errors_on_a_clean_scan(
     mock_write.assert_not_called()
 
 
-@patch.object(handler, "_write_findings")
+@patch.object(handler, "_write_findings", return_value=(0, 0))
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -454,3 +454,168 @@ def test_the_unparseable_fixture_is_actually_unparseable():
     content = (FIXTURES / "unparseable" / "main.tf").read_text()
 
     assert content.count("{") > content.count("}")
+
+
+# ---------- a re-scan does not reset what was decided ----------
+#
+# A plain put_item overwrote the whole record, so every re-scan sent each
+# finding that still fired back to status "raw" with no mapping and no fix.
+# The review of the previous push cannot be erased by the next one.
+
+def _finding(finding_id="f1", pr_id="pr-1", **over):
+    f = {
+        "pk": f"PR#{pr_id}", "sk": f"FINDING#{finding_id}", "finding_id": finding_id,
+        "iac_type": "terraform", "source": "trivy", "rule_id": "AWS-0107",
+        "file": "main.tf", "line_range": [10, 10], "severity": "HIGH",
+        "control_mappings": [], "status": "raw", "proposed_fix": None,
+        "created_at": "2026-09-01T00:00:00+00:00", "updated_at": "2026-09-01T00:00:00+00:00",
+    }
+    f.update(over)
+    return f
+
+
+def _write(mock_dynamodb, findings, known_ids=()):
+    """Run _write_findings against a table holding known_ids already."""
+    mock_table = MagicMock()
+    mock_table.query.return_value = {"Items": [{"finding_id": i} for i in known_ids]}
+    mock_dynamodb.Table.return_value = mock_table
+    preserved, stale = handler._write_findings("pr-1", findings)
+    return mock_table, preserved, stale
+
+
+def _update_for(mock_table, finding_id):
+    for call in mock_table.update_item.call_args_list:
+        if call.kwargs["Key"]["sk"] == f"FINDING#{finding_id}":
+            return call.kwargs
+    raise AssertionError(f"no update for {finding_id}")
+
+
+@patch.object(handler, "dynamodb")
+def test_a_finding_that_fires_again_keeps_what_was_decided(mock_dynamodb):
+    """The point of the change. status, control_mappings and proposed_fix are
+    written only if absent, so a reviewed finding survives the next scan;
+    severity and the timestamps are the scanner's and are refreshed."""
+    mock_table, preserved, stale = _write(mock_dynamodb, [_finding()], known_ids=["f1"])
+
+    assert (preserved, stale) == (1, 0)
+    expr = _update_for(mock_table, "f1")["UpdateExpression"]
+    for owned in ("#status = if_not_exists(#status, :raw)",
+                  "control_mappings = if_not_exists(control_mappings, :empty)",
+                  "proposed_fix = if_not_exists(proposed_fix, :null)",
+                  "created_at = if_not_exists(created_at, :now)"):
+        assert owned in expr
+    for scanner_owned in ("severity = :severity", "last_seen_at = :now", "updated_at = :now"):
+        assert scanner_owned in expr
+    # And nothing is put: a put would overwrite the whole item.
+    mock_table.put_item.assert_not_called()
+
+
+@patch.object(handler, "dynamodb")
+def test_a_finding_seen_for_the_first_time_is_not_counted_as_preserved(mock_dynamodb):
+    _, preserved, stale = _write(mock_dynamodb, [_finding()], known_ids=[])
+
+    assert (preserved, stale) == (0, 0)
+
+
+@patch.object(handler, "dynamodb")
+def test_a_finding_that_stops_firing_is_marked_not_deleted(mock_dynamodb):
+    """The fix may have landed, the file may be gone, or a tool upgrade may
+    have dropped the rule -- they read the same from here, and deleting would
+    take the audit trail with them (spec §8.1)."""
+    mock_table, preserved, stale = _write(mock_dynamodb, [_finding("f1")], known_ids=["f1", "gone"])
+
+    assert (preserved, stale) == (1, 1)
+    mock_table.delete_item.assert_not_called()
+    marked = _update_for(mock_table, "gone")
+    assert marked["UpdateExpression"] == "SET no_longer_detected = :now"
+    # Only the first scan that stops seeing it records when; a later scan
+    # must not move the date forward.
+    assert marked["ConditionExpression"] == "attribute_not_exists(no_longer_detected)"
+
+
+@patch.object(handler, "dynamodb")
+def test_a_finding_that_comes_back_loses_the_mark(mock_dynamodb):
+    mock_table, _, _ = _write(mock_dynamodb, [_finding()], known_ids=["f1"])
+
+    assert "REMOVE no_longer_detected" in _update_for(mock_table, "f1")["UpdateExpression"]
+
+
+@patch.object(handler, "dynamodb")
+def test_existing_ids_are_read_before_the_writes_and_projected(mock_dynamodb):
+    """Read first, so "already there" means before this scan -- and only the
+    id is fetched, since a PR's findings carry whole file diffs."""
+    mock_table, _, _ = _write(mock_dynamodb, [_finding()], known_ids=["f1"])
+
+    query = mock_table.query.call_args.kwargs
+    assert query["ProjectionExpression"] == "finding_id"
+    assert query["ExpressionAttributeValues"][":pk"] == "PR#pr-1"
+
+
+@patch.object(handler, "dynamodb")
+def test_the_known_id_query_pages_to_exhaustion(mock_dynamodb):
+    """A Query caps at 1MB of read items. Under-reading would treat a known
+    finding as new -- harmless -- but also miss that one stopped firing."""
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [
+        {"Items": [{"finding_id": "a"}], "LastEvaluatedKey": {"pk": "x", "sk": "y"}},
+        {"Items": [{"finding_id": "b"}]},
+    ]
+    mock_dynamodb.Table.return_value = mock_table
+
+    assert handler._existing_finding_ids(mock_table, "pr-1") == {"a", "b"}
+
+
+@patch.object(handler, "_write_findings", return_value=(3, 2))
+@patch.object(handler, "_run_checkov")
+@patch.object(handler, "_run_trivy")
+@patch.object(handler, "_download_snapshot")
+def test_the_handler_reports_what_the_rescan_preserved(
+    mock_download, mock_trivy, mock_checkov, mock_write
+):
+    mock_download.return_value = ["main.tf"]
+    mock_trivy.return_value = ([], [])
+    mock_checkov.return_value = _checkov_report()
+
+    result = handler.handler({"pr_id": "pr-1", "s3_prefix": "scans/pr-1/"}, None)
+
+    assert result["preserved_count"] == 3
+    assert result["no_longer_detected_count"] == 2
+
+
+@patch.object(handler, "_write_findings")
+@patch.object(handler, "_run_checkov")
+@patch.object(handler, "_run_trivy")
+@patch.object(handler, "_download_snapshot")
+def test_a_self_check_rescan_touches_nothing(
+    mock_download, mock_trivy, mock_checkov, mock_write
+):
+    """persist=false is remediation-agent proving a fix. It must not write --
+    least of all mark every finding on the PR as no longer detected, which a
+    rescan of one patched file would otherwise do."""
+    mock_download.return_value = ["main.tf"]
+    mock_trivy.return_value = ([], [])
+    mock_checkov.return_value = _checkov_report()
+
+    result = handler.handler(
+        {"pr_id": "pr-1", "s3_prefix": "fixes/pr-1/f1/", "persist": False}, None
+    )
+
+    mock_write.assert_not_called()
+    assert result["preserved_count"] == 0
+    assert result["no_longer_detected_count"] == 0
+
+
+@patch.object(handler, "dynamodb")
+def test_findings_that_collide_on_one_id_are_written_once(mock_dynamodb):
+    """A finding id hashes the rule and location but not the resource
+    address, so one rule on several resources sharing a line range collapses
+    to one id -- four times each for AWS-0031 and CKV_AWS_51 on PugetScope's
+    ecr module. The table holds one record per id, so the write and the
+    counts have to agree with that."""
+    twice = [_finding("f1"), _finding("f1"), _finding("f2")]
+
+    mock_table, preserved, stale = _write(mock_dynamodb, twice, known_ids=["f1", "f2"])
+
+    assert mock_table.update_item.call_count == 2
+    assert preserved == 2  # distinct findings, not the three reported
+    assert stale == 0

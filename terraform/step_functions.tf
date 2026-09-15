@@ -17,7 +17,8 @@
 #
 # Input:  { "pr_id": "...", "s3_prefix": "scans/<pr_id>/", "iac_type": "terraform",
 #           "remediate": true }          # remediate is optional; false stops after map
-# Output: the input plus "scan" (finding_count, scan_errors), "map"
+# Output: the input plus "scan" (finding_count, scan_errors, preserved_count,
+#         no_longer_detected_count), "map"
 #         (mapped_count, skipped_count, files) and "remediation" (one entry
 #         per file, remediation-agent's final counts for it).
 
@@ -63,8 +64,10 @@ locals {
         # already; carrying them in execution state would only push a large
         # PR toward the 256KB state limit.
         ResultSelector = {
-          "finding_count.$" = "$.Payload.finding_count"
-          "scan_errors.$"   = "$.Payload.scan_errors"
+          "finding_count.$"            = "$.Payload.finding_count"
+          "scan_errors.$"              = "$.Payload.scan_errors"
+          "preserved_count.$"          = "$.Payload.preserved_count"
+          "no_longer_detected_count.$" = "$.Payload.no_longer_detected_count"
         }
         ResultPath = "$.scan"
         Retry = [

@@ -253,6 +253,17 @@ export function FindingDetailPage() {
         </div>
       </div>
 
+      {finding.no_longer_detected && (
+        <div className="alert alert--info">
+          <p>
+            <strong>The latest scan no longer reports this finding.</strong> Either the fix
+            landed, the code went away, or the rule stopped matching — the scanner cannot tell
+            which, so the finding is kept with its history rather than deleted. First absent{' '}
+            {new Date(finding.no_longer_detected).toLocaleString()}.
+          </p>
+        </div>
+      )}
+
       <section className="panel">
         <h2>Control mapping</h2>
         <ControlMapping mappings={finding.control_mappings} />
