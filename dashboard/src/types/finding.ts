@@ -138,6 +138,15 @@ export interface Finding {
   proposed_fix?: ProposedFix | null
   created_at?: string
   updated_at?: string
+  /** When a scan of this PR first stopped reporting this finding: the fix
+   *  landed, the file went away, or a tool upgrade dropped the rule -- they
+   *  are indistinguishable from here, so it is marked rather than deleted
+   *  and the review trail stays. Cleared if it fires again. Absent means it
+   *  was in the most recent scan. */
+  no_longer_detected?: string
+  /** When a scan last reported this finding. Absent on records written
+   *  before the scanner started recording it. */
+  last_seen_at?: string
 }
 
 export interface ReviewEvent {

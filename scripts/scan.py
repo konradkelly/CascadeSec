@@ -28,16 +28,19 @@ Stages, each printed as the execution reaches it:
 
 --stages bypasses the state machine and invokes the Lambdas directly, one
 synchronous call per stage, the way this script worked before the pipeline
-existed. It is kept for one reason: a re-scan overwrites every finding on the
-PR back to "raw", reviewed or not, so redrafting the findings a reviewer's
-edit reopened (docs/reviewer-edit-spec.md) has to run remediation *alone*
-against the existing PR -- `--stages remediate`. That path is whole-PR and
-serial; if remediation-agent yields with findings left, it says so and the
-command is re-run.
+existed. It is kept for the case where only one stage should run: redrafting
+the findings a reviewer's edit reopened (docs/reviewer-edit-spec.md) is
+`--stages remediate` against the existing PR, with no re-upload and no
+re-scan. That path is whole-PR and serial; if remediation-agent yields with
+findings left, it says so and the command is re-run. (Until the scanner
+learned to preserve review state -- spec §8.4 item 3 -- this was not a
+convenience but the only safe way to redraft, because scanning again reset
+every finding on the PR.)
 
-Re-running with the same --pr-id overwrites findings that still fire (ids are
-content hashes) and leaves any that no longer fire as they were. For a clean
-slate use a new id. Needs AWS credentials for the dev account and `terraform`
+Re-running with the same --pr-id is safe: a finding that fires again keeps
+its status, control mapping, proposed fix and review trail, and one that has
+stopped firing is marked rather than removed. Only the scanner's own fields
+are refreshed. A new id gives a clean slate. Needs AWS credentials for the dev account and `terraform`
 on PATH (only to read names from `terraform output`; pass them explicitly to
 skip it).
 """
@@ -95,11 +98,26 @@ def collect_tf_files(root):
 
 
 def upload(s3, bucket, pr_id, root, files):
+    """Make the snapshot match the directory, and say what it removed.
+
+    Uploading without removing made the snapshot additive: a file deleted
+    locally stayed in S3 and kept being scanned, so its findings could never
+    stop firing and the scanner's no_longer_detected mark was unreachable by
+    the one route a user would try. Only scans/<pr_id>/ is touched -- a fix's
+    content lives under fixes/ and is the base later fixes are drafted on.
+    """
     prefix = f"scans/{pr_id}/"
-    for path in files:
-        key = prefix + path.relative_to(root).as_posix()
+    wanted = {prefix + path.relative_to(root).as_posix(): path for path in files}
+    existing = set()
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        existing.update(o["Key"] for o in page.get("Contents", []))
+
+    for key, path in wanted.items():
         s3.put_object(Bucket=bucket, Key=key, Body=path.read_bytes())
-    return prefix
+    removed = sorted(existing - set(wanted))
+    for chunk in (removed[i:i + 1000] for i in range(0, len(removed), 1000)):
+        s3.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": k} for k in chunk]})
+    return prefix, removed
 
 
 def confirm(prompt):
@@ -111,6 +129,12 @@ def confirm(prompt):
 
 def print_scan(body):
     print(f"           {body['finding_count']} finding(s)", end="")
+    # Only on a re-scan: how many were already on this PR and kept their
+    # review state, and how many the scan no longer reports.
+    if body.get("preserved_count"):
+        print(f", {body['preserved_count']} already reviewed or mapped (kept)", end="")
+    if body.get("no_longer_detected_count"):
+        print(f", {body['no_longer_detected_count']} no longer detected", end="")
     if body.get("scan_errors"):
         print(f", could not parse: {body['scan_errors']}", end="")
     print()
@@ -312,8 +336,12 @@ def main():
     s3 = boto3.client("s3")
     files = collect_tf_files(root)
     print(f"pr_id      {pr_id}")
-    prefix = upload(s3, bucket, pr_id, root, files)
-    print(f"upload     {len(files)} file(s) -> s3://{bucket}/{prefix}")
+    prefix, removed = upload(s3, bucket, pr_id, root, files)
+    print(f"upload     {len(files)} file(s) -> s3://{bucket}/{prefix}", end="")
+    if removed:
+        # Their findings will stop firing, and the scan line below says so.
+        print(f", {len(removed)} no longer in the directory (removed)", end="")
+    print()
 
     if stages:
         run_stages(args, stages, pr_id, prefix)

@@ -17,8 +17,16 @@ Each returned finding's "file" is relative to s3_prefix (e.g. "main.tf"), not
 a local /tmp path -- callers can reconstruct the object's S3 key as
 f"{s3_prefix}{finding['file']}".
 
-Returns {pr_id, finding_count, findings, scan_errors}. "scan_errors" lists
-files the scanner could not parse. It is not cosmetic: a file that fails to
+Re-scanning a PR does not reset it. A finding id is a hash of
+(source, rule, file, lines), so an id that fires again is the same finding
+at the same place: the write refreshes what the scanner owns and leaves
+status, control_mappings, proposed_fix and the review trail alone. An id
+that stops firing is marked `no_longer_detected` rather than deleted --
+nothing is silently decided (spec §8.1). See _write_findings.
+
+Returns {pr_id, finding_count, findings, scan_errors, preserved_count,
+no_longer_detected_count}. "scan_errors" lists files the scanner could not
+parse. It is not cosmetic: a file that fails to
 parse produces no findings, and remediation-agent's self-check reads "no
 findings" as proof that a fix cleared its finding. A caller that ignores
 scan_errors will read an unparseable file as a clean one. A tool that fails
@@ -148,8 +156,9 @@ def handler(event, context):
             # is fatal, for a baseline scan it is a warning.
             logger.warning("could not parse %d file(s): %s", len(scan_errors), scan_errors)
 
+        preserved = stale = 0
         if persist:
-            _write_findings(findings)
+            preserved, stale = _write_findings(pr_id, findings)
 
         # Spec §4.1's findings-per-scan metric. Self-checks are excluded by
         # the persist flag: a rescan of one patched file is not a scan of a
@@ -167,6 +176,13 @@ def handler(event, context):
             "finding_count": len(findings),
             "findings": findings,
             "scan_errors": scan_errors,
+            # How many distinct findings were already on this PR and kept
+            # their review state, and how many previously-seen findings this
+            # scan no longer reports. Both are 0 when persist is false, and
+            # preserved_count is over distinct ids -- finding_count is what
+            # the tools reported, which can name one id more than once.
+            "preserved_count": preserved,
+            "no_longer_detected_count": stale,
         }
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -387,8 +403,11 @@ def _normalize_checkov(report, pr_id):
 
 
 def _build_finding(pr_id, source, rule_id, file_path, line_range, severity, now):
-    # Deterministic id so re-scanning the same PR overwrites prior findings for
-    # the same (source, rule, location) instead of accumulating duplicates.
+    # Deterministic id, so re-scanning the same PR recognises a finding it has
+    # seen before rather than accumulating duplicates. Because the id hashes
+    # the location as well as the rule, an id that fires again is the same
+    # rule in the same place -- which is what lets _write_findings keep that
+    # finding's review state without comparing anything else.
     finding_key = f"{source}:{rule_id}:{file_path}:{line_range}"
     finding_id = hashlib.sha1(finding_key.encode()).hexdigest()[:16]
     return {
@@ -409,8 +428,127 @@ def _build_finding(pr_id, source, rule_id, file_path, line_range, severity, now)
     }
 
 
-def _write_findings(findings):
+def _write_findings(pr_id, findings):
+    """Persist this scan without discarding what humans and agents decided.
+
+    Returns (preserved, no_longer_detected).
+
+    A plain put_item overwrote the whole record, so every re-scan reset each
+    finding that still fired to status "raw" with no mapping and no proposed
+    fix -- reviewed, resolved or not. That cost the mapping bill again on
+    every run, forced a redraft-only run to bypass the pipeline
+    (scripts/scan.py --stages remediate), and would have made v3 impossible:
+    a GitHub App re-scans on every push, and a push cannot erase the review
+    of the push before it.
+
+    So each finding is an update, not a put, and the fields divide in two:
+
+      scanner-owned   severity, last_seen_at, updated_at -- always refreshed,
+                      because the tool is the authority on them
+      decided         status, control_mappings, proposed_fix, created_at --
+                      written only if absent (if_not_exists), because a human
+                      or an agent owns them
+
+    The other half of a re-scan is a finding that has stopped firing. It is
+    marked, not deleted: the fix may have landed, the file may have been
+    removed, or a tool upgrade may have dropped the rule, and those read the
+    same from here. Deleting would also take the audit trail with it, and
+    spec §8.1's rule is that nothing is silently decided. A finding that
+    fires again has the mark removed.
+
+    Findings are deduplicated by id first. A finding id hashes
+    (source, rule, file, lines) but not the resource address, so one rule
+    firing on several resources that share a reported line range collapses
+    to one id -- on PugetScope's ecr module, four repositories declared in
+    one block give `AWS-0031` four times at the same lines. The table can
+    hold one record per id either way (the previous batch_writer silently
+    took the last), so this only makes the write and the counts match what
+    is stored. Separating them means putting the resource address in the
+    hash, which renumbers every id in the table and needs a migration.
+    """
     table = dynamodb.Table(DYNAMODB_TABLE)
-    with table.batch_writer(overwrite_by_pkeys=["pk", "sk"]) as batch:
-        for finding in findings:
-            batch.put_item(Item=finding)
+    now = datetime.now(timezone.utc).isoformat()
+
+    known = _existing_finding_ids(table, pr_id)
+    unique = _deduplicate(findings)
+    preserved = len(known & set(unique))
+    for finding in unique.values():
+        table.update_item(
+            Key={"pk": finding["pk"], "sk": finding["sk"]},
+            UpdateExpression=(
+                "SET finding_id = :finding_id, iac_type = :iac_type, "
+                "#source = :source, rule_id = :rule_id, #file = :file, "
+                "line_range = :line_range, severity = :severity, "
+                "last_seen_at = :now, updated_at = :now, "
+                "created_at = if_not_exists(created_at, :now), "
+                "#status = if_not_exists(#status, :raw), "
+                "control_mappings = if_not_exists(control_mappings, :empty), "
+                "proposed_fix = if_not_exists(proposed_fix, :null) "
+                # It fired, so any previous mark is wrong now.
+                "REMOVE no_longer_detected"
+            ),
+            ExpressionAttributeNames={"#source": "source", "#file": "file", "#status": "status"},
+            ExpressionAttributeValues={
+                ":finding_id": finding["finding_id"],
+                ":iac_type": finding["iac_type"],
+                ":source": finding["source"],
+                ":rule_id": finding["rule_id"],
+                ":file": finding["file"],
+                ":line_range": finding["line_range"],
+                ":severity": finding["severity"],
+                ":now": now,
+                ":raw": "raw",
+                ":empty": [],
+                ":null": None,
+            },
+        )
+
+    stale = known - set(unique)
+    for finding_id in sorted(stale):
+        table.update_item(
+            Key={"pk": f"PR#{pr_id}", "sk": f"FINDING#{finding_id}"},
+            UpdateExpression="SET no_longer_detected = :now",
+            # Only the first scan that stops seeing it records when that
+            # happened; a later scan must not move the date forward.
+            ConditionExpression="attribute_not_exists(no_longer_detected)",
+            ExpressionAttributeValues={":now": now},
+        )
+    if stale:
+        logger.info("%d finding(s) no longer detected on %s: %s", len(stale), pr_id, sorted(stale))
+    return preserved, len(stale)
+
+
+def _deduplicate(findings):
+    """{finding_id: finding}, keeping the first of any colliding pair.
+
+    The returned finding list is NOT deduplicated: remediation-agent's
+    self-check counts occurrences of a (source, rule_id) pair to tell "one of
+    three instances was fixed" from "none were", and collapsing them would
+    break that comparison.
+    """
+    unique = {}
+    for finding in findings:
+        unique.setdefault(finding["finding_id"], finding)
+    return unique
+
+
+def _existing_finding_ids(table, pr_id):
+    """Every finding id already recorded against this PR.
+
+    Read before the writes, so "already there" means before this scan.
+    Projected to the id alone -- a PR's findings carry whole file diffs, and
+    none of that is needed to answer this question.
+    """
+    ids = set()
+    kwargs = {
+        "KeyConditionExpression": "pk = :pk AND begins_with(sk, :sk_prefix)",
+        "ExpressionAttributeValues": {":pk": f"PR#{pr_id}", ":sk_prefix": "FINDING#"},
+        "ProjectionExpression": "finding_id",
+    }
+    while True:
+        response = table.query(**kwargs)
+        ids.update(item["finding_id"] for item in response.get("Items", []) if "finding_id" in item)
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key:
+            return ids
+        kwargs["ExclusiveStartKey"] = last_key
