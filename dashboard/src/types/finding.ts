@@ -125,7 +125,14 @@ export interface Finding {
   pk: string
   sk: string
   finding_id: string
-  iac_type?: string
+  /** What to re-run to verify a fix: `terraform`, `opentofu`, ... Replaced
+   *  `iac_type` on 2026-09-16 (docs/multi-iac-spec.md §3.1); absent on
+   *  records not re-scanned since. */
+  target_type?: string
+  /** What kind of problem, and so which remediation path:
+   *  `misconfiguration`, `secret`, `vulnerability`. Does not derive from
+   *  `target_type` -- a secret in a .tfvars is `terraform` + `secret`. */
+  finding_class?: string
   source: string
   rule_id: string
   file: string

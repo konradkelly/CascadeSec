@@ -27,7 +27,7 @@ but are our own wording, not a copy of the official text.
 
 Only 9 CIS-AWS-1.4 controls, 4 OWASP-CloudNative items, and 2
 OWASP-CICD-Top10 items are included — enough to cover the finding types
-`terraform-scanner`'s test fixture actually produces (S3 public access,
+`iac-scanner`'s test fixture actually produces (S3 public access,
 encryption, logging; open security-group ingress), plus IaC-relevant items
 (secrets storage, module pinning) not yet exercised by the fixture. This is
 deliberately partial, not the full benchmarks: `rule_mappings.json` only maps
@@ -75,6 +75,6 @@ ground truth.
 
 ## Not the corpus: `eval/`
 
-`eval/` is the detection-recall harness for `terraform-scanner` (spec §7.1),
+`eval/` is the detection-recall harness for `iac-scanner` (spec §7.1),
 not control text. `upload.sh` does not sync it, and nothing at runtime reads
 it. See `eval/README.md`.

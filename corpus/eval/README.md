@@ -1,4 +1,4 @@
-# Detection-recall eval for `terraform-scanner`
+# Detection-recall eval for `iac-scanner`
 
 Spec §7.1, §8.2 item 1. Labelled Terraform cases with known injected
 vulnerabilities, one command that scans them against the **deployed** scanner
@@ -15,22 +15,22 @@ Needs `boto3`, AWS credentials for the dev account, and the `terraform` CLI on
 
 ## Result
 
-**97.3% — 71 of 73 expected findings, across 43 positive cases and 2 clean
-controls.** Run 2026-09-13 against checkov 3.3.16 and Trivy 0.74.0 plus the
-project's own check `IACP-0001`, as packaged in the scanner image. Both
-misses are labelled tool gaps (`CKV_AWS_60` on a bare `"*"` principal;
+**97.3% — 73 of 75 expected findings, across 45 positive cases and 2 clean
+controls.** Run 2026-09-16 against checkov 3.3.16 and Trivy 0.74.0 plus the
+project's own check `IACP-0001`, as packaged in the `iac-scanner` image.
+Both misses are labelled tool gaps (`CKV_AWS_60` on a bare `"*"` principal;
 `CKV_SECRET_6` on a password with a `!` in it), so this is the ceiling for
 these tools on these cases.
 
 | category | recall |
 |---|---|
 | network-exposure | 22/22 |
-| missing-encryption | 22/22 |
+| missing-encryption | 24/24 |
 | logging-monitoring | 10/10 |
 | unpinned-modules | 2/2 |
 | iam-over-permissioning | 8/9 |
 | hardcoded-secrets | 7/8 |
-| **by source** | checkov 43/45 · trivy 28/28 |
+| **by source** | checkov 43/45 · trivy 30/30 |
 
 Both clean controls raised nothing.
 
@@ -88,6 +88,24 @@ pin this down; checkov's `CKV_AWS_88` covers all three resource types, so
 the pipeline as a whole still catches it. The two modern-form cases are
 labelled for checkov only, with the gap recorded in their `note`.
 
+### OpenTofu is covered, and is Trivy-only
+
+`.tofu` and `.tofu.json` joined the snapshot on 2026-09-16
+(`docs/multi-iac-spec.md` §6 step 1). OpenTofu is Terraform's HCL, so the
+rules already written apply unchanged: `opentofu-unencrypted-bucket` is
+`s3-no-encryption` in a `.tofu` file and fires the same `AWS-0132`, and
+`opentofu-encryption-block` puts OpenTofu's own `terraform { encryption
+{ … } }` — which Terraform itself rejects — in front of the parser and still
+gets its queue finding, with no `scan_errors`. If a Trivy bump ever stopped
+tolerating that unknown block, the second case goes red.
+
+**Measured the same day, and worth knowing: checkov does not open `.tofu`.**
+Zero checkov findings on either case, where the identical `.tf`
+(`s3-no-encryption`) raises `CKV_AWS_145` and six more. So OpenTofu files
+have Trivy-only coverage — the mirror of Bicep being checkov-only — which
+also means a single-source self-check for them. Labelled in both cases
+rather than counted as a miss.
+
 ### Public ingress on non-admin ports: a gap the Trivy swap opened, and the check that closed it
 
 tfsec's `aws-ec2-no-public-ingress-sgr` fired on any ingress rule open to
@@ -98,7 +116,7 @@ motivated `context-agent` — port 80 and the NodePort range 30000-32767 open
 to the world — were simply not admitted after the swap.
 
 Closed the same day by the project's first custom check, **`IACP-0001`**
-(`lambda/terraform-scanner/checks/aws_ec2_no_public_ingress_any_port.rego`,
+(`lambda/iac-scanner/checks/aws_ec2_no_public_ingress_any_port.rego`,
 shipped in the scanner image and loaded with `--config-check` and
 `--check-namespaces user` — without the second flag a check from disk loads
 and silently never fires). It reports an ingress rule open to every IP on
@@ -167,6 +185,7 @@ source-level reason.
 | 2026-09-13 | *(added)* `sg-http-from-anywhere` | — | `CKV_AWS_260` | Trivy's `AWS-0107` is SSH/RDP-only where tfsec's fired on any port; see the gap above |
 | 2026-09-13 | *(added)* `sg-port-range-from-anywhere` | — | *(nothing)* | neither tool covers an arbitrary port range open to the world; labelled empty so the gap is recorded and counted nowhere |
 | 2026-09-13 | `sg-http-from-anywhere`, `sg-port-range-from-anywhere` | as above | + `trivy IACP-0001` | the project's own check landed the same day and fired on both; the empty label lasted hours |
+| 2026-09-16 | *(added)* `opentofu-unencrypted-bucket`, `opentofu-encryption-block` | — | `trivy` only | both labelled Trivy-only from the start on the theory that checkov globs `*.tf`; the run confirmed it — zero checkov findings on either |
 
 ## What recall means here, and what it does not
 
@@ -193,7 +212,7 @@ cases/<name>/expected.json    # {description, category, expected: [{source, rule
 
 Keep `main.tf` minimal and valid — `terraform fmt -check -recursive cases/`
 must pass, which also proves every case parses. Verify a checkov id against
-the checkov source at the version `lambda/terraform-scanner/Dockerfile` pins
+the checkov source at the version `lambda/iac-scanner/Dockerfile` pins
 before labelling it, and a Trivy id against the check metadata in
 trivy-checks at the commit the pinned Trivy embeds (the Dockerfile names the
 version; Trivy's `go.mod` names the commit).

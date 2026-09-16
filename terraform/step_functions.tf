@@ -15,8 +15,9 @@
 # Standard, not Express: an execution runs for as long as remediation takes,
 # which is minutes per file, and Express caps at five.
 #
-# Input:  { "pr_id": "...", "s3_prefix": "scans/<pr_id>/", "iac_type": "terraform",
-#           "remediate": true }          # remediate is optional; false stops after map
+# Input:  { "pr_id": "...", "s3_prefix": "scans/<pr_id>/", "remediate": true }
+#         remediate is optional; false stops after map. There is no type
+#         parameter: the scanner reports what it finds, per file.
 # Output: the input plus "scan" (finding_count, scan_errors, preserved_count,
 #         no_longer_detected_count), "map"
 #         (mapped_count, skipped_count, files) and "remediation" (one entry
@@ -52,11 +53,10 @@ locals {
         Type     = "Task"
         Resource = "arn:aws:states:::lambda:invoke"
         Parameters = {
-          FunctionName = aws_lambda_function.terraform_scanner.arn
+          FunctionName = aws_lambda_function.iac_scanner.arn
           Payload = {
             "pr_id.$"     = "$.pr_id"
             "s3_prefix.$" = "$.s3_prefix"
-            "iac_type.$"  = "$.iac_type"
             persist       = true
           }
         }
@@ -215,7 +215,7 @@ data "aws_iam_policy_document" "pipeline" {
     sid     = "InvokeStages"
     actions = ["lambda:InvokeFunction"]
     resources = [
-      aws_lambda_function.terraform_scanner.arn,
+      aws_lambda_function.iac_scanner.arn,
       aws_lambda_function.mapping_agent.arn,
       aws_lambda_function.remediation_agent.arn,
     ]

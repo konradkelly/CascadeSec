@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detection-recall harness for terraform-scanner (spec §7.1, §8.2 item 1).
+"""Detection-recall harness for iac-scanner (spec §7.1, §8.2 item 1).
 
 Uploads every case under cases/ to one S3 prefix, invokes the deployed
 scanner ONCE with persist=false, and compares what fired against each case's
@@ -48,8 +48,8 @@ import boto3
 HERE = pathlib.Path(__file__).resolve().parent
 CASES = HERE / "cases"
 
-# Must match terraform-scanner's SNAPSHOT_SUFFIXES.
-SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json")
+# Must match iac-scanner's SNAPSHOT_SUFFIXES.
+SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json")
 RULE_MAPPINGS = HERE.parent / "rule_mappings.json"
 
 
@@ -92,12 +92,12 @@ def upload(s3, bucket, prefix, cases):
 
 
 def scan(lam, function, prefix, run_id):
-    payload = {"pr_id": run_id, "s3_prefix": prefix, "iac_type": "terraform", "persist": False}
+    payload = {"pr_id": run_id, "s3_prefix": prefix, "persist": False}
     resp = lam.invoke(FunctionName=function, InvocationType="RequestResponse",
                       Payload=json.dumps(payload).encode("utf-8"))
     body = json.loads(resp["Payload"].read())
     if "FunctionError" in resp:
-        sys.exit(f"terraform-scanner failed: {body}")
+        sys.exit(f"iac-scanner failed: {body}")
     return body
 
 
@@ -246,7 +246,7 @@ def print_report(results, summary):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bucket", help="artifacts bucket (default: terraform output)")
-    ap.add_argument("--function", default="iacposture-dev-terraform-scanner")
+    ap.add_argument("--function", default="iacposture-dev-iac-scanner")
     ap.add_argument("--report", type=pathlib.Path, help="write full per-case results as JSON")
     ap.add_argument("--keep", action="store_true", help="leave the S3 prefix in place afterwards")
     args = ap.parse_args()
