@@ -26,7 +26,7 @@ jobs:
       matrix:
         # mapping-agent is absent because it has no tests yet, not because it
         # is excluded. Add it here when it gets some.
-        suite: [review-api, remediation-agent, terraform-scanner]
+        suite: [review-api, remediation-agent, terraform-scanner, context-agent]
     steps:
       - uses: actions/checkout@v4
 
