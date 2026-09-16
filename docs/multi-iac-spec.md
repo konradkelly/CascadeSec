@@ -241,14 +241,17 @@ accidental one goes away".** Candidates, none chosen:
 
 By cost, and each step earns the next:
 
-1. **OpenTofu.** Days. Add `.tofu`/`.tofu.json` to `SNAPSHOT_SUFFIXES` and
-   `CONTEXT_SUFFIXES`, a handful of eval cases including one using
-   OpenTofu-only syntax, and re-run the eval. The corpus already covers it —
-   the rules are the same rules. **No new gates needed: it is HCL, so the
-   suppression markers and the resource regex already apply.**
-2. **The multi-type scanner** (§3), with Terraform and OpenTofu as the only
-   enabled types. Structure first, on a language that cannot fail, so the
-   refactor is provable against an unchanged 71/73.
+1. **OpenTofu.** ✅ **Built 2026-09-16.** `.tofu`/`.tofu.json` in
+   `SNAPSHOT_SUFFIXES` and `CONTEXT_SUFFIXES`, two eval cases including one
+   using OpenTofu-only syntax. The corpus covered it already — same rules.
+   No new gates: it is HCL, so the suppression markers and the resource
+   regex apply as they are. **One thing the run taught us that the plan did
+   not predict: checkov does not open `.tofu`**, so OpenTofu is Trivy-only
+   coverage and its self-check has one source. Labelled in both cases.
+2. **The multi-type scanner** (§3). ✅ **Built 2026-09-16**, with Terraform
+   and OpenTofu as the only enabled types, and the rename and field split
+   in the same deploy. Eval held at 97.3% across the refactor (73/75, up
+   from 71/73 only because the two OpenTofu cases were added).
 3. **Kubernetes/Helm** — the planned v2. Trivy does it today, the YAML is
    already in the snapshot for context-agent. Gated on: CIS Kubernetes in the
    corpus, annotation-based suppression markers, a YAML structural guard,

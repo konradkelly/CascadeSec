@@ -1,0 +1,11 @@
+{
+  "description": "OpenTofu .tofu file: S3 bucket with no server-side encryption configuration",
+  "category": "missing-encryption",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "AWS-0132"
+    }
+  ],
+  "note": "The same case as s3-no-encryption, in a .tofu file rather than .tf, to pin that OpenTofu is covered by the rules already written. Trivy parses .tofu as terraform. Measured 2026-09-16: checkov raised nothing at all on the .tofu file, where the identical .tf case (s3-no-encryption) raises CKV_AWS_145 plus six others. So checkov's terraform runner does not open .tofu, and OpenTofu is Trivy-only coverage -- the mirror of Bicep being checkov-only, and it means a single-source self-check for these files."
+}

@@ -16,7 +16,7 @@ output "anthropic_api_key_secret_arn" {
 
 output "lambda_role_arns" {
   value = {
-    terraform_scanner = aws_iam_role.terraform_scanner.arn
+    iac_scanner       = aws_iam_role.iac_scanner.arn
     mapping_agent     = aws_iam_role.mapping_agent.arn
     remediation_agent = aws_iam_role.remediation_agent.arn
     context_agent     = aws_iam_role.context_agent.arn
@@ -24,12 +24,12 @@ output "lambda_role_arns" {
   }
 }
 
-output "terraform_scanner_function_name" {
-  value = aws_lambda_function.terraform_scanner.function_name
+output "iac_scanner_function_name" {
+  value = aws_lambda_function.iac_scanner.function_name
 }
 
-output "terraform_scanner_function_arn" {
-  value = aws_lambda_function.terraform_scanner.arn
+output "iac_scanner_function_arn" {
+  value = aws_lambda_function.iac_scanner.arn
 }
 
 output "mapping_agent_function_name" {

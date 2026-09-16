@@ -1,6 +1,6 @@
 # remediation-agent test fixtures
 
-For remediation-agent's self-check step: mock `terraform-scanner`'s response
+For remediation-agent's self-check step: mock `iac-scanner`'s response
 against these rather than invoking the real deployed Lambda.
 
 ## What's here
@@ -9,7 +9,7 @@ Two before/after `.tf` pairs, each demonstrating one fix clearing its
 target finding(s). `before/main.tf` has the issue; `after/main.tf` is a
 hand-written fix for it. Each side's `scan-response.json` is **not
 hand-authored** — it's the real, captured response from actually invoking
-the deployed `terraform-scanner` (`persist: false`) against that exact
+the deployed scanner (`persist: false`) against that exact
 file. Captured 2026-09-01 against tfsec + Checkov, and re-captured
 2026-09-12 when the scanner moved to Trivy 0.74.0 + Checkov 3.3.16 (so
 findings are `source: trivy` with Trivy's ids, `AWS-0132`). If the
@@ -44,7 +44,7 @@ only cover the success path.
 
 There is deliberately no `before/after` pair here for "the agent returned a
 file that doesn't parse". The broken file is
-[`lambda/terraform-scanner/fixtures/unparseable/main.tf`](../../terraform-scanner/fixtures/unparseable/main.tf),
+[`lambda/iac-scanner/fixtures/unparseable/main.tf`](../../iac-scanner/fixtures/unparseable/main.tf),
 and `test_handler.py` reads it from there rather than keeping a copy.
 
 Two reasons. It's the scanner's input as much as the agent's output, so a
@@ -58,14 +58,14 @@ construction.
 
 ## Using these
 
-Mock your Lambda's invocation of `terraform-scanner` so that, given the
+Mock your Lambda's invocation of `iac-scanner` so that, given the
 `before/` snapshot's S3 prefix, it returns `before/scan-response.json`, and
 given `after/`'s prefix, `after/scan-response.json`. Your self-check logic
 should then determine, from that pair alone: is the finding you're
 remediating gone in `after`, and is `after`'s finding set otherwise a
 subset of `before`'s? `finding_id` values are deterministic (a hash of
 `source`, `rule_id`, `file`, `line_range` — see
-[`lambda/terraform-scanner/handler.py`](../../terraform-scanner/handler.py)),
+[`lambda/iac-scanner/handler.py`](../../iac-scanner/handler.py)),
 so they'll reproduce exactly if you regenerate these yourself.
 
 `after/main.tf` is also usable as a concrete example of "what a correct

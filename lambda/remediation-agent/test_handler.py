@@ -1,8 +1,8 @@
 """Tests for remediation-agent's handler.
 
-No AWS/Anthropic calls are made -- DynamoDB, S3, the terraform-scanner
+No AWS/Anthropic calls are made -- DynamoDB, S3, the iac-scanner
 Lambda invocation, and the Anthropic client are all mocked. The self-check
-comparison tests use real captured terraform-scanner output from
+comparison tests use real captured iac-scanner output from
 fixtures/ (see fixtures/README.md) rather than hand-written scan responses,
 per that README's guidance to keep ground truth accurate.
 """
@@ -317,7 +317,7 @@ def _run_one_finding(mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
                      scan_response=None):
     """Drives handler() over a single mapped finding with a canned model reply.
 
-    scan_response overrides what the mocked terraform-scanner returns for the
+    scan_response overrides what the mocked iac-scanner returns for the
     self-check; it defaults to the fixture's captured clean-fix rescan."""
     before = _load_fixture("s3-bucket-encryption", "before")
     after = _load_fixture("s3-bucket-encryption", "after")
@@ -401,10 +401,10 @@ def test_no_assumptions_and_no_deletions_still_passes(
 # ---------- unparseable-fix gate ----------
 
 # The scanner's fixture, not a copy: this is the same artifact on both sides of
-# the boundary -- terraform-scanner's input and remediation-agent's output --
+# the boundary -- iac-scanner's input and remediation-agent's output --
 # and a duplicate would drift the moment either side edited its own.
 UNPARSEABLE_TF = (
-    Path(__file__).parents[1] / "terraform-scanner" / "fixtures" / "unparseable" / "main.tf"
+    Path(__file__).parents[1] / "iac-scanner" / "fixtures" / "unparseable" / "main.tf"
 ).read_text()
 
 
@@ -489,7 +489,7 @@ def test_a_scan_error_naming_another_path_still_blocks_the_verdict(
 def test_a_scanner_crash_leaves_the_finding_for_a_retry(
     mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
 ):
-    """terraform-scanner raising ScannerError surfaces as a FunctionError on
+    """iac-scanner raising ScannerError surfaces as a FunctionError on
     the invoke. Nothing was learned about this fix, so the finding must not be
     written at all -- it stays "mapped" and a re-run picks it up again."""
     before = _load_fixture("s3-bucket-encryption", "before")
@@ -766,7 +766,7 @@ def _mapped(rule_id, line_start, finding_id, file="main.tf", source="trivy"):
 
 
 def _scan_reply(scan_response):
-    """One mocked terraform-scanner invocation result."""
+    """One mocked iac-scanner invocation result."""
     body = json.dumps(scan_response).encode()
     return {"Payload": SimpleNamespace(read=lambda: body)}
 

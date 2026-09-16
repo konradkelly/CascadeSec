@@ -14,11 +14,11 @@ and fans remediation out one file at a time.
 
 Stages, each printed as the execution reaches it:
 
-  upload     every .tf, .tf.json, .tfvars, .tfvars.json, .yaml and .yml
-             under the directory -> s3://<bucket>/scans/<pr_id>/  (.tfvars is
+  upload     every .tf, .tf.json, .tfvars, .tfvars.json, .tofu, .tofu.json,
+             .yaml and .yml under the directory -> s3://<bucket>/scans/<pr_id>/  (.tfvars is
              where hardcoded secrets live and variables resolve; the YAML is
              for context-agent -- the scanner ignores it)
-  scan       terraform-scanner, persist=true -> raw findings in DynamoDB
+  scan       iac-scanner, persist=true -> raw findings in DynamoDB
   map        mapping-agent -> control citations, status "mapped"
   remediate  remediation-agent, once per file in parallel -> one model call
              per mapped finding (two, plus a context-agent lookup, when the
@@ -58,11 +58,12 @@ from botocore.config import Config
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
-# terraform-scanner's SNAPSHOT_SUFFIXES plus the manifests context-agent may
+# iac-scanner's SNAPSHOT_SUFFIXES plus the manifests context-agent may
 # read (its CONTEXT_SUFFIXES). Each function downloads only what it
 # recognises, so a .yaml here never reaches the scanner and anything outside
 # both sets is never uploaded.
-SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".yaml", ".yml")
+SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json",
+                     ".tofu", ".tofu.json", ".yaml", ".yml")
 
 # remediation-agent may run for its full 900s. The read timeout has to
 # outlast it, and retries have to be OFF: a retried RequestResponse invoke of
@@ -174,7 +175,7 @@ def run_pipeline(sfn, state_machine_arn, pr_id, prefix, remediate):
         stateMachineArn=state_machine_arn,
         name=execution_name(pr_id),
         input=json.dumps({
-            "pr_id": pr_id, "s3_prefix": prefix, "iac_type": "terraform",
+            "pr_id": pr_id, "s3_prefix": prefix,
             "remediate": remediate,
         }),
     )["executionArn"]
@@ -274,7 +275,7 @@ def invoke(lam, function, payload, label):
 
 
 def run_stages(args, stages, pr_id, prefix):
-    scanner = args.scanner or tf_output("terraform_scanner_function_name")
+    scanner = args.scanner or tf_output("iac_scanner_function_name")
     mapper = args.mapper or tf_output("mapping_agent_function_name")
     remediator = args.remediator or tf_output("remediation_agent_function_name")
     lam = boto3.client("lambda", config=LAMBDA_CONFIG)
@@ -282,7 +283,7 @@ def run_stages(args, stages, pr_id, prefix):
     body = None
     if "scan" in stages:
         body = invoke(lam, scanner, {
-            "pr_id": pr_id, "s3_prefix": prefix, "iac_type": "terraform", "persist": True,
+            "pr_id": pr_id, "s3_prefix": prefix, "persist": True,
         }, "scan")
         print_scan(body)
 
@@ -315,7 +316,7 @@ def main():
                          "than through the pipeline (see above for when that is wanted)")
     ap.add_argument("--bucket", help="artifacts bucket (default: terraform output)")
     ap.add_argument("--pipeline", help="pipeline state machine ARN (default: terraform output)")
-    ap.add_argument("--scanner", help="terraform-scanner function name (default: terraform output)")
+    ap.add_argument("--scanner", help="iac-scanner function name (default: terraform output)")
     ap.add_argument("--mapper", help="mapping-agent function name (default: terraform output)")
     ap.add_argument("--remediator", help="remediation-agent function name (default: terraform output)")
     args = ap.parse_args()

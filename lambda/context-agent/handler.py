@@ -57,7 +57,8 @@ METRIC_NAMESPACE = "IaCPosture"
 # What the agent may read. The scanner's snapshot suffixes plus the manifests
 # the motivating assumptions needed (cert-manager issuers, ingress). Anything
 # else under the prefix is ignored, whatever scripts/scan.py uploaded.
-CONTEXT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".yaml", ".yml")
+CONTEXT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json",
+                    ".tofu", ".tofu.json", ".yaml", ".yml")
 
 # The caps. A question like "what depends on this" can match half a
 # repository, and a truncated search that answers confidently is the
@@ -449,7 +450,7 @@ def _get_anthropic_client():
 
 def _emit_metrics(metrics, dimensions, **context):
     """One Embedded Metric Format line on stdout; same mechanism as
-    terraform-scanner (observability.tf)."""
+    iac-scanner (observability.tf)."""
     record = {
         "_aws": {
             "Timestamp": int(time.time() * 1000),

@@ -28,7 +28,7 @@ locals {
   # error is the same shape of failure -- a finding stuck in a state a re-run
   # has to notice -- and one for_each is no dearer than one alarm.
   alarmed_functions = {
-    terraform_scanner = aws_lambda_function.terraform_scanner.function_name
+    iac_scanner       = aws_lambda_function.iac_scanner.function_name
     mapping_agent     = aws_lambda_function.mapping_agent.function_name
     remediation_agent = aws_lambda_function.remediation_agent.function_name
     context_agent     = aws_lambda_function.context_agent.function_name
@@ -36,7 +36,7 @@ locals {
   }
 }
 
-# Any invocation error. For terraform-scanner this only became worth alarming
+# Any invocation error. For iac-scanner this only became worth alarming
 # on once ScannerError existed: before it, a crashed tfsec or checkov was
 # swallowed into an empty result and the function returned 200, so this metric
 # would never have moved.

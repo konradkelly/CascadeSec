@@ -6,7 +6,7 @@
 #
 # The older way to do this is a public bucket serving the S3 website endpoint.
 # Don't. It would trip aws-s3-block-public-acls / aws-s3-block-public-policy,
-# which this project's own corpus maps to CIS-AWS 2.1.5 -- terraform-scanner
+# which this project's own corpus maps to CIS-AWS 2.1.5 -- iac-scanner
 # would flag our own infrastructure. It also lets people bypass CloudFront by
 # hitting the bucket URL directly, and the S3 website endpoint can't do HTTPS.
 
