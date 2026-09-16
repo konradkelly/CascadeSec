@@ -101,6 +101,49 @@ keyed by function name -- so the blast radius is one deploy window and a lost
 log history. Do it as step 2 (§6), with the multi-type refactor, so there is
 one rename rather than two.
 
+### 3.1 `iac_type` becomes two fields
+
+**Decided 2026-09-16, with the function rename and for the same reason:** a
+name that is already a misnomer becomes permanent once a third value lands.
+npm is what forces it — `docs/dependency-safety-spec.md` §6 raised the same
+question from the other side.
+
+The field's job today is routing the self-check: *what do I re-run to verify
+a fix to this?* (spec §4.4 step 5). npm needs two independent answers, and
+Trivy's own output already carries both axes — we parse them already:
+
+```
+Class=config      Type=terraform     main.tf
+Class=lang-pkgs   Type=npm           package-lock.json
+```
+
+| Question | Field | Values |
+|---|---|---|
+| What do I re-run? | `target_type` | `terraform`, `opentofu`, `kubernetes`, `cloudformation`, `bicep`, `npm`, `dockerfile` |
+| What kind of problem, and so which remediation path? | `finding_class` | `misconfiguration`, `vulnerability`, `secret` |
+
+**They are not derivable from each other, and the live table already proves
+it.** A checkov secrets finding on a `.tfvars` file is `target_type:
+terraform` but is not a misconfiguration; today it rides as `iac_type:
+terraform` and nothing records what it is.
+
+`finding_class` is what branches the pipeline. A misconfiguration is drafted
+and rescanned; an npm vulnerability is a version bump *judged* by gates and
+never drafted at all (dependency-safety §1). Two paths through
+remediation-agent, with nothing in the record to switch on until this exists.
+
+*Rejected:* `source_type` (collides with `source`, which is `trivy`/
+`checkov`); `ecosystem` (right for npm, meaningless for Terraform);
+`language` (neither is one); `scan_type` (ambiguous between the two axes,
+which is the bug); one field plus a lookup table (`npm` ⇒ vulnerability) —
+workable, but that table *is* the missing field and it cannot express the
+secrets case.
+
+*Populated from what the tools already report:* Trivy's `Class` and `Type`
+directly, checkov's `check_type` for the rest. Done in the same deploy
+window as the function rename — one breaking change rather than two, and the
+dev table is disposable demo data, so this is the cheapest it will ever be.
+
 ## 4. What the self-check means per language
 
 This is the part that cannot be copied from Terraform, and it is where a
@@ -276,9 +319,10 @@ to find out whether the schema mapping holds.**
       removes the accidental one. Leaning: a severity floor, because it is
       the only candidate that changes nothing structural. Blocked on
       measuring how much the per-file supersede already collapses.
-- [ ] Whether `iac_type` is per finding (from the tool's reported `Type`) or
-      per file. Per finding is more honest and costs nothing; confirm both
-      tools report it reliably before relying on it.
+- [x] `iac_type` splits into `target_type` and `finding_class` (§3.1).
+      Decided 2026-09-16, done with the function rename. Both are per
+      finding, from the tool's reported `Type`/`Class`, which both tools
+      emit on every Result.
 - [ ] Whether Helm is scanned as charts (Trivy renders them) or only as
       rendered output the user supplies. Rendering runs templates — far
       milder than §7, but not nothing.
