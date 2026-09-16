@@ -114,9 +114,13 @@ unless a run explicitly opts out.
 - [ ] Whether the corpus gets a dependency-relevant framework, or advisories
       cite CVE/GHSA directly and skip `mapping-agent` — an advisory already
       carries its own citation, so mapping may be redundant here
-- [ ] Whether `iac_type` is the right discriminator for something that is not
-      infrastructure as code, or the field wants renaming before a third value
-      makes the misnomer permanent
+- [x] `iac_type` is not the right discriminator, and the field splits rather
+      than being renamed: `target_type` (`npm` here) and `finding_class`
+      (`vulnerability` here). Decided 2026-09-16 --
+      `docs/multi-iac-spec.md` §3.1 carries the argument. `finding_class` is
+      what lets this component take the verdict path of §2 while a
+      misconfiguration takes the drafting path, without either inferring it
+      from the other field.
 - [ ] npm only, or the same shape for pip and Go modules once proven
 - [ ] Whether a `needs-changes` fix's self-check is the test suite rather than a
       rescan, which would make it the strongest self-check in the project
