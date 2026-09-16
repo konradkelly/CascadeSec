@@ -89,10 +89,17 @@ So: **one scanner, `iac_type` selected per file rather than per function.**
 type; it uploads a snapshot. Pipeline, mapping-agent, remediation-agent,
 review-api and the dashboard need no structural change.
 
-*Naming.* `terraform-scanner` becomes a misnomer. Renaming a Lambda is a
-destroy-and-create, taking its log group and alarm names with it, and every
-`terraform_scanner_function_name` reference. Deferred, deliberately: the
-rename is cosmetic and the cost is a deploy window. Recorded in §9.
+*Naming.* **Decided 2026-09-16: `terraform-scanner` becomes `iac-scanner`.**
+It is a misnomer the moment a second language lands, and the alternative is a
+function called `terraform-scanner` scanning Bicep, which is the kind of
+thing nobody fixes later. The cost is a destroy-and-create: the function, its
+log group, its ECR repository name, the error and near-timeout alarms, and
+every `terraform_scanner_function_name` reference in Terraform, `scan.py`,
+`run_eval.py`, remediation-agent's env and the Step Functions definition. No
+data is at risk -- findings live in DynamoDB and snapshots in S3, neither
+keyed by function name -- so the blast radius is one deploy window and a lost
+log history. Do it as step 2 (§6), with the multi-type refactor, so there is
+one rename rather than two.
 
 ## 4. What the self-check means per language
 
@@ -141,12 +148,51 @@ every gap labelled*. A language with no labelled cases has no recall number,
 and shipping it asserts coverage nobody measured. Each language needs its own
 cases, and its own honest gaps.
 
-**Volume changes the cost model.** 239 Kubernetes findings against 68
-Terraform ones for the same repository. At roughly $0.11 a drafted fix
-(§ cost estimate, 2026-09-12), remediating one repo's manifests is ~$26
-before anything is reviewed. Per-finding economics that were fine at 20
-findings need re-examining at 240 — probably a severity floor, or
-mapping-first as the filter it already effectively is.
+**Volume changes the cost model, and not in the obvious way.** The 239
+Kubernetes findings on PugetScope are **19 distinct rules across 14 files** —
+each rule hits 11.8 files on average, and the top eight hit all fourteen.
+It is one workload's problems, repeated: every Deployment and CronJob is
+missing the same `securityContext`. Severity skews low — 136 LOW, 61 MEDIUM,
+42 HIGH — and ~18 findings land on each file.
+
+That shape interacts with the existing design in two opposite ways.
+
+**Within a file, the pipeline already collapses it.** Findings on one file
+are chained, and `cleared_by` marks every finding a previous fix took to zero
+as `superseded` without spending a model call (§8.3). One `securityContext`
+block plausibly clears eight of the nineteen rules at once, so a file's 18
+findings may cost four or five drafts rather than eighteen. *Unmeasured* —
+worth measuring on one file before assuming it, because the estimate below
+swings by 4x on it.
+
+**Across files, nothing collapses.** The chain is per file by construction
+(§8.2 item 5), so the same `securityContext` fix is drafted independently
+fourteen times, at full price, producing fourteen near-identical diffs and
+fourteen review decisions. That is the genuinely new problem: Terraform's
+findings cluster in a few files, Kubernetes' repeat across many. Estimating
+5 drafts a file, 14 files is ~70 model calls and ~$8 a run — tolerable — but
+it is *fourteen times the reviewer attention for one decision*, and reviewer
+attention is the scarce resource this project is built around.
+
+**The filter that exists today is accidental.** mapping-agent leaves an
+unmapped finding at `raw`, and remediation only touches `mapped`, so with no
+CIS Kubernetes content all 239 are filtered — by an absence. Grow the corpus
+as §5 requires and the filter silently disappears. **So the decision is not
+"how do we reduce volume" but "what is the deliberate filter, before the
+accidental one goes away".** Candidates, none chosen:
+
+- *A severity floor on remediation.* Scan and map everything — both cheap and
+  deterministic — but draft fixes only above a threshold. §8.1 is untouched:
+  the findings are still admitted and still shown, they just do not all cost
+  a model call. On this data a HIGH-only floor is 42 findings, not 239.
+- *Fix once, apply to many.* Draft one fix for a (rule, file-shape) class and
+  offer it across the files it fits. This is the right answer for the
+  cross-file repetition and the wrong shape for everything built so far: the
+  self-check is per file, and `applies_after` chains per file. It would need
+  its own spec.
+- *A per-PR cap.* Crude, predictable, and it makes the thing it drops
+  invisible, which is the failure mode §8.1 exists to prevent. Only with a
+  clear "N not drafted" surfaced to the reviewer.
 
 ## 6. Order, and why
 
@@ -223,10 +269,13 @@ to find out whether the schema mapping holds.**
 
 ## 9. Open decisions
 
-- [ ] Whether to rename `terraform-scanner` (§3), and whether it is worth a
-      destroy-and-create of the function, its log group and its alarms.
-- [ ] The volume question (§5): a severity floor before remediation, or
-      mapping coverage as the de facto filter it already is, or per-PR caps.
+- [x] Rename `terraform-scanner` → `iac-scanner` (§3). Decided 2026-09-16;
+      done with the multi-type refactor so the destroy-and-create happens
+      once.
+- [ ] The deliberate filter on remediation volume (§5), before corpus growth
+      removes the accidental one. Leaning: a severity floor, because it is
+      the only candidate that changes nothing structural. Blocked on
+      measuring how much the per-file supersede already collapses.
 - [ ] Whether `iac_type` is per finding (from the tool's reported `Type`) or
       per file. Per finding is more honest and costs nothing; confirm both
       tools report it reliably before relying on it.
