@@ -123,10 +123,12 @@ def test_trivy_parse_failure_is_reported_not_raised(mock_run):
 
 @patch.object(handler.subprocess, "run")
 def test_trivy_is_run_offline_with_the_projects_own_checks(mock_run):
-    """The flags that make a scan reproducible and complete: the embedded
-    bundle rather than a fetch, and the checks shipped in the image under
-    the namespace Trivy has to be told to evaluate -- without
-    --check-namespaces a check from disk loads and silently never fires."""
+    """The flags that make a scan reproducible, complete, and confined to
+    the languages we have gates for: the embedded bundle rather than a
+    fetch; the checks shipped in the image under the namespace Trivy has to
+    be told to evaluate, without which a check from disk loads and silently
+    never fires; and an explicit scanner list, because Trivy scans every
+    config type it knows by default."""
     mock_run.return_value = _proc(stdout=json.dumps(_trivy_report()), returncode=0)
 
     handler._run_trivy(WORK_DIR)
@@ -136,6 +138,10 @@ def test_trivy_is_run_offline_with_the_projects_own_checks(mock_run):
     assert "--skip-check-update" in args
     assert args[args.index("--config-check") + 1] == handler.TRIVY_CHECKS_DIR
     assert args[args.index("--check-namespaces") + 1] == "user"
+    # The second half of language admission -- the download filter is the
+    # first. Terraform covers OpenTofu; anything else needs its gates built
+    # before it appears here (docs/multi-iac-spec.md §4).
+    assert args[args.index("--misconfig-scanners") + 1] == "terraform"
 
 
 @patch.object(handler.subprocess, "run")
@@ -191,6 +197,20 @@ def test_the_suffix_decides_target_type_where_it_is_more_specific(path, expected
 def test_an_unrecognised_suffix_falls_back_to_what_the_tool_said():
     assert handler._target_type_for("deploy.yaml", "kubernetes") == "kubernetes"
     assert handler._target_type_for("deploy.yaml", None) == "unknown"
+
+
+def test_an_opentofu_finding_is_labelled_opentofu_though_trivy_says_terraform():
+    """Trivy has no OpenTofu scanner -- it parses .tofu with its terraform
+    one and reports Type=terraform. The record says opentofu anyway, because
+    a repository can hold both and a reviewer needs to know which file they
+    are looking at. This is the only place the two disagree."""
+    [finding] = handler._normalize_trivy([{
+        **TRIVY_SQS_MISCONF, "Target": "main.tofu", "Type": "terraform", "Class": "config",
+    }], "pr-1")
+
+    assert finding["target_type"] == "opentofu"
+    assert finding["finding_class"] == "misconfiguration"
+    assert finding["rule_id"] == "AWS-0096"  # the same rules, unchanged
 
 
 def test_a_checkov_secret_is_a_secret_found_in_terraform():
@@ -273,16 +293,23 @@ def test_a_scan_timeout_propagates(mock_run):
 # ---------- snapshot surface ----------
 
 @patch.object(handler, "s3")
-def test_snapshot_download_takes_every_terraform_file_type(mock_s3):
+def test_snapshot_download_takes_every_file_type_the_scanner_reads(mock_s3):
     """Until this, only .tf came down. A hardcoded password lives in the
-    .tfvars that was never uploaded, and a .tf.json module was invisible."""
+    .tfvars that was never uploaded, and a .tf.json module was invisible.
+    .tofu/.tofu.json joined on 2026-09-16 -- and this is the test that
+    notices if they leave: without them here, dropping either from
+    SNAPSHOT_SUFFIXES fails nothing, because every other scanner test hands
+    the file list in ready-made."""
     mock_s3.get_paginator.return_value.paginate.return_value = [{"Contents": [
         {"Key": "scans/pr-1/main.tf"},
         {"Key": "scans/pr-1/modules/vpc/main.tf.json"},
         {"Key": "scans/pr-1/terraform.tfvars"},
         {"Key": "scans/pr-1/prod.auto.tfvars.json"},
+        {"Key": "scans/pr-1/main.tofu"},
+        {"Key": "scans/pr-1/modules/vpc/net.tofu.json"},
         {"Key": "scans/pr-1/README.md"},
         {"Key": "scans/pr-1/.terraform.lock.hcl"},
+        {"Key": "scans/pr-1/k8s/deploy.yaml"},
     ]}]
 
     with patch.object(handler.os, "makedirs"):
@@ -290,7 +317,27 @@ def test_snapshot_download_takes_every_terraform_file_type(mock_s3):
 
     assert [pathlib_name(p) for p in downloaded] == [
         "main.tf", "main.tf.json", "terraform.tfvars", "prod.auto.tfvars.json",
+        "main.tofu", "net.tofu.json",
     ]
+
+
+@patch.object(handler, "s3")
+def test_the_snapshot_stops_at_the_languages_the_scanner_admits(mock_s3):
+    """scripts/scan.py uploads YAML for context-agent, which reads the same
+    prefix. The scanner must not pick it up: Trivy would scan it as
+    Kubernetes, and remediation's suppression and deletion gates are
+    HCL-shaped and would fail open on it (docs/multi-iac-spec.md §4). The
+    download filter is the first of the two guards; --misconfig-scanners is
+    the other."""
+    mock_s3.get_paginator.return_value.paginate.return_value = [{"Contents": [
+        {"Key": "scans/pr-1/k8s/deployment.yaml"},
+        {"Key": "scans/pr-1/k8s/service.yml"},
+        {"Key": "scans/pr-1/template.bicep"},
+        {"Key": "scans/pr-1/package-lock.json"},
+    ]}]
+
+    with patch.object(handler.os, "makedirs"):
+        assert handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x") == []
 
 
 def pathlib_name(path):
@@ -527,6 +574,37 @@ def test_handler_lets_a_scanner_failure_reach_the_caller(mock_download, mock_tri
 
     with pytest.raises(handler.ScannerError):
         handler.handler({"pr_id": "pr-1", "s3_prefix": "scans/pr-1/"}, None)
+
+
+@patch.object(handler, "_write_findings", return_value=(0, 0))
+@patch.object(handler, "_run_checkov")
+@patch.object(handler, "_run_trivy")
+@patch.object(handler, "_download_snapshot")
+def test_a_mixed_snapshot_labels_each_file_by_its_own_suffix(
+    mock_download, mock_trivy, mock_checkov, mock_write
+):
+    """OpenTofu and Terraform in one repository -- which OpenTofu itself
+    allows, preferring .tofu where both exist. target_type is per finding,
+    not per scan, so the two do not smear into one label."""
+    mock_download.return_value = ["main.tf", "main.tofu"]
+    mock_trivy.return_value = ([
+        {"ID": "AWS-0132", "Target": "main.tf", "Severity": "HIGH",
+         "Type": "terraform", "Class": "config",
+         "CauseMetadata": {"StartLine": 1, "EndLine": 3}},
+        {"ID": "AWS-0132", "Target": "main.tofu", "Severity": "HIGH",
+         "Type": "terraform", "Class": "config",
+         "CauseMetadata": {"StartLine": 1, "EndLine": 3}},
+    ], [])
+    mock_checkov.return_value = _checkov_report()
+
+    result = handler.handler({"pr_id": "pr-1", "s3_prefix": "scans/pr-1/"}, None)
+
+    by_file = {f["file"]: f for f in result["findings"]}
+    assert by_file["main.tf"]["target_type"] == "terraform"
+    assert by_file["main.tofu"]["target_type"] == "opentofu"
+    # Same rule, same class, different target: the id hashes the rule and
+    # location, so these stay two findings rather than colliding.
+    assert by_file["main.tf"]["finding_id"] != by_file["main.tofu"]["finding_id"]
 
 
 # ---------- the fixture ----------
