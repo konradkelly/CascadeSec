@@ -1,0 +1,11 @@
+{
+  "description": "OpenTofu state-encryption block, which Terraform itself rejects, alongside an unencrypted SQS queue",
+  "category": "missing-encryption",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "AWS-0096"
+    }
+  ],
+  "note": "The case that proves OpenTofu-only syntax does not cost us the file. Trivy's HCL parser tolerates the unknown `encryption` block rather than failing, so the queue finding still fires; if a Trivy bump changed that, this case goes red and the scan_errors count moves. Measured 2026-09-16: fired, with no scan_errors, so the unknown block cost nothing. checkov raised nothing here either, as above."
+}

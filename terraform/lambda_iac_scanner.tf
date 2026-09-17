@@ -1,6 +1,6 @@
-# terraform-scanner Lambda (spec §4.1, §4.4 step 3), packaged as a container
+# iac-scanner Lambda (spec §4.1, §4.4 step 3), packaged as a container
 # image since 2026-09-13. The image is built and pushed by
-# lambda/terraform-scanner/build-image.sh; this file resolves what was pushed.
+# lambda/iac-scanner/build-image.sh; this file resolves what was pushed.
 #
 # Why an image (spec §4.3, revised): the zip-plus-layers packaging reached
 # Lambda's 250MB unzipped ceiling when Trivy replaced tfsec -- 247MB of 250,
@@ -9,8 +9,8 @@
 # handler, role, Step Functions integration and alarms. The other functions
 # stay zip-packaged; they are small and the anthropic layer fits with room.
 
-resource "aws_ecr_repository" "terraform_scanner" {
-  name = local.lambda_function_names.terraform_scanner
+resource "aws_ecr_repository" "iac_scanner" {
+  name = local.lambda_function_names.iac_scanner
   # `latest` is re-pointed on every push; the digest below is what pins the
   # function, so mutability here costs nothing.
   image_tag_mutability = "MUTABLE"
@@ -24,8 +24,8 @@ resource "aws_ecr_repository" "terraform_scanner" {
 
 # The tag per build is the git commit, so old images are reproducible; keep
 # a few for rollback and let the rest expire.
-resource "aws_ecr_lifecycle_policy" "terraform_scanner" {
-  repository = aws_ecr_repository.terraform_scanner.name
+resource "aws_ecr_lifecycle_policy" "iac_scanner" {
+  repository = aws_ecr_repository.iac_scanner.name
   policy = jsonencode({
     rules = [{
       rulePriority = 1
@@ -44,24 +44,24 @@ resource "aws_ecr_lifecycle_policy" "terraform_scanner" {
 # rolls the function, and an apply with nothing pushed changes nothing. On a
 # first deploy this fails until build-image.sh has run -- see the order in
 # that script's header.
-data "aws_ecr_image" "terraform_scanner" {
-  repository_name = aws_ecr_repository.terraform_scanner.name
+data "aws_ecr_image" "iac_scanner" {
+  repository_name = aws_ecr_repository.iac_scanner.name
   image_tag       = "latest"
 }
 
-resource "aws_cloudwatch_log_group" "terraform_scanner" {
-  name              = "/aws/lambda/${local.lambda_function_names.terraform_scanner}"
+resource "aws_cloudwatch_log_group" "iac_scanner" {
+  name              = "/aws/lambda/${local.lambda_function_names.iac_scanner}"
   retention_in_days = 14
 }
 
-resource "aws_lambda_function" "terraform_scanner" {
-  function_name = local.lambda_function_names.terraform_scanner
-  role          = aws_iam_role.terraform_scanner.arn
+resource "aws_lambda_function" "iac_scanner" {
+  function_name = local.lambda_function_names.iac_scanner
+  role          = aws_iam_role.iac_scanner.arn
 
   package_type = "Image"
   # By digest, not tag: the function is pinned to exactly the image the plan
   # showed, and Lambda's own image cache keys on it.
-  image_uri = "${aws_ecr_repository.terraform_scanner.repository_url}@${data.aws_ecr_image.terraform_scanner.image_digest}"
+  image_uri = "${aws_ecr_repository.iac_scanner.repository_url}@${data.aws_ecr_image.iac_scanner.image_digest}"
 
   # Spec §4.1: one trace from the trigger through scan -> map -> remediate,
   # including remediation-agent's synchronous self-check invoke of the
@@ -88,11 +88,11 @@ resource "aws_lambda_function" "terraform_scanner" {
   }
 
   depends_on = [
-    aws_cloudwatch_log_group.terraform_scanner,
-    aws_iam_role_policy.terraform_scanner,
+    aws_cloudwatch_log_group.iac_scanner,
+    aws_iam_role_policy.iac_scanner,
   ]
 }
 
 output "scanner_ecr_repository_url" {
-  value = aws_ecr_repository.terraform_scanner.repository_url
+  value = aws_ecr_repository.iac_scanner.repository_url
 }

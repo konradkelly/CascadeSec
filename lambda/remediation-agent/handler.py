@@ -3,7 +3,7 @@
 For each finding with status "mapped" under a PR, drafts a corrected version
 of the offending file via the Anthropic API, computes a unified diff against
 the original in code, then proves the fix works by re-invoking
-terraform-scanner (persist=false) against the patched content and comparing
+iac-scanner (persist=false) against the patched content and comparing
 (source, rule_id) pairs before/after. self_check_passed is always computed
 here, never asserted by the LLM -- that's the project's core integrity
 guarantee.
@@ -73,7 +73,7 @@ DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ARTIFACTS_BUCKET = os.environ.get("ARTIFACTS_BUCKET")
 ANTHROPIC_SECRET_ARN = os.environ.get("ANTHROPIC_SECRET_ARN")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
-TERRAFORM_SCANNER_FUNCTION_NAME = os.environ.get("TERRAFORM_SCANNER_FUNCTION_NAME")
+IAC_SCANNER_FUNCTION_NAME = os.environ.get("IAC_SCANNER_FUNCTION_NAME")
 # Unset means questions are not asked: the model is told not to raise any,
 # and a draft that does anyway is used as-is, its questions recorded as
 # asked-and-unanswered (which holds the fix). Lets the two components deploy
@@ -880,21 +880,20 @@ def _invoke_self_check(pr_id, finding_id):
     payload = {
         "pr_id": f"{pr_id}-self-check-{finding_id}",
         "s3_prefix": _self_check_prefix(pr_id, finding_id),
-        "iac_type": "terraform",
         "persist": False,
     }
     response = lambda_client.invoke(
-        FunctionName=TERRAFORM_SCANNER_FUNCTION_NAME,
+        FunctionName=IAC_SCANNER_FUNCTION_NAME,
         InvocationType="RequestResponse",
         Payload=json.dumps(payload).encode("utf-8"),
     )
     result = json.loads(response["Payload"].read())
     if "FunctionError" in response:
-        # Covers terraform-scanner's ScannerError -- a tool that crashed or
+        # Covers iac-scanner's ScannerError -- a tool that crashed or
         # timed out rather than one that scanned clean. Raising leaves the
         # finding at status "mapped" so a re-run retries it, which is the right
         # outcome: nothing was learned about this fix either way.
-        raise RuntimeError(f"terraform-scanner self-check invocation failed: {result}")
+        raise RuntimeError(f"iac-scanner self-check invocation failed: {result}")
     # scan_errors is absent from responses produced before the scanner reported
     # it; treated as "none known" rather than defaulting the check to failed.
     return result["findings"], result.get("scan_errors") or []

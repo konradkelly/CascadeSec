@@ -1,4 +1,4 @@
-"""Tests for terraform-scanner's handler.
+"""Tests for iac-scanner's handler.
 
 No AWS calls are made -- S3, DynamoDB, and both scanner subprocesses are
 mocked. The focus is the distinction the scanner owes its callers: a scan
@@ -150,14 +150,98 @@ def test_trivy_report_without_results_is_a_clean_scan_not_an_error(mock_run):
 
 def test_trivy_findings_normalize_to_the_record_shape():
     """ID as Trivy emits it ("AWS-0096", the form rule_mappings.json is keyed
-    on), the per-Result Target as the file, and CauseMetadata's lines."""
-    [finding] = handler._normalize_trivy([{**TRIVY_SQS_MISCONF, "Target": "queues/main.tf"}], "pr-1")
+    on), the per-Result Target as the file, CauseMetadata's lines, and the
+    two axes off the Result's Type and Class."""
+    [finding] = handler._normalize_trivy(
+        [{**TRIVY_SQS_MISCONF, "Target": "queues/main.tf", "Type": "terraform", "Class": "config"}],
+        "pr-1",
+    )
 
     assert finding["source"] == "trivy"
     assert finding["rule_id"] == "AWS-0096"
     assert finding["file"] == "queues/main.tf"
     assert finding["line_range"] == [1, 3]
     assert finding["severity"] == "HIGH"
+    assert finding["target_type"] == "terraform"
+    assert finding["finding_class"] == "misconfiguration"
+    assert "iac_type" not in finding
+
+
+# ---------- the two axes ----------
+#
+# docs/multi-iac-spec.md §3.1. One field could not answer both "what do I
+# re-run to verify a fix" and "what kind of problem is this", and npm is
+# what forced the split.
+
+@pytest.mark.parametrize("path,expected", [
+    ("main.tf", "terraform"),
+    ("main.tf.json", "terraform"),
+    ("terraform.tfvars", "terraform"),
+    ("terraform.tfvars.json", "terraform"),
+    ("main.tofu", "opentofu"),
+    ("main.tofu.json", "opentofu"),
+])
+def test_the_suffix_decides_target_type_where_it_is_more_specific(path, expected):
+    """Trivy reports .tofu as "terraform" because it is the same HCL. A
+    reviewer still wants to know which file they are looking at, and a
+    repository can hold both."""
+    assert handler._target_type_for(path, "terraform") == expected
+
+
+def test_an_unrecognised_suffix_falls_back_to_what_the_tool_said():
+    assert handler._target_type_for("deploy.yaml", "kubernetes") == "kubernetes"
+    assert handler._target_type_for("deploy.yaml", None) == "unknown"
+
+
+def test_a_checkov_secret_is_a_secret_found_in_terraform():
+    """checkov's check_type names a discipline here, not a target, so the
+    target has to come from the file. This is the case that proves the two
+    axes do not derive from each other."""
+    report = {
+        "check_type": "secrets",
+        "results": {"failed_checks": [{
+            "check_id": "CKV_SECRET_6", "file_path": "/terraform.tfvars",
+            "file_line_range": [1, 1], "severity": "HIGH",
+        }]},
+    }
+
+    [finding] = handler._normalize_checkov(report, "pr-1")
+
+    assert finding["finding_class"] == "secret"
+    assert finding["target_type"] == "terraform"
+
+
+def test_a_checkov_misconfiguration_takes_its_target_from_check_type():
+    report = {
+        "check_type": "terraform",
+        "results": {"failed_checks": [{
+            "check_id": "CKV_AWS_24", "file_path": "/main.tf",
+            "file_line_range": [1, 9], "severity": "HIGH",
+        }]},
+    }
+
+    [finding] = handler._normalize_checkov(report, "pr-1")
+
+    assert finding["finding_class"] == "misconfiguration"
+    assert finding["target_type"] == "terraform"
+
+
+def test_check_type_is_read_per_report_not_flattened():
+    """checkov returns a list of reports when more than one framework had
+    something to say, and check_type lives on the report. Flattening the
+    failed_checks first -- which this did until 2026-09-16 -- loses which
+    framework each came from."""
+    report = [
+        {"check_type": "terraform", "results": {"failed_checks": [
+            {"check_id": "CKV_AWS_24", "file_path": "/main.tf", "file_line_range": [1, 9]}]}},
+        {"check_type": "secrets", "results": {"failed_checks": [
+            {"check_id": "CKV_SECRET_6", "file_path": "/terraform.tfvars", "file_line_range": [1, 1]}]}},
+    ]
+
+    by_rule = {f["rule_id"]: f for f in handler._normalize_checkov(report, "pr-1")}
+
+    assert by_rule["CKV_AWS_24"]["finding_class"] == "misconfiguration"
+    assert by_rule["CKV_SECRET_6"]["finding_class"] == "secret"
 
 
 @patch.object(handler.subprocess, "run")
@@ -465,7 +549,8 @@ def test_the_unparseable_fixture_is_actually_unparseable():
 def _finding(finding_id="f1", pr_id="pr-1", **over):
     f = {
         "pk": f"PR#{pr_id}", "sk": f"FINDING#{finding_id}", "finding_id": finding_id,
-        "iac_type": "terraform", "source": "trivy", "rule_id": "AWS-0107",
+        "target_type": "terraform", "finding_class": "misconfiguration",
+        "source": "trivy", "rule_id": "AWS-0107",
         "file": "main.tf", "line_range": [10, 10], "severity": "HIGH",
         "control_mappings": [], "status": "raw", "proposed_fix": None,
         "created_at": "2026-09-01T00:00:00+00:00", "updated_at": "2026-09-01T00:00:00+00:00",
@@ -499,6 +584,11 @@ def test_a_finding_that_fires_again_keeps_what_was_decided(mock_dynamodb):
 
     assert (preserved, stale) == (1, 0)
     expr = _update_for(mock_table, "f1")["UpdateExpression"]
+    # The two axes are the scanner's to refresh, and the field they replaced
+    # is dropped so a re-scanned record migrates itself.
+    assert "target_type = :target_type" in expr
+    assert "finding_class = :finding_class" in expr
+    assert "REMOVE no_longer_detected, iac_type" in expr
     for owned in ("#status = if_not_exists(#status, :raw)",
                   "control_mappings = if_not_exists(control_mappings, :empty)",
                   "proposed_fix = if_not_exists(proposed_fix, :null)",

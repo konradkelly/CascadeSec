@@ -33,7 +33,7 @@ Most "AI security scanner" tools ask an LLM to both find and judge issues in one
 scripts/scan.py  ──upload──▶  S3  ──▶  Step Functions (one execution per PR)
                                             │
                                             ▼
-                                 terraform-scanner (Lambda, container image)
+                                    iac-scanner (Lambda, container image)
                                     Trivy + Checkov + IACP-* checks → findings
                                             │
                                             ▼
@@ -42,7 +42,7 @@ scripts/scan.py  ──upload──▶  S3  ──▶  Step Functions (one execu
                                             │
                                             ▼
                           Map state: remediation-agent, one per file
-                        proposes diff → self-checks against terraform-scanner
+                        proposes diff → self-checks against iac-scanner
                            ↳ asks context-agent (Lambda) about the rest of
                              the repo; every answer cited to file:line
                                             │

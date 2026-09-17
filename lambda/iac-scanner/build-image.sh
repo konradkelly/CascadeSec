@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the terraform-scanner image and pushes it to the ECR repository
+# Builds the iac-scanner image and pushes it to the ECR repository
 # Terraform created, tagged `latest` and with the git commit. Terraform then
 # resolves `latest` to its digest (data.aws_ecr_image), so an apply after a
 # push rolls the function to the new image and an apply without one changes
@@ -7,8 +7,8 @@
 #
 # First deploy, in order: the repository has to exist before the push, and
 # the image before the function.
-#   terraform -chdir=terraform apply -target=aws_ecr_repository.terraform_scanner
-#   lambda/terraform-scanner/build-image.sh
+#   terraform -chdir=terraform apply -target=aws_ecr_repository.iac_scanner
+#   lambda/iac-scanner/build-image.sh
 #   terraform -chdir=terraform apply
 # Every deploy after that: build-image.sh, then apply.
 #

@@ -54,7 +54,7 @@ Matches the convention used by the other two Lambdas:
    is a path relative to the scan prefix (e.g. `"main.tf"`) — this was
    recently fixed on the deployed scanner (it used to be a broken
    ephemeral `/tmp` path), so make sure you're working from the latest
-   `terraform-scanner/handler.py`.
+   `iac-scanner/handler.py`.
 3. Call the Anthropic API for a **complete corrected version of the
    file** — not a hand-written diff. Use `output_config.format` with a
    JSON schema for `{corrected_file_content, rationale}`

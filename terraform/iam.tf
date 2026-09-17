@@ -4,7 +4,7 @@
 # CI integration) since v1 uses a manual trigger, not a webhook.
 locals {
   lambda_function_names = {
-    terraform_scanner = "${var.project}-${var.environment}-terraform-scanner"
+    iac_scanner       = "${var.project}-${var.environment}-iac-scanner"
     mapping_agent     = "${var.project}-${var.environment}-mapping-agent"
     remediation_agent = "${var.project}-${var.environment}-remediation-agent"
     context_agent     = "${var.project}-${var.environment}-context-agent"
@@ -23,19 +23,19 @@ data "aws_iam_policy_document" "lambda_assume_role" {
   }
 }
 
-# ---------- terraform-scanner ----------
+# ---------- iac-scanner ----------
 # Runs Trivy + Checkov against snapshots in S3, writes raw findings to DynamoDB.
 
-resource "aws_iam_role" "terraform_scanner" {
-  name               = "${local.lambda_function_names.terraform_scanner}-role"
+resource "aws_iam_role" "iac_scanner" {
+  name               = "${local.lambda_function_names.iac_scanner}-role"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
 }
 
-data "aws_iam_policy_document" "terraform_scanner" {
+data "aws_iam_policy_document" "iac_scanner" {
   statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.lambda_function_names.terraform_scanner}:*"]
+    resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.lambda_function_names.iac_scanner}:*"]
   }
 
   statement {
@@ -80,10 +80,10 @@ data "aws_iam_policy_document" "terraform_scanner" {
   }
 }
 
-resource "aws_iam_role_policy" "terraform_scanner" {
-  name   = "${local.lambda_function_names.terraform_scanner}-policy"
-  role   = aws_iam_role.terraform_scanner.id
-  policy = data.aws_iam_policy_document.terraform_scanner.json
+resource "aws_iam_role_policy" "iac_scanner" {
+  name   = "${local.lambda_function_names.iac_scanner}-policy"
+  role   = aws_iam_role.iac_scanner.id
+  policy = data.aws_iam_policy_document.iac_scanner.json
 }
 
 # ---------- mapping-agent ----------
@@ -135,7 +135,7 @@ resource "aws_iam_role_policy" "mapping_agent" {
 }
 
 # ---------- remediation-agent ----------
-# Drafts a diff via Anthropic API, then invokes terraform-scanner to self-check it.
+# Drafts a diff via Anthropic API, then invokes iac-scanner to self-check it.
 
 resource "aws_iam_role" "remediation_agent" {
   name               = "${local.lambda_function_names.remediation_agent}-role"
@@ -166,7 +166,7 @@ data "aws_iam_policy_document" "remediation_agent" {
     actions = ["lambda:InvokeFunction"]
     # The scanner for the self-check; context-agent for a draft's questions.
     resources = [
-      "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.lambda_function_names.terraform_scanner}",
+      "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.lambda_function_names.iac_scanner}",
       "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.lambda_function_names.context_agent}",
     ]
   }

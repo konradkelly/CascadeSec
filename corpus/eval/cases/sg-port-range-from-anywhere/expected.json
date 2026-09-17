@@ -7,5 +7,5 @@
       "rule_id": "IACP-0001"
     }
   ],
-  "note": "Neither tool covers an arbitrary port range open to the world: checkov's public-ingress rules are per well-known port, and Trivy's AWS-0107 is SSH/RDP only. IACP-0001 (lambda/terraform-scanner/checks/) is this project's check for it; tfsec used to catch it, and this was one of the two PugetScope findings that motivated context-agent. Was labelled empty from 2026-09-13 until the check landed the same day."
+  "note": "Neither tool covers an arbitrary port range open to the world: checkov's public-ingress rules are per well-known port, and Trivy's AWS-0107 is SSH/RDP only. IACP-0001 (lambda/iac-scanner/checks/) is this project's check for it; tfsec used to catch it, and this was one of the two PugetScope findings that motivated context-agent. Was labelled empty from 2026-09-13 until the check landed the same day."
 }

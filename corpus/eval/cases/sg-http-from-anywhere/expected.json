@@ -11,5 +11,5 @@
       "rule_id": "IACP-0001"
     }
   ],
-  "note": "Trivy's AWS-0107 (tfsec's aws-ec2-no-public-ingress-sgr, narrowed upstream) fires only on SSH and RDP ports; IACP-0001 is this project's own check for every other port, shipped in the scanner image (lambda/terraform-scanner/checks/). Both rules map to OWASP CNAS-6, default-deny network access controls -- the same control as the egress twin AWS-0104. That a public web tier looks exactly like this finding is the point: whether port 80 open to the world is intended is the reviewer's call, not the scanner's."
+  "note": "Trivy's AWS-0107 (tfsec's aws-ec2-no-public-ingress-sgr, narrowed upstream) fires only on SSH and RDP ports; IACP-0001 is this project's own check for every other port, shipped in the scanner image (lambda/iac-scanner/checks/). Both rules map to OWASP CNAS-6, default-deny network access controls -- the same control as the egress twin AWS-0104. That a public web tier looks exactly like this finding is the point: whether port 80 open to the world is intended is the reviewer's call, not the scanner's."
 }

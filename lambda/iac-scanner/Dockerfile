@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
-# terraform-scanner as a container image (spec §4.3, revised 2026-09-13).
+# iac-scanner as a container image (spec §4.3, revised 2026-09-13; named
+# terraform-scanner until the rename on 2026-09-16).
 #
 # The zip-plus-layers packaging hit Lambda's 250MB unzipped ceiling the day
 # Trivy replaced tfsec: Trivy's binary (~161MB) and checkov (~86MB) left 7MB

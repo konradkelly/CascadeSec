@@ -1,17 +1,38 @@
-"""terraform-scanner Lambda (spec §4.1, §4.4 step 3).
+"""iac-scanner Lambda (spec §4.1, §4.4 step 3; docs/multi-iac-spec.md).
 
-Runs Trivy + Checkov against a Terraform snapshot stored in S3 and writes
-raw findings (status: "raw") to the DynamoDB findings table. Also used by
+Runs Trivy + Checkov against an IaC snapshot stored in S3 and writes raw
+findings (status: "raw") to the DynamoDB findings table.
+
+Terraform and OpenTofu today. One scanner rather than one per language
+(multi-iac-spec §3): the split in §4.3 existed for Lambda's 250MB layer
+ceiling, which the container image removed, and this one image already holds
+every parser. Which languages are admitted is a deliberate list --
+TRIVY_MISCONFIG_SCANNERS and CHECKOV_FRAMEWORKS -- not whatever the tools
+would find, because a language whose suppression and deletion gates are not
+implemented must not reach remediation (multi-iac-spec §4). Also used by
 remediation-agent (spec §4.4 step 5) to self-check a proposed fix — that
 call path passes persist=false and just reads the returned findings.
+
+Every finding records two things about what it came from, because one field
+could not answer both (multi-iac-spec §3.1):
+
+  target_type    what to re-run to verify a fix -- terraform, opentofu
+  finding_class  what kind of problem, and so which remediation path --
+                 misconfiguration, secret, vulnerability
+
+They do not derive from each other: a checkov secrets hit on a .tfvars file
+is target_type "terraform" and finding_class "secret".
 
 Event shape:
 {
   "pr_id": "manual-1",
-  "s3_prefix": "scans/manual-1/",   # Terraform snapshot under ARTIFACTS_BUCKET (see SNAPSHOT_SUFFIXES)
-  "iac_type": "terraform",
+  "s3_prefix": "scans/manual-1/",   # snapshot under ARTIFACTS_BUCKET (see SNAPSHOT_SUFFIXES)
   "persist": true                    # optional, default true
 }
+
+There is no type parameter: the caller uploads a snapshot and the scanner
+reports what it finds, per file. It took one until 2026-09-16, when it could
+only be "terraform".
 
 Each returned finding's "file" is relative to s3_prefix (e.g. "main.tf"), not
 a local /tmp path -- callers can reconstruct the object's S3 key as
@@ -77,23 +98,79 @@ SCAN_TIMEOUT_SECONDS = 240
 
 # What a snapshot is. Both tools parse .tf.json natively, and both read
 # .tfvars: Trivy auto-loads terraform.tfvars and *.auto.tfvars to resolve
-# variables, and checkov's secrets framework scans them for literals. Until
+# variables, and checkov's secrets framework scans them for literals.
+#
+# .tofu/.tofu.json are OpenTofu's, and are the same HCL -- Trivy parses them
+# as terraform, including blocks Terraform itself rejects (measured, see
+# multi-iac-spec §2). A directory holding both main.tf and main.tofu is
+# scanned as both, which is not what OpenTofu does (it prefers .tofu and
+# ignores the .tf); rare enough to leave, noted so it is not a surprise. Until
 # 2026-09-12 this was .tf alone, which is exactly where a hardcoded password
 # is *not* -- it is in the .tfvars that was never uploaded. scripts/scan.py
 # and corpus/eval/run_eval.py upload the same set; keep the three aligned.
-SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json")
+SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json")
 
 # checkov frameworks. `secrets` is detect-secrets over every file in the
 # snapshot: AWS key patterns, `password = "..."` assignments, high-entropy
 # strings. It was off, so spec §2's "hardcoded secrets" goal measured 75% on
 # the eval corpus with the miss being a literal RDS master password.
 CHECKOV_FRAMEWORKS = "terraform,secrets"
+
+# Trivy scans every config type it knows unless told otherwise, so this is
+# the admission list and it is deliberately short. A language reaches
+# remediation only once its suppression markers and structural guard exist
+# (multi-iac-spec §4); until then, finding it would mean drafting fixes whose
+# gates fail open. OpenTofu needs no entry -- Trivy reports .tofu as
+# terraform.
+TRIVY_MISCONFIG_SCANNERS = "terraform"
 # The secrets runner only opens files on checkov's SUPPORTED_FILE_EXTENSIONS
 # (.tf, .yml, .yaml, .json, .template, .bicep, .hcl) unless told to scan
 # everything. .tfvars is not on that list, which is the one file a hardcoded
 # password is most likely to be in. "All files" is bounded by
 # _download_snapshot, so this is exactly SNAPSHOT_SUFFIXES and nothing else.
 CHECKOV_SECRETS_ALL_FILES = "--enable-secret-scan-all-files"
+
+# Trivy's Result.Class -> finding_class. Trivy already separates the two axes
+# this project needs, which is where §3.1's design came from: Class says what
+# kind of problem, Type says what was scanned.
+TRIVY_CLASS_TO_FINDING_CLASS = {
+    "config": "misconfiguration",
+    "lang-pkgs": "vulnerability",
+    "os-pkgs": "vulnerability",
+    "secret": "secret",
+}
+
+# checkov's check_type is not one axis. Most values name a target
+# ("terraform", "kubernetes"); these name a discipline instead, and the
+# target has to come from the file itself.
+CHECKOV_TYPE_TO_FINDING_CLASS = {
+    "secrets": "secret",
+    "sca_package": "vulnerability",
+    "sca_image": "vulnerability",
+}
+
+# Where a suffix is more specific than the tool is. Trivy reports .tofu as
+# "terraform" because it is the same HCL; a reviewer still wants to know
+# which file they are looking at, and a repository can hold both. Longest
+# suffix first, so .tofu.json does not match as .json would.
+SUFFIX_TARGET_TYPES = (
+    (".tofu.json", "opentofu"),
+    (".tofu", "opentofu"),
+    (".tf.json", "terraform"),
+    (".tfvars.json", "terraform"),
+    (".tfvars", "terraform"),
+    (".tf", "terraform"),
+)
+
+
+def _target_type_for(file_path, reported):
+    """The finding's target_type: the suffix where it is more specific than
+    the tool, otherwise what the tool said."""
+    for suffix, target in SUFFIX_TARGET_TYPES:
+        if file_path.endswith(suffix):
+            return target
+    return reported or "unknown"
+
 
 s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
@@ -128,11 +205,7 @@ class ScannerError(RuntimeError):
 def handler(event, context):
     pr_id = event["pr_id"]
     s3_prefix = event["s3_prefix"].rstrip("/") + "/"
-    iac_type = event.get("iac_type", "terraform")
     persist = event.get("persist", True)
-
-    if iac_type != "terraform":
-        raise ValueError(f"terraform-scanner cannot handle iac_type={iac_type!r}")
 
     work_dir = f"/tmp/scan-{uuid.uuid4().hex}"
     os.makedirs(work_dir, exist_ok=True)
@@ -233,9 +306,10 @@ def _download_snapshot(bucket, prefix, dest_dir):
 def _run_trivy(work_dir):
     """Returns (misconfigurations, parse_errors).
 
-    Each misconfiguration is Trivy's own object plus a "Target" key: the file
-    it was found in, relative to work_dir, which Trivy reports per Result
-    rather than per finding.
+    Each misconfiguration is Trivy's own object plus the three things Trivy
+    reports per Result rather than per finding: "Target" (the file, relative
+    to work_dir), "Type" (terraform, kubernetes, ...) and "Class" (config,
+    lang-pkgs, ...). The last two are the two axes a finding records.
     """
     proc = subprocess.run(
         [
@@ -245,6 +319,7 @@ def _run_trivy(work_dir):
             # egress from the function, and the rule set is pinned to the
             # layer's Trivy version, so a scan is reproducible.
             "--skip-check-update",
+            "--misconfig-scanners", TRIVY_MISCONFIG_SCANNERS,
             "--cache-dir", TRIVY_CACHE_DIR,
             "--config-check", TRIVY_CHECKS_DIR,
             "--check-namespaces", "user",
@@ -278,7 +353,12 @@ def _run_trivy(work_dir):
     # a Result for "." (the root module) that carries no misconfigurations.
     for result in report.get("Results") or []:
         for misconf in result.get("Misconfigurations") or []:
-            results.append({**misconf, "Target": result.get("Target", "")})
+            results.append({
+                **misconf,
+                "Target": result.get("Target", ""),
+                "Type": result.get("Type", ""),
+                "Class": result.get("Class", ""),
+            })
     return results, parse_errors
 
 
@@ -341,6 +421,8 @@ def _normalize_trivy(results, pr_id):
             file_path=r.get("Target", ""),
             line_range=[cause.get("StartLine"), cause.get("EndLine")],
             severity=(r.get("Severity") or "UNKNOWN").upper(),
+            target_type=_target_type_for(r.get("Target", ""), r.get("Type")),
+            finding_class=TRIVY_CLASS_TO_FINDING_CLASS.get(r.get("Class"), "misconfiguration"),
             now=now,
         ))
     return findings
@@ -384,25 +466,35 @@ def _checkov_reports(report):
 def _normalize_checkov(report, pr_id):
     now = datetime.now(timezone.utc).isoformat()
     findings = []
-    failed_checks = [
-        c for r in _checkov_reports(report)
-        for c in ((r.get("results") or {}).get("failed_checks") or [])
-    ]
-    for c in failed_checks:
-        findings.append(_build_finding(
-            pr_id=pr_id,
-            source="checkov",
-            rule_id=c.get("check_id", "unknown"),
+    # Per report rather than flattened, because check_type lives on the
+    # report and is half of what a finding records.
+    for r in _checkov_reports(report):
+        check_type = r.get("check_type") or ""
+        finding_class = CHECKOV_TYPE_TO_FINDING_CLASS.get(check_type, "misconfiguration")
+        for c in ((r.get("results") or {}).get("failed_checks") or []):
             # checkov reports paths root-relative to the scanned dir (/main.tf).
-            file_path=c.get("file_path", "").lstrip("/"),
-            line_range=list(c.get("file_line_range") or [None, None]),
-            severity=(c.get("severity") or "UNKNOWN").upper(),
-            now=now,
-        ))
+            file_path = c.get("file_path", "").lstrip("/")
+            findings.append(_build_finding(
+                pr_id=pr_id,
+                source="checkov",
+                rule_id=c.get("check_id", "unknown"),
+                file_path=file_path,
+                line_range=list(c.get("file_line_range") or [None, None]),
+                severity=(c.get("severity") or "UNKNOWN").upper(),
+                # "secrets" names a discipline, not a target, so the target
+                # comes from the file -- a password in a .tfvars is a secret
+                # found in Terraform.
+                target_type=_target_type_for(
+                    file_path, "" if check_type in CHECKOV_TYPE_TO_FINDING_CLASS else check_type
+                ),
+                finding_class=finding_class,
+                now=now,
+            ))
     return findings
 
 
-def _build_finding(pr_id, source, rule_id, file_path, line_range, severity, now):
+def _build_finding(pr_id, source, rule_id, file_path, line_range, severity,
+                   target_type, finding_class, now):
     # Deterministic id, so re-scanning the same PR recognises a finding it has
     # seen before rather than accumulating duplicates. Because the id hashes
     # the location as well as the rule, an id that fires again is the same
@@ -414,7 +506,8 @@ def _build_finding(pr_id, source, rule_id, file_path, line_range, severity, now)
         "pk": f"PR#{pr_id}",
         "sk": f"FINDING#{finding_id}",
         "finding_id": finding_id,
-        "iac_type": "terraform",
+        "target_type": target_type,
+        "finding_class": finding_class,
         "source": source,
         "rule_id": rule_id,
         "file": file_path,
@@ -476,7 +569,8 @@ def _write_findings(pr_id, findings):
         table.update_item(
             Key={"pk": finding["pk"], "sk": finding["sk"]},
             UpdateExpression=(
-                "SET finding_id = :finding_id, iac_type = :iac_type, "
+                "SET finding_id = :finding_id, target_type = :target_type, "
+                "finding_class = :finding_class, "
                 "#source = :source, rule_id = :rule_id, #file = :file, "
                 "line_range = :line_range, severity = :severity, "
                 "last_seen_at = :now, updated_at = :now, "
@@ -484,13 +578,17 @@ def _write_findings(pr_id, findings):
                 "#status = if_not_exists(#status, :raw), "
                 "control_mappings = if_not_exists(control_mappings, :empty), "
                 "proposed_fix = if_not_exists(proposed_fix, :null) "
-                # It fired, so any previous mark is wrong now.
-                "REMOVE no_longer_detected"
+                # It fired, so any previous mark is wrong now. iac_type is
+                # the field target_type and finding_class replaced on
+                # 2026-09-16; dropping it here is what migrates a record the
+                # first time it is re-scanned.
+                "REMOVE no_longer_detected, iac_type"
             ),
             ExpressionAttributeNames={"#source": "source", "#file": "file", "#status": "status"},
             ExpressionAttributeValues={
                 ":finding_id": finding["finding_id"],
-                ":iac_type": finding["iac_type"],
+                ":target_type": finding["target_type"],
+                ":finding_class": finding["finding_class"],
                 ":source": finding["source"],
                 ":rule_id": finding["rule_id"],
                 ":file": finding["file"],
