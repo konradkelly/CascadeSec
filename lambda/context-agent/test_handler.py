@@ -384,3 +384,128 @@ def test_a_count_mismatch_falls_back_to_exact_text():
 
     assert out[0]["answer"] == "unknown" and "no answer" in out[0]["explanation"]
     assert out[1]["answer"] == "no"
+
+
+# ---------- the snapshot download ----------
+#
+# Untested until 2026-09-17, which left the file cap -- the one guard against
+# a runaway upload -- never once executed.
+
+def _paginated(*pages):
+    """S3's list_objects_v2 paginator, as boto3 hands it over."""
+    paginator = MagicMock()
+    paginator.paginate.return_value = [{"Contents": [{"Key": k} for k in page]} for page in pages]
+    return paginator
+
+
+@patch.object(handler, "s3")
+def test_the_snapshot_takes_the_suffixes_the_agent_can_read(mock_s3):
+    """Wider than the scanner's: context-agent answers questions about the
+    rest of the repository, and the manifests that motivated it -- a
+    cert-manager ClusterIssuer, an ingress -- are YAML the scanner
+    deliberately never opens."""
+    mock_s3.get_paginator.return_value = _paginated([
+        "scans/pr-1/main.tf",
+        "scans/pr-1/main.tofu",
+        "scans/pr-1/terraform.tfvars",
+        "scans/pr-1/modules/vpc/net.tf.json",
+        "scans/pr-1/k8s/issuer.yaml",
+        "scans/pr-1/k8s/ingress.yml",
+        "scans/pr-1/README.md",
+        "scans/pr-1/package-lock.json",
+    ])
+
+    with patch.object(handler.os, "makedirs"):
+        files = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
+
+    assert files == [
+        "main.tf", "main.tofu", "terraform.tfvars", "modules/vpc/net.tf.json",
+        "k8s/issuer.yaml", "k8s/ingress.yml",
+    ]
+    # Paths are relative to the prefix, because that is how the model is
+    # shown them and how it cites them back.
+    assert all(not f.startswith("scans/") for f in files)
+
+
+@patch.object(handler, "s3")
+def test_the_download_pages_through_the_whole_prefix(mock_s3):
+    mock_s3.get_paginator.return_value = _paginated(
+        ["scans/pr-1/a.tf"], ["scans/pr-1/b.tf"],
+    )
+
+    with patch.object(handler.os, "makedirs"):
+        assert handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x") == ["a.tf", "b.tf"]
+
+
+@patch.object(handler, "s3")
+def test_the_file_cap_stops_a_runaway_snapshot(mock_s3, monkeypatch):
+    """A repository's whole YAML tree can be enormous -- PugetScope's first
+    upload carried 260 files, 203 of them vendored. The cap bounds what one
+    invocation will fetch and list to the model; it had never run."""
+    monkeypatch.setattr(handler, "MAX_SNAPSHOT_FILES", 3)
+    mock_s3.get_paginator.return_value = _paginated(
+        [f"scans/pr-1/f{i}.tf" for i in range(10)],
+    )
+
+    with patch.object(handler.os, "makedirs"):
+        files = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
+
+    assert files == ["f0.tf", "f1.tf", "f2.tf"]
+    # It stops fetching, not just listing: the point is the download.
+    assert mock_s3.download_file.call_count == 3
+
+
+@patch.object(handler, "s3")
+def test_a_prefix_with_nothing_readable_yields_no_files(mock_s3):
+    """Not an error here. handler() asks the model questions about an empty
+    snapshot and it answers `unknown`, which is the correct answer when the
+    repository does not say -- including when there is no repository."""
+    mock_s3.get_paginator.return_value = _paginated(["scans/pr-1/README.md"])
+
+    with patch.object(handler.os, "makedirs"):
+        assert handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x") == []
+
+
+# ---------- the loop's remaining edges ----------
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "_download_snapshot")
+@patch.object(handler, "shutil")
+def test_a_final_response_with_no_text_block_raises(
+    mock_shutil, mock_download, mock_get_client, snapshot
+):
+    """Nothing was answered, so there is nothing to return. Raising leaves
+    remediation-agent's finding at `mapped` for a retry, which is right --
+    the alternative is inventing `unknown` for every question and recording
+    that the repository was consulted when it was not."""
+    mock_download.return_value = snapshot.files
+    with patch.object(handler, "Snapshot", return_value=snapshot):
+        mock_get_client.return_value.messages.create.return_value = SimpleNamespace(
+            stop_reason="end_turn", content=[],
+        )
+
+        with pytest.raises(RuntimeError, match="no text block"):
+            handler.handler({"pr_id": "p", "s3_prefix": "scans/p/", "questions": ["Q?"]}, None)
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "_download_snapshot")
+@patch.object(handler, "shutil")
+def test_a_tool_the_agent_does_not_have_is_reported_back_not_crashed_on(
+    mock_shutil, mock_download, mock_get_client, snapshot
+):
+    """The model can only call what it was given, so this is unreachable
+    today. It is one line and it keeps a future third tool -- added to
+    TOOLS but not to the dispatch -- from taking the invocation down."""
+    mock_download.return_value = snapshot.files
+    with patch.object(handler, "Snapshot", return_value=snapshot):
+        create = mock_get_client.return_value.messages.create
+        create.side_effect = [
+            _response("tool_use", [_tool_use("grep", {"pattern": "x"})]),
+            _final([{"question": "Q?", "answer": "unknown", "explanation": "n/a", "citations": []}]),
+        ]
+
+        handler.handler({"pr_id": "p", "s3_prefix": "scans/p/", "questions": ["Q?"]}, None)
+
+    tool_result = create.call_args_list[1].kwargs["messages"][2]["content"][0]
+    assert tool_result["content"] == "unknown tool grep"

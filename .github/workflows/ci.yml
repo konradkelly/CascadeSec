@@ -52,6 +52,27 @@ jobs:
           AWS_DEFAULT_REGION: us-west-2
         run: python -m pytest -q
 
+  corpus:
+    name: corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - run: python -m pip install -r requirements-dev.txt
+
+      - name: pytest
+        # Data tests, not code: they read corpus/ and assert what the
+        # pipeline assumes about it. Its own job rather than a suite in the
+        # matrix above, because it imports no handler and needs no AWS
+        # region -- and because a broken mapping is not one Lambda's fault.
+        run: python -m pytest corpus/ -q
+
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest
