@@ -81,9 +81,10 @@ def test_no_two_framework_files_claim_the_same_framework_name():
 
 def test_every_mapping_reference_resolves_to_a_real_control():
     """The test this file exists for. An unresolvable reference is not a
-    bad mapping, it is a crash: mapping-agent indexes the framework and
-    then `next()`s the control, both unguarded, so the whole run dies on
-    the first finding that reaches it."""
+    bad mapping, it is a fault: mapping-agent indexes the framework and
+    then `next()`s the control, both unguarded, and the per-finding
+    isolation turns that into an error_count rather than a crash -- which
+    means it would recur silently on every scan that hit the rule."""
     index = _framework_index()
     broken = []
     for key, refs in _mappings().items():

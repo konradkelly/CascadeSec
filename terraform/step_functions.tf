@@ -20,7 +20,7 @@
 #         parameter: the scanner reports what it finds, per file.
 # Output: the input plus "scan" (finding_count, scan_errors, preserved_count,
 #         no_longer_detected_count), "map"
-#         (mapped_count, skipped_count, files) and "remediation" (one entry
+#         (mapped_count, skipped_count, error_count, files) and "remediation" (one entry
 #         per file, remediation-agent's final counts for it).
 
 locals {
@@ -97,6 +97,7 @@ locals {
         ResultSelector = {
           "mapped_count.$"  = "$.Payload.mapped_count"
           "skipped_count.$" = "$.Payload.skipped_count"
+          "error_count.$"   = "$.Payload.error_count"
           "files.$"         = "$.Payload.files"
         }
         ResultPath = "$.map"
