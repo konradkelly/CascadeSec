@@ -4,7 +4,19 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>IaCPosture — Review Dashboard</title>
+    <title>CascadeSec — Review Dashboard</title>
+    <script>
+      // Resolve the theme before first paint so a light-mode user doesn't see a
+      // dark flash while React loads. Must agree with ThemeProvider.
+      (function () {
+        var theme = null
+        try { theme = localStorage.getItem('cascadesec.theme') } catch (e) {}
+        if (theme !== 'dark' && theme !== 'light') {
+          theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+        }
+        document.documentElement.dataset.theme = theme
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>
