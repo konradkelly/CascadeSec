@@ -1,5 +1,5 @@
 {
-  "_comment": "Maps a scanner finding's (source, rule_id) to candidate controls in frameworks/*.json. mapping-agent uses this as a deterministic first pass -- it looks up candidates here, pulls their text from S3, and only asks the LLM to pick/cite/explain among those candidates rather than freely guessing a control_id. Trivy entries are keyed on the id Trivy emits (\"trivy:AWS-0086\"; the tfsec long id aws-s3-block-public-acls it replaced is not in Trivy's report). Entries are grounded in rule_ids actually observed from lambda/iac-scanner/fixtures/vulnerable-sample; extend as new rule_ids show up in real scans rather than guessing ahead of evidence. A rule with no confident mapping (e.g. pure hygiene checks like missing descriptions) is deliberately left out rather than force-mapped.",
+  "_comment": "Maps a scanner finding's (source, rule_id) to candidate controls in frameworks/*.json. mapping-agent uses this as a deterministic first pass -- it looks up candidates here, pulls their text from S3, and only asks the LLM to pick/cite/explain among those candidates rather than freely guessing a control_id. Trivy entries are keyed on the id Trivy emits (\"trivy:AWS-0086\"; the tfsec long id aws-s3-block-public-acls it replaced is not in Trivy's report). Entries are grounded in rule_ids actually observed -- first from lambda/iac-scanner/fixtures/vulnerable-sample, then from the third-party repositories in external/ (2026-09-18); extend as new rule_ids show up in real scans rather than guessing ahead of evidence. A rule with no confident mapping (e.g. pure hygiene checks like missing descriptions) is deliberately left out rather than force-mapped.",
   "mappings": {
     "checkov:CKV2_AWS_11": [
       {
@@ -15,6 +15,12 @@
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
+      }
+    ],
+    "checkov:CKV2_AWS_2": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "2.2.1"
       }
     ],
     "checkov:CKV2_AWS_6": [
@@ -33,6 +39,12 @@
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-1"
+      }
+    ],
+    "checkov:CKV_AWS_137": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
       }
     ],
     "checkov:CKV_AWS_145": [
@@ -139,6 +151,16 @@
         "control_id": "CICD-SEC-6"
       }
     ],
+    "checkov:CKV_AWS_45": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-5"
+      },
+      {
+        "framework": "OWASP-CICD-Top10",
+        "control_id": "CICD-SEC-6"
+      }
+    ],
     "checkov:CKV_AWS_46": [
       {
         "framework": "OWASP-CloudNative",
@@ -147,6 +169,16 @@
       {
         "framework": "OWASP-CICD-Top10",
         "control_id": "CICD-SEC-6"
+      }
+    ],
+    "checkov:CKV_AWS_51": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-4"
+      },
+      {
+        "framework": "OWASP-CICD-Top10",
+        "control_id": "CICD-SEC-9"
       }
     ],
     "checkov:CKV_AWS_62": [
@@ -173,10 +205,28 @@
         "control_id": "3.8"
       }
     ],
+    "checkov:CKV_AWS_79": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-1"
+      }
+    ],
+    "checkov:CKV_AWS_8": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "2.2.1"
+      }
+    ],
     "checkov:CKV_AWS_88": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-1"
+      }
+    ],
+    "checkov:CKV_AWS_96": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "2.3.1"
       }
     ],
     "checkov:CKV_SECRET_2": [
@@ -243,6 +293,12 @@
         "control_id": "2.2.1"
       }
     ],
+    "trivy:AWS-0028": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-1"
+      }
+    ],
     "trivy:AWS-0029": [
       {
         "framework": "OWASP-CloudNative",
@@ -251,6 +307,16 @@
       {
         "framework": "OWASP-CICD-Top10",
         "control_id": "CICD-SEC-6"
+      }
+    ],
+    "trivy:AWS-0031": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-4"
+      },
+      {
+        "framework": "OWASP-CICD-Top10",
+        "control_id": "CICD-SEC-9"
       }
     ],
     "trivy:AWS-0040": [
@@ -265,10 +331,22 @@
         "control_id": "CNAS-6"
       }
     ],
+    "trivy:AWS-0053": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
+      }
+    ],
     "trivy:AWS-0065": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "3.8"
+      }
+    ],
+    "trivy:AWS-0079": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "2.3.1"
       }
     ],
     "trivy:AWS-0080": [
@@ -295,16 +373,46 @@
         "control_id": "3.6"
       }
     ],
+    "trivy:AWS-0091": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "2.1.5"
+      }
+    ],
+    "trivy:AWS-0093": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "2.1.5"
+      }
+    ],
+    "trivy:AWS-0094": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "2.1.5"
+      }
+    ],
     "trivy:AWS-0104": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
       }
     ],
+    "trivy:AWS-0105": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "5.1"
+      }
+    ],
     "trivy:AWS-0107": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "5.2"
+      }
+    ],
+    "trivy:AWS-0131": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "2.2.1"
       }
     ],
     "trivy:AWS-0132": [
