@@ -71,12 +71,17 @@ resource "aws_lambda_function" "iac_scanner" {
     mode = "Active"
   }
 
-  # Checkov's own module import is the dominant cost (~50-100s observed
-  # locally, see handler.py) -- generous timeout and higher memory (which
-  # also buys more CPU on Lambda) both compensate for that until the
-  # in-process Runner API switch lands.
+  # Checkov is the dominant cost, and it is CPU-bound: its import, and
+  # then a graph rebuild for every instantiation of a module. Lambda's CPU
+  # share scales with memory (~1 vCPU at 1769 MB), and at 1024 MB
+  # terraform-aws-modules/terraform-aws-vpc -- 77 files, thirteen examples
+  # each instantiating the root module -- took 265s of the 300s allowed
+  # (corpus/external/README.md, 2026-09-18) for what is 60s of CPU in the
+  # image locally. 3008 MB is ~1.7 vCPU: about the same GB-seconds per
+  # scan, a third of the wall time, and room for module repositories
+  # this size to finish at all.
   timeout     = 300
-  memory_size = 1024
+  memory_size = 3008
 
   environment {
     variables = {
