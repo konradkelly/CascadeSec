@@ -95,7 +95,7 @@ def _mapping(finding_id="f1", framework="CIS-AWS-1.4", control_id="5.2",
             "citation": citation, "rationale": rationale}
 
 
-def _run(mock_dynamodb, mock_s3, mock_client, findings, mappings, replies):
+def _run(mock_dynamodb, mock_s3, mock_client, findings, mappings, replies, event=None, context=None):
     """Drive handler() over `findings` with a canned corpus and model."""
     table = MagicMock()
     table.query.return_value = {"Items": findings}
@@ -103,7 +103,7 @@ def _run(mock_dynamodb, mock_s3, mock_client, findings, mappings, replies):
     _s3_corpus(mock_s3, mappings)
     create = mock_client.return_value.messages.create
     create.side_effect = [_model_reply(r) for r in replies]
-    result = handler.handler({"pr_id": "pr-1"}, None)
+    result = handler.handler(event or {"pr_id": "pr-1"}, context)
     return result, table, create
 
 
@@ -128,6 +128,7 @@ def test_a_finding_is_mapped_to_a_control_from_its_candidate_set(
 
     assert result == {
         "pr_id": "pr-1", "mapped_count": 1, "skipped_count": 0, "error_count": 0, "files": ["main.tf"],
+        "remaining": 0,
     }
     written = table.update_item.call_args.kwargs["ExpressionAttributeValues"]
     assert written[":status"] == "mapped"
@@ -441,3 +442,106 @@ def test_a_control_carries_the_key_its_text_came_from(mock_s3):
     assert control["s3_key"] == "corpus/frameworks/owasp-cloud-native.json"
     assert control["title"] == "Network access controls default to deny"
     assert control["text"].startswith("Network access controls")
+
+
+# ---------- yielding to the state machine ----------
+# One model call per finding, in sequence, and the pipeline
+# (terraform/step_functions.tf) loops MapToControls while `remaining` > 0,
+# feeding mapped_count and files back in. A 47-candidate scan against the
+# old 120s timeout was killed mid-loop and failed the pipeline (2026-09-18).
+
+MAPPINGS = {"checkov:CKV_AWS_24": [{"framework": "CIS-AWS-1.4", "control_id": "5.2"}]}
+
+
+def _context(*remaining_ms):
+    """A Lambda context whose clock reads each value in turn, then the last one."""
+    ctx = MagicMock()
+    ctx.get_remaining_time_in_millis.side_effect = list(remaining_ms) + [remaining_ms[-1]] * 50
+    return ctx
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_the_loop_yields_before_the_clock_runs_out(mock_dynamodb, mock_s3, mock_client):
+    """Plenty of time for the first finding, not enough for the second: the
+    second is not started, and `remaining` counts it so the state machine
+    invokes again. A timeout mid-call would have lost both the call and the
+    return value."""
+    findings = [_finding("f1", file="a.tf"), _finding("f2", file="b.tf"), _finding("f3", file="c.tf")]
+
+    result, table, create = _run(
+        mock_dynamodb, mock_s3, mock_client, findings, MAPPINGS,
+        [_mapping("f1")],
+        context=_context(handler.FINDING_TIME_RESERVE_MS + 1, handler.FINDING_TIME_RESERVE_MS - 1),
+    )
+
+    assert create.call_count == 1
+    assert result["mapped_count"] == 1
+    assert result["files"] == ["a.tf"]
+    assert result["remaining"] == 2
+    assert table.update_item.call_count == 1
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_continuation_carries_the_earlier_pass_forward(mock_dynamodb, mock_s3, mock_client):
+    """The table is the cursor -- only raw findings are queried, so the
+    continuation sees what the first pass left -- but the counts and the
+    file list are not in the table, so they arrive on the event. The file
+    list is what the remediation Map iterates: a continuation that reported
+    only its own files would drop the first pass's from remediation."""
+    result, _, _ = _run(
+        mock_dynamodb, mock_s3, mock_client, [_finding("f2", file="b.tf")], MAPPINGS,
+        [_mapping("f2")],
+        event={"pr_id": "pr-1", "mapped_count": 38, "files": ["a.tf"]},
+    )
+
+    assert result["mapped_count"] == 39
+    assert result["files"] == ["a.tf", "b.tf"]
+    assert result["remaining"] == 0
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_findings_with_no_candidate_never_cause_a_yield(mock_dynamodb, mock_s3, mock_client):
+    """They cost nothing, so the clock is not consulted for them. Otherwise
+    a PR made mostly of unmappable findings would yield with the clock
+    low and come back to find them all still raw, still first."""
+    findings = [_finding("f1", rule_id="CKV_AWS_999"), _finding("f2", rule_id="CKV_AWS_999")]
+
+    result, _, create = _run(
+        mock_dynamodb, mock_s3, mock_client, findings, MAPPINGS, [],
+        context=_context(0),
+    )
+
+    assert create.call_count == 0
+    assert result["skipped_count"] == 2
+    assert result["remaining"] == 0
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_pass_that_mapped_nothing_does_not_ask_for_another(mock_dynamodb, mock_s3, mock_client):
+    """Every call failed and the clock ran out: the failed findings are
+    still raw and still first, so another pass would repeat this one, and
+    the state machine would loop until someone noticed the bill. Report
+    the errors and stop; a re-run after the fault is fixed picks them up."""
+    findings = [_finding("f1"), _finding("f2")]
+    table = MagicMock()
+    table.query.return_value = {"Items": findings}
+    mock_dynamodb.Table.return_value = table
+    _s3_corpus(mock_s3, MAPPINGS)
+    mock_client.return_value.messages.create.side_effect = RuntimeError("api down")
+
+    result = handler.handler(
+        {"pr_id": "pr-1"},
+        _context(handler.FINDING_TIME_RESERVE_MS + 1, handler.FINDING_TIME_RESERVE_MS - 1),
+    )
+
+    assert result["error_count"] == 1
+    assert result["mapped_count"] == 0
+    assert result["remaining"] == 0

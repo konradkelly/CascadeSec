@@ -41,13 +41,22 @@ resource "aws_lambda_function" "mapping_agent" {
 
   layers = [aws_lambda_layer_version.anthropic.arn]
 
-  timeout     = 120
+  # One model call per finding, ~3s each, and the handler yields to the
+  # state machine before this runs out (FINDING_TIME_RESERVE_SECONDS). The
+  # timeout is how much of a PR one pass maps, not a ceiling on the PR:
+  # 120s held 38 of a 47-candidate scan and failed the pipeline
+  # (2026-09-18), so it is longer now, and the yield is what makes the
+  # length not matter.
+  timeout     = 300
   memory_size = 512
 
   environment {
     variables = {
       DYNAMODB_TABLE       = aws_dynamodb_table.findings.name
       ARTIFACTS_BUCKET     = aws_s3_bucket.artifacts.bucket
+      # Time a finding needs before it starts: one model call, allowing
+      # for a slow one. See mapping-agent's handler.
+      FINDING_TIME_RESERVE_SECONDS = "30"
       ANTHROPIC_SECRET_ARN = aws_secretsmanager_secret.anthropic_api_key.arn
       ANTHROPIC_MODEL      = var.mapping_agent_model
     }
