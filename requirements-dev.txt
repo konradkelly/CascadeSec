@@ -7,9 +7,9 @@
 # module scope, which happens at collection time whether or not a test calls
 # the API.
 #
-# Pinned to what the suites were last verified green against (2026-09-17:
-# review-api 60, remediation-agent 57, iac-scanner 46, context-agent 34,
-# mapping-agent 11, corpus 106). Bump deliberately, not incidentally.
+# Pinned to what the suites were last verified green against (2026-09-18:
+# review-api 60, remediation-agent 59, iac-scanner 46, context-agent 34,
+# mapping-agent 18, corpus 106). Bump deliberately, not incidentally.
 #
 #   python -m venv .venv
 #   .venv/Scripts/python -m pip install -r requirements-dev.txt   # Windows

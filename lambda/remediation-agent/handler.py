@@ -60,6 +60,7 @@ import json
 import logging
 import os
 import re
+import time
 import typing
 from datetime import datetime, timezone
 
@@ -73,6 +74,9 @@ DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ARTIFACTS_BUCKET = os.environ.get("ARTIFACTS_BUCKET")
 ANTHROPIC_SECRET_ARN = os.environ.get("ANTHROPIC_SECRET_ARN")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
+AGENT_NAME = "remediation-agent"
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "unknown")
+METRIC_NAMESPACE = "IaCPosture"
 IAC_SCANNER_FUNCTION_NAME = os.environ.get("IAC_SCANNER_FUNCTION_NAME")
 # Unset means questions are not asked: the model is told not to raise any,
 # and a draft that does anyway is used as-is, its questions recorded as
@@ -761,6 +765,7 @@ def _call_remediation_agent(finding, original_content, answers=None, flagged="")
         },
         messages=[{"role": "user", "content": prompt}],
     )
+    _log_usage(response, finding_id=finding["finding_id"], call="redraft" if answers else "draft")
 
     text = next((b.text for b in response.content if b.type == "text"), None)
     if text is None:
@@ -980,6 +985,38 @@ def _write_superseded(finding, superseded_by):
             ":now": datetime.now(timezone.utc).isoformat(),
         },
     )
+
+
+def _log_usage(response, **context):
+    """One Embedded Metric Format line per model call, so a run's token
+    spend is a CloudWatch sum rather than an estimate. Same mechanism as
+    iac-scanner's metrics (observability.tf): print(), not logger, because
+    EMF needs the whole log event to be the JSON object. Priced at the
+    model's rates these four numbers are the bill; cache_* are zero until
+    prompt caching is turned on and then say whether it is working. The
+    tests' stub responses carry no usage, hence the getattr.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return
+    metrics = {
+        "InputTokens": getattr(usage, "input_tokens", 0) or 0,
+        "OutputTokens": getattr(usage, "output_tokens", 0) or 0,
+        "CacheReadInputTokens": getattr(usage, "cache_read_input_tokens", 0) or 0,
+        "CacheCreationInputTokens": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+    }
+    dimensions = {"Environment": ENVIRONMENT, "Agent": AGENT_NAME}
+    print(json.dumps({
+        "_aws": {
+            "Timestamp": int(time.time() * 1000),
+            "CloudWatchMetrics": [{
+                "Namespace": METRIC_NAMESPACE,
+                "Dimensions": [sorted(dimensions)],
+                "Metrics": [{"Name": name, "Unit": "Count"} for name in metrics],
+            }],
+        },
+        **dimensions, **metrics, "model": getattr(response, "model", MODEL), **context,
+    }))
 
 
 def _diff_sha256(diff_text):

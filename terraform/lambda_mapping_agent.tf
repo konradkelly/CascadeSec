@@ -54,6 +54,8 @@ resource "aws_lambda_function" "mapping_agent" {
     variables = {
       DYNAMODB_TABLE       = aws_dynamodb_table.findings.name
       ARTIFACTS_BUCKET     = aws_s3_bucket.artifacts.bucket
+      # Dimension on the token-usage metrics the handler emits (observability.tf).
+      ENVIRONMENT          = var.environment
       # Time a finding needs before it starts: one model call, allowing
       # for a slow one. See mapping-agent's handler.
       FINDING_TIME_RESERVE_SECONDS = "30"

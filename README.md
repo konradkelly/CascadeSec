@@ -87,7 +87,7 @@ finding -- which is why it asks first (`--no-remediate` stops after mapping).
 
 **v1 is deployed and running** against a dev AWS account: Terraform-only scanning, control mapping, self-verified remediation with per-file fix chains, and the human review dashboard. Triggered manually by `scripts/scan.py`; no GitHub write-back yet.
 
-CI runs the Lambda test suites (pytest, 166 tests) and the dashboard lint + type-check on every push — deliberately with no AWS credentials, so a test run can never touch real infrastructure.
+CI runs the Lambda test suites (pytest, 217 tests) and the dashboard lint + type-check on every push — deliberately with no AWS credentials, so a test run can never touch real infrastructure.
 
 ## Roadmap
 
