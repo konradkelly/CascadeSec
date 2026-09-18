@@ -74,6 +74,7 @@ Against the deployed dev stack, with AWS credentials and `terraform` on `PATH`:
 python scripts/scan.py path/to/terraform          # upload, scan, map, then ask before remediating
 python scripts/scan.py path/to/terraform --yes    # don't ask
 python corpus/eval/run_eval.py                    # detection recall over the labelled cases
+python corpus/external/run_external.py           # scan pinned third-party repos, compare to baseline
 ```
 
 `scan.py` uploads the directory, starts one execution of the pipeline state

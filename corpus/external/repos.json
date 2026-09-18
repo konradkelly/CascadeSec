@@ -1,0 +1,40 @@
+{
+  "_comment": "Third-party Terraform repositories run_external.py scans. `sha` pins the commit so a target cannot drift under its baseline; `baseline` is what the last --baseline run observed (absent until one has), and any later difference is reported as drift. `subdir` narrows the scan to one directory of the repo. Nothing here is vendored: the runner clones at run time into .repos/, which is gitignored.",
+  "repos": [
+    {
+      "name": "terragoat",
+      "url": "https://github.com/bridgecrewio/terragoat",
+      "sha": "729f8da62c6a85ce4af5ad3d123de97776d954c4",
+      "subdir": "terraform/aws",
+      "why": "Vulnerable by design, and checkov's own. A volume and remediation-workload target, not a detection test: checkov will find its own cases.",
+      "baseline": {
+        "files": 14,
+        "findings": 333,
+        "distinct_ids": 329,
+        "distinct_rules": 144,
+        "scan_errors": 0
+      }
+    },
+    {
+      "name": "terraform-aws-vpc",
+      "url": "https://github.com/terraform-aws-modules/terraform-aws-vpc",
+      "sha": "b3abd6df2ecf052451a361ed55b8f06f8742a795",
+      "subdir": null,
+      "why": "Well-maintained module with heavy variable indirection, for_each/dynamic blocks, and an examples/ tree of root modules. Parse robustness and false positives.",
+      "baseline": {
+        "files": 77,
+        "findings": 58,
+        "distinct_ids": 21,
+        "distinct_rules": 10,
+        "scan_errors": 0
+      }
+    },
+    {
+      "name": "terragrunt-infrastructure-live-example",
+      "url": "https://github.com/gruntwork-io/terragrunt-infrastructure-live-example",
+      "sha": "d106b47ad1e22cae3a841cd495eae48e9bbe3a03",
+      "subdir": null,
+      "why": "Terragrunt: .hcl wrappers over remote modules and no .tf at all. Documents what the scanner does with a repo shape it does not handle."
+    }
+  ]
+}
