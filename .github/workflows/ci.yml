@@ -92,6 +92,14 @@ jobs:
         working-directory: dashboard
         run: npm run lint
 
+      - name: vitest
+        working-directory: dashboard
+        # jsdom, no browser. The suite covers what the page decides rather
+        # than what it looks like: which fixes are held for review and why,
+        # what blocks an Accept, and that the theme script in index.html
+        # agrees with the provider.
+        run: npm test
+
       - name: tsc + vite build
         working-directory: dashboard
         # The type check is the point. `npm run build` runs `tsc -b` first, so
