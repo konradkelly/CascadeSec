@@ -1,6 +1,12 @@
-/* IaCPosture review dashboard */
+/* CascadeSec review dashboard */
+
+/* Dark is the default palette; [data-theme="light"] overrides it below. The
+   attribute is set on <html> before first paint by the script in index.html
+   and kept in sync by ThemeProvider, so there's no prefers-color-scheme media
+   query here -- a stored choice has to beat the OS setting. */
 
 :root {
+  color-scheme: dark;
   --bg: #0f1117;
   --bg-elevated: #161922;
   --bg-panel: #1a1d27;
@@ -9,19 +15,55 @@
   --text-muted: #7a8294;
   --text-heading: #eef0f5;
   --accent: #3b82f6;
+  --accent-hover: #2563eb;
   --accent-dim: rgba(59, 130, 246, 0.15);
   --success: #22c55e;
   --success-dim: rgba(34, 197, 94, 0.15);
+  --success-text: #86efac;
   --warn: #f59e0b;
   --warn-dim: rgba(245, 158, 11, 0.15);
+  --warn-text: #fcd34d;
   --danger: #ef4444;
   --danger-dim: rgba(239, 68, 68, 0.15);
+  --danger-text: #fca5a5;
+  --neutral: #94a3b8;
+  --neutral-dim: rgba(148, 163, 184, 0.15);
+  --code-bg: #0a0c10;
   --diff-add-bg: rgba(34, 197, 94, 0.12);
   --diff-remove-bg: rgba(239, 68, 68, 0.12);
   --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
   --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
   --radius: 8px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f5f8;
+  --bg-elevated: #eceef3;
+  --bg-panel: #ffffff;
+  --border: #d5d9e2;
+  --text: #2f3542;
+  --text-muted: #667085;
+  --text-heading: #111827;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-dim: rgba(37, 99, 235, 0.1);
+  --success: #16a34a;
+  --success-dim: rgba(22, 163, 74, 0.12);
+  --success-text: #166534;
+  --warn: #d97706;
+  --warn-dim: rgba(217, 119, 6, 0.12);
+  --warn-text: #92400e;
+  --danger: #dc2626;
+  --danger-dim: rgba(220, 38, 38, 0.1);
+  --danger-text: #991b1b;
+  --neutral: #64748b;
+  --neutral-dim: rgba(100, 116, 139, 0.12);
+  --code-bg: #f7f8fb;
+  --diff-add-bg: rgba(22, 163, 74, 0.12);
+  --diff-remove-bg: rgba(220, 38, 38, 0.1);
+  --shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 
 *,
@@ -268,12 +310,21 @@ textarea {
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: #2563eb;
-  border-color: #2563eb;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .btn--secondary {
   background: transparent;
+}
+
+/* Square, so the theme glyph sits centred beside the text buttons. */
+.btn--icon {
+  width: 2.25rem;
+  padding: 0.45rem 0;
+  font-size: 1rem;
+  line-height: 1;
+  text-align: center;
 }
 
 .btn--small {
@@ -334,19 +385,19 @@ textarea {
 .alert--error {
   background: var(--danger-dim);
   border-color: var(--danger);
-  color: #fca5a5;
+  color: var(--danger-text);
 }
 
 .alert--warn {
   background: var(--warn-dim);
   border-color: var(--warn);
-  color: #fcd34d;
+  color: var(--warn-text);
 }
 
 .alert--success {
   background: var(--success-dim);
   border-color: var(--success);
-  color: #86efac;
+  color: var(--success-text);
 }
 
 /* Neutral, for explaining state rather than reporting a problem -- a finding
@@ -399,16 +450,16 @@ textarea {
    as that fix survives review -- muted like resolved, but distinct from it,
    because no human has accepted anything here yet. */
 .badge--superseded {
-  background: rgba(148, 163, 184, 0.15);
-  border-color: #94a3b8;
-  color: #94a3b8;
+  background: var(--neutral-dim);
+  border-color: var(--neutral);
+  color: var(--neutral);
   font-style: italic;
 }
 
 .badge--resolved {
-  background: rgba(148, 163, 184, 0.15);
-  border-color: #94a3b8;
-  color: #94a3b8;
+  background: var(--neutral-dim);
+  border-color: var(--neutral);
+  color: var(--neutral);
 }
 
 .badge--pass {
@@ -767,7 +818,7 @@ textarea {
   font-family: var(--mono);
   font-size: 0.8rem;
   line-height: 1.45;
-  background: #0a0c10;
+  background: var(--code-bg);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -790,7 +841,7 @@ textarea {
   font-family: var(--mono);
   font-size: 0.8rem;
   line-height: 1.45;
-  background: #0a0c10;
+  background: var(--code-bg);
 }
 
 .diff-line {
@@ -799,12 +850,12 @@ textarea {
 
 .diff-line--add {
   background: var(--diff-add-bg);
-  color: #86efac;
+  color: var(--success-text);
 }
 
 .diff-line--remove {
   background: var(--diff-remove-bg);
-  color: #fca5a5;
+  color: var(--danger-text);
 }
 
 .diff-line--hunk {
