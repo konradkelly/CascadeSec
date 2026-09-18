@@ -132,6 +132,41 @@ def test_self_check_does_not_clear_when_instance_count_is_unchanged():
     assert passed is False
 
 
+def test_a_rule_firing_several_times_at_one_location_is_one_finding():
+    """Trivy reports AWS-0038 once per missing EKS log type, five times at
+    the same cluster; the table keeps one record per id, so a baseline read
+    from it says 1. Counted raw, every rescan of that file said 5 and every
+    fix to it was rejected for "four new findings" -- terragoat's eks.tf,
+    2026-09-18, 11 of 11. The unit is the id on both sides."""
+    finding = {"source": "checkov", "rule_id": "CKV_AWS_39", "finding_id": "target"}
+    logging = {"source": "trivy", "rule_id": "AWS-0038", "finding_id": "same-cluster"}
+
+    baseline = collections.Counter({("checkov", "CKV_AWS_39"): 1, ("trivy", "AWS-0038"): 1})
+    rescan = [logging] * 5  # fix cleared the target; logging still fires, once per log type
+
+    passed, new_findings, cleared = handler._evaluate_self_check(finding, rescan, baseline)
+
+    assert cleared is True
+    assert new_findings == []
+    assert passed is True
+
+
+def test_the_same_rule_at_a_second_location_is_still_a_new_finding():
+    """The dedup is by id, and an id includes the lines: a fix that adds a
+    second cluster with the same gap has doubled the problem."""
+    finding = {"source": "checkov", "rule_id": "CKV_AWS_39", "finding_id": "target"}
+    baseline = collections.Counter({("checkov", "CKV_AWS_39"): 1, ("trivy", "AWS-0038"): 1})
+    rescan = [
+        {"source": "trivy", "rule_id": "AWS-0038", "finding_id": "cluster-a"},
+        {"source": "trivy", "rule_id": "AWS-0038", "finding_id": "cluster-b"},
+    ]
+
+    passed, new_findings, cleared = handler._evaluate_self_check(finding, rescan, baseline)
+
+    assert new_findings == ["trivy:AWS-0038"]
+    assert passed is False
+
+
 def test_extra_instance_of_an_existing_rule_counts_as_a_new_finding():
     """A fix that doubles a problem already present isn't clean, even though
     the rule was in the baseline."""

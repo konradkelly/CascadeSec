@@ -414,9 +414,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
     )
     # Kept so an accepted fix can hand its own finding set to the next fix in
     # this file as that fix's baseline.
-    rescan_counts = collections.Counter(
-        (f["source"], f["rule_id"]) for f in rescan_findings
-    )
+    rescan_counts = _count_pairs(rescan_findings)
     scanner_verified = self_check_passed
 
     # A clean rescan proves the finding is gone. It says nothing about whether
@@ -512,7 +510,7 @@ def _chain_root(pr_id, file_path, resume_from=None):
             # rule (three open-ingress rules in one security group, say), and
             # the self-check has to distinguish "one of them was fixed" from
             # "none".
-            counts = collections.Counter((f["source"], f["rule_id"]) for f in on_file)
+            counts = _count_pairs(on_file)
             return _fetch_original_content(pr_id, file_path), counts, []
         root = max(accepted, key=lambda f: len(f["proposed_fix"].get("applies_after") or []))
 
@@ -530,7 +528,7 @@ def _chain_root(pr_id, file_path, resume_from=None):
         # The accepted content does not parse. Most likely a reviewer's edit
         # broke it. Nothing can be drafted on a base the scanner cannot read.
         raise RuntimeError(f"root fix {root_id} does not parse: {scan_errors}")
-    counts = collections.Counter((f["source"], f["rule_id"]) for f in rescan_findings)
+    counts = _count_pairs(rescan_findings)
 
     chain = list(root["proposed_fix"].get("applies_after") or [])
     chain.append({"finding_id": root_id, "diff_sha256": _diff_sha256(root["proposed_fix"]["diff"])})
@@ -899,9 +897,36 @@ def _invoke_self_check(pr_id, finding_id):
     return result["findings"], result.get("scan_errors") or []
 
 
+def _count_pairs(findings):
+    """Occurrence counts by (source, rule_id), one per finding id.
+
+    The scanner's raw list and the table disagree about how many findings a
+    file has: _write_findings keeps one record per id, and an id hashes the
+    location but not the resource, so a rule that fires several times at one
+    line range -- Trivy's AWS-0038 once per missing EKS log type, five at the
+    same cluster -- is five in a scan response and one in the table. A
+    baseline read from the table compared against a rescan counted raw saw
+    "four new findings" on every fix to terragoat's eks.tf (2026-09-18), and
+    no fix to that file could pass. Counting both sides the way the table
+    does is the comparison that means something; ids are the unit everywhere
+    else in this project. Findings without an id (the tests' stubs) are
+    counted as they come.
+    """
+    seen = set()
+    counts = collections.Counter()
+    for f in findings:
+        finding_id = f.get("finding_id")
+        if finding_id is not None:
+            if finding_id in seen:
+                continue
+            seen.add(finding_id)
+        counts[(f["source"], f["rule_id"])] += 1
+    return counts
+
+
 def _evaluate_self_check(finding, rescan_findings, baseline_counts):
     target_pair = (finding["source"], finding["rule_id"])
-    rescan_counts = collections.Counter((f["source"], f["rule_id"]) for f in rescan_findings)
+    rescan_counts = _count_pairs(rescan_findings)
 
     # Occurrence counts, not mere presence. A file can hold several instances
     # of one rule, and fixing the flagged instance leaves the others firing --
