@@ -12,7 +12,10 @@ extending corpus/rule_mappings.json, not by relaxing this Lambda.
 Event shape:
 { "pr_id": "manual-test-1" }
 
-Returns {pr_id, mapped_count, skipped_count, files}. "files" is the sorted
+Returns {pr_id, mapped_count, skipped_count, error_count, files}. skipped
+is a decision -- no candidate, or an answer refused by the checks below;
+error is a fault in one finding's mapping, which is logged and does not
+stop the others. Both leave the finding "raw". "files" is the sorted
 set of files a finding was mapped on in this run: the pipeline
 (terraform/step_functions.tf) fans remediation out one file per invocation,
 and this is its item list. A file is the unit, not a finding, because
@@ -73,6 +76,7 @@ def handler(event, context):
 
     mapped_count = 0
     skipped_count = 0
+    error_count = 0
     files = set()
 
     for finding in raw_findings:
@@ -81,13 +85,22 @@ def handler(event, context):
             skipped_count += 1
             continue
 
-        candidates = [_load_control(c["framework"], c["control_id"]) for c in candidate_refs]
-        mapping = _call_mapping_agent(finding, candidates)
-        if mapping is None:
-            skipped_count += 1
+        try:
+            candidates = [_load_control(c["framework"], c["control_id"]) for c in candidate_refs]
+            mapping = _call_mapping_agent(finding, candidates)
+            if mapping is None:
+                skipped_count += 1
+                continue
+            _write_mapping(finding, mapping)
+        except Exception:
+            # One finding's failure shouldn't abandon the rest of the PR. The
+            # finding stays "raw", so a re-run retries it; skipped is for a
+            # decision (no candidate, answer refused), this is for a fault --
+            # a corpus reference that doesn't resolve, the API, DynamoDB.
+            logger.exception("mapping failed for finding %s", finding.get("finding_id"))
+            error_count += 1
             continue
 
-        _write_mapping(finding, mapping)
         mapped_count += 1
         files.add(finding["file"])
 
@@ -95,6 +108,7 @@ def handler(event, context):
         "pr_id": pr_id,
         "mapped_count": mapped_count,
         "skipped_count": skipped_count,
+        "error_count": error_count,
         "files": sorted(files),
     }
 

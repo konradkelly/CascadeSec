@@ -126,7 +126,9 @@ def test_a_finding_is_mapped_to_a_control_from_its_candidate_set(
         replies=[_mapping()],
     )
 
-    assert result == {"pr_id": "pr-1", "mapped_count": 1, "skipped_count": 0, "files": ["main.tf"]}
+    assert result == {
+        "pr_id": "pr-1", "mapped_count": 1, "skipped_count": 0, "error_count": 0, "files": ["main.tf"],
+    }
     written = table.update_item.call_args.kwargs["ExpressionAttributeValues"]
     assert written[":status"] == "mapped"
     [cm] = written[":cm"]
@@ -298,6 +300,98 @@ def test_files_lists_each_mapped_file_once_for_the_map_state(
 
     assert result["files"] == ["a.tf", "b.tf"]
     assert (result["mapped_count"], result["skipped_count"]) == (3, 1)
+
+
+# ---------- one finding's fault is not the run's ----------
+#
+# Until 2026-09-18 the loop had no try/except, so the first exception --
+# whatever raised it -- ended the invocation with every later finding still
+# raw and the pipeline execution failed. remediation-agent had isolated
+# per-finding failures from the start; this brings mapping-agent level.
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_corpus_reference_that_does_not_resolve_fails_only_its_finding(
+    mock_dynamodb, mock_s3, mock_client
+):
+    """The fault corpus/test_corpus.py exists to catch at commit time. If
+    it reaches runtime anyway -- an edit that skipped CI, a stale sync --
+    the findings on that rule are counted as errors and the others map.
+    A framework the handler does not know is a KeyError; a control_id the
+    file does not hold is a StopIteration out of next(). Both are faults,
+    neither is a decision, so neither is `skipped`."""
+    result, table, _ = _run(
+        mock_dynamodb, mock_s3, mock_client,
+        findings=[
+            _finding("f1", rule_id="CKV_AWS_24"),   # fine
+            _finding("f2", rule_id="CKV_AWS_18"),   # framework not in _FRAMEWORK_FILES
+            _finding("f3", rule_id="CKV_AWS_19"),   # control_id not in the file
+            _finding("f4", rule_id="CKV_AWS_24"),   # fine, and after the faults
+        ],
+        mappings={
+            "checkov:CKV_AWS_24": [{"framework": "CIS-AWS-1.4", "control_id": "5.2"}],
+            "checkov:CKV_AWS_18": [{"framework": "CIS-Azure-2.0", "control_id": "1.1"}],
+            "checkov:CKV_AWS_19": [{"framework": "CIS-AWS-1.4", "control_id": "9.99"}],
+        },
+        replies=[_mapping("f1"), _mapping("f4")],
+    )
+
+    assert (result["mapped_count"], result["skipped_count"], result["error_count"]) == (2, 0, 2)
+    written = [c.kwargs["Key"]["sk"] for c in table.update_item.call_args_list]
+    assert written == ["FINDING#f1", "FINDING#f4"]
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_an_api_error_on_one_finding_leaves_the_rest_to_map(
+    mock_dynamodb, mock_s3, mock_client
+):
+    """The likelier fault in practice: a rate limit or a 5xx on one call.
+    The finding stays raw for the next run; nothing else about the PR is
+    lost to it."""
+    table = MagicMock()
+    table.query.return_value = {"Items": [_finding("f1"), _finding("f2"), _finding("f3")]}
+    mock_dynamodb.Table.return_value = table
+    _s3_corpus(mock_s3, {"checkov:CKV_AWS_24": [{"framework": "CIS-AWS-1.4", "control_id": "5.2"}]})
+    mock_client.return_value.messages.create.side_effect = [
+        _model_reply(_mapping("f1")),
+        RuntimeError("529 overloaded"),
+        _model_reply(_mapping("f3")),
+    ]
+
+    result = handler.handler({"pr_id": "pr-1"}, None)
+
+    assert (result["mapped_count"], result["error_count"]) == (2, 1)
+    assert result["files"] == ["main.tf"]
+    written = [c.kwargs["Key"]["sk"] for c in table.update_item.call_args_list]
+    assert written == ["FINDING#f1", "FINDING#f3"]
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_failed_write_is_an_error_not_a_mapping(
+    mock_dynamodb, mock_s3, mock_client
+):
+    """The model answered and the answer was refused by nothing, but the
+    record was not updated -- so it must not be counted as mapped, and its
+    file must not be handed to the Map state as if it had findings to
+    remediate. The write is the last step precisely so this holds."""
+    table = MagicMock()
+    table.query.return_value = {"Items": [_finding("f1", file="a.tf"), _finding("f2", file="b.tf")]}
+    table.update_item.side_effect = [RuntimeError("ProvisionedThroughputExceeded"), None]
+    mock_dynamodb.Table.return_value = table
+    _s3_corpus(mock_s3, {"checkov:CKV_AWS_24": [{"framework": "CIS-AWS-1.4", "control_id": "5.2"}]})
+    mock_client.return_value.messages.create.side_effect = [
+        _model_reply(_mapping("f1")), _model_reply(_mapping("f2")),
+    ]
+
+    result = handler.handler({"pr_id": "pr-1"}, None)
+
+    assert (result["mapped_count"], result["error_count"]) == (1, 1)
+    assert result["files"] == ["b.tf"]
 
 
 # ---------- plumbing that has bitten before ----------
