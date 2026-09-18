@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    // The tests read index.html and hash with node:crypto. The app must not
+    // see Node globals, so they are typed here and nowhere else.
+    "types": ["vite/client", "node", "@testing-library/jest-dom"]
+  },
+  "include": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/test"
+  ],
+  "exclude": []
+}
