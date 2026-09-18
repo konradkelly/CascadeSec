@@ -545,3 +545,32 @@ def test_a_pass_that_mapped_nothing_does_not_ask_for_another(mock_dynamodb, mock
     assert result["error_count"] == 1
     assert result["mapped_count"] == 0
     assert result["remaining"] == 0
+
+
+# ---------- token usage ----------
+
+def test_each_model_call_logs_its_usage_as_a_metric(capsys):
+    """One EMF line per call, dimensioned by agent, so a run's spend is a
+    CloudWatch sum. Before this the cost of a run was an estimate from
+    prompt sizes (2026-09-18: "$10-17"), which is not a number."""
+    response = SimpleNamespace(
+        model="claude-opus-5",
+        usage=SimpleNamespace(input_tokens=2100, output_tokens=340,
+                              cache_read_input_tokens=0, cache_creation_input_tokens=0),
+    )
+
+    handler._log_usage(response, finding_id="f1")
+
+    record = json.loads(capsys.readouterr().out.strip())
+    assert record["InputTokens"] == 2100 and record["OutputTokens"] == 340
+    assert record["Agent"] == "mapping-agent" and record["finding_id"] == "f1"
+    emf = record["_aws"]["CloudWatchMetrics"][0]
+    assert emf["Namespace"] == "IaCPosture"
+    assert emf["Dimensions"] == [["Agent", "Environment"]]
+    assert {m["Name"] for m in emf["Metrics"]} == {
+        "InputTokens", "OutputTokens", "CacheReadInputTokens", "CacheCreationInputTokens"}
+
+
+def test_a_response_without_usage_logs_nothing(capsys):
+    handler._log_usage(SimpleNamespace(content=[]))
+    assert capsys.readouterr().out == ""

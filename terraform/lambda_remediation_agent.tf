@@ -46,6 +46,8 @@ resource "aws_lambda_function" "remediation_agent" {
     variables = {
       DYNAMODB_TABLE       = aws_dynamodb_table.findings.name
       ARTIFACTS_BUCKET     = aws_s3_bucket.artifacts.bucket
+      # Dimension on the token-usage metrics the handler emits (observability.tf).
+      ENVIRONMENT          = var.environment
       ANTHROPIC_SECRET_ARN = aws_secretsmanager_secret.anthropic_api_key.arn
       ANTHROPIC_MODEL      = var.remediation_agent_model
       # The handler needs the scanner's name to invoke it for the self-check.
