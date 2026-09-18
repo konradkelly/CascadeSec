@@ -11,15 +11,29 @@ extending corpus/rule_mappings.json, not by relaxing this Lambda.
 
 Event shape:
 { "pr_id": "manual-test-1" }
+-- or, continuing a pass that yielded (see `remaining` below) --
+{ "pr_id": "manual-test-1", "mapped_count": 38, "files": ["ec2.tf"] }
 
-Returns {pr_id, mapped_count, skipped_count, error_count, files}. skipped
-is a decision -- no candidate, or an answer refused by the checks below;
-error is a fault in one finding's mapping, which is logged and does not
-stop the others. Both leave the finding "raw". "files" is the sorted
-set of files a finding was mapped on in this run: the pipeline
+Returns {pr_id, mapped_count, skipped_count, error_count, files, remaining}.
+skipped is a decision -- no candidate, or an answer refused by the checks
+below; error is a fault in one finding's mapping, which is logged and does
+not stop the others. Both leave the finding "raw". "files" is the sorted
+set of files a finding was mapped on: the pipeline
 (terraform/step_functions.tf) fans remediation out one file per invocation,
 and this is its item list. A file is the unit, not a finding, because
 remediation-agent chains the fixes within a file -- see its module docstring.
+
+One model call per finding, in sequence, and a PR can carry more of them
+than the function's timeout holds (a 73-finding scan of terragoat's ec2.tf
+and neighbours had 47 with candidates, ~3s each, against 120s -- the
+invocation was killed mid-loop and the pipeline failed with it,
+2026-09-18). So the loop yields before the clock runs out: it returns
+`remaining` > 0 and the state machine invokes again. No resume token is
+needed, because each mapping is written as it is made and only "raw"
+findings are queried, so the table is the cursor. `mapped_count` and
+`files` are carried in on the event and accumulate across passes; skipped
+and error counts are the last pass's own, since everything it counts is
+still raw and was looked at again.
 """
 
 import json
@@ -37,6 +51,12 @@ DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ARTIFACTS_BUCKET = os.environ.get("ARTIFACTS_BUCKET")
 ANTHROPIC_SECRET_ARN = os.environ.get("ANTHROPIC_SECRET_ARN")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
+
+# Time a finding must have left before it starts, so the model call in
+# flight is never the one the timeout lands on. One call at max_tokens=1024
+# is ~3s in practice; the reserve is sized for a slow one, not a typical
+# one. Default for a direct invoke; Terraform sets it.
+FINDING_TIME_RESERVE_MS = int(os.environ.get("FINDING_TIME_RESERVE_SECONDS", "30")) * 1000
 
 s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
@@ -74,16 +94,28 @@ def handler(event, context):
     raw_findings = _query_raw_findings(pr_id)
     rule_mappings = _load_rule_mappings()
 
-    mapped_count = 0
+    # Carried over from the pass that yielded, if this is a continuation.
+    mapped_count = event.get("mapped_count", 0)
+    files = set(event.get("files", []))
+    mapped_before = mapped_count
     skipped_count = 0
     error_count = 0
-    files = set()
+    remaining = 0
 
-    for finding in raw_findings:
+    for index, finding in enumerate(raw_findings):
         candidate_refs = rule_mappings.get(f"{finding['source']}:{finding['rule_id']}")
         if not candidate_refs:
             skipped_count += 1
             continue
+
+        # Yield rather than be killed: a timeout mid-call loses the call and
+        # the return value, and the state machine cannot tell how far the
+        # pass got. Checked only where a model call is about to start --
+        # findings with no candidate cost nothing and are never the reason.
+        if _time_left_ms(context) < FINDING_TIME_RESERVE_MS:
+            remaining = len(raw_findings) - index
+            logger.info("yielding with %d raw finding(s) unexamined", remaining)
+            break
 
         try:
             candidates = [_load_control(c["framework"], c["control_id"]) for c in candidate_refs]
@@ -104,13 +136,33 @@ def handler(event, context):
         mapped_count += 1
         files.add(finding["file"])
 
+    if remaining and mapped_count == mapped_before:
+        # A whole time budget spent without one mapping landing is a fault
+        # (the API down, every call timing out), not a workload. Asking for
+        # another pass would repeat it indefinitely: the failed findings are
+        # still raw and still first in the query. Stop, and say so; the
+        # findings stay raw for a re-run once whatever it was is fixed.
+        logger.error(
+            "no finding mapped in this pass; not yielding with %d unexamined", remaining
+        )
+        remaining = 0
+
     return {
         "pr_id": pr_id,
         "mapped_count": mapped_count,
         "skipped_count": skipped_count,
         "error_count": error_count,
         "files": sorted(files),
+        "remaining": remaining,
     }
+
+
+def _time_left_ms(context):
+    """Milliseconds before Lambda kills this invocation. Unbounded outside
+    Lambda (the tests pass no context), where nothing is going to kill it."""
+    if context is None:
+        return float("inf")
+    return context.get_remaining_time_in_millis()
 
 
 def _query_all(table, **kwargs):

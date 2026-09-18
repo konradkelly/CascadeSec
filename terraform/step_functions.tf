@@ -82,7 +82,18 @@ locals {
             MaxAttempts     = 1
           },
         ]
-        Next = "MapToControls"
+        Next = "StartMapping"
+      }
+
+      # mapping-agent makes one model call per finding and yields before its
+      # timeout with `remaining` > 0 (see its module docstring), carrying
+      # mapped_count and files forward on the next event. The first pass
+      # needs something to carry, so $.map starts at zero.
+      StartMapping = {
+        Type       = "Pass"
+        Result     = { mapped_count = 0, files = [], remaining = 0 }
+        ResultPath = "$.map"
+        Next       = "MapToControls"
       }
 
       MapToControls = {
@@ -91,7 +102,9 @@ locals {
         Parameters = {
           FunctionName = aws_lambda_function.mapping_agent.arn
           Payload = {
-            "pr_id.$" = "$.pr_id"
+            "pr_id.$"        = "$.pr_id"
+            "mapped_count.$" = "$.map.mapped_count"
+            "files.$"        = "$.map.files"
           }
         }
         ResultSelector = {
@@ -99,10 +112,26 @@ locals {
           "skipped_count.$" = "$.Payload.skipped_count"
           "error_count.$"   = "$.Payload.error_count"
           "files.$"         = "$.Payload.files"
+          "remaining.$"     = "$.Payload.remaining"
         }
         ResultPath = "$.map"
-        Retry      = [local.transient_retry]
-        Next       = "ShouldRemediate"
+        # Transient errors only. A timeout is not retried, for the same
+        # reason as RemediateFile: the handler yields so it never happens,
+        # and a retry after it did would re-run the same pass.
+        Retry = [local.transient_retry]
+        Next  = "MoreToMap"
+      }
+
+      MoreToMap = {
+        Type = "Choice"
+        Choices = [
+          {
+            Variable           = "$.map.remaining"
+            NumericGreaterThan = 0
+            Next               = "MapToControls"
+          },
+        ]
+        Default = "ShouldRemediate"
       }
 
       # Remediation is the stage that costs money -- a model call and a

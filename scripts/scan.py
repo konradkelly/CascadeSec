@@ -288,7 +288,13 @@ def run_stages(args, stages, pr_id, prefix):
         print_scan(body)
 
     if "map" in stages:
+        # Same loop the state machine runs: mapping-agent yields before its
+        # timeout with `remaining` > 0, and the counts it carries go back in.
         body = invoke(lam, mapper, {"pr_id": pr_id}, "map")
+        while body.get("remaining"):
+            body = invoke(lam, mapper, {
+                "pr_id": pr_id, "mapped_count": body["mapped_count"], "files": body["files"],
+            }, "map")
         print_map(body)
 
     if "remediate" in stages:
