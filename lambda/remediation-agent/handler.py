@@ -153,6 +153,20 @@ REMEDIATION_OUTPUT_SCHEMA = {
 # guard, not an HCL parser.
 RESOURCE_BLOCK_RE = re.compile(r'^\s*resource\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.MULTILINE)
 
+# The Kubernetes equivalents, and the same deal: a guard, not a YAML parser.
+# There is no PyYAML in the runtime or the layer, and a parser would be the
+# wrong tool anyway -- a Helm template is not valid YAML until rendered, and
+# the guard has to hold on the file the agent actually edited. What it
+# needs is a document's `kind` and `metadata.name`, and both are structural
+# enough to read off the lines: a manifest's own `kind:` sits at column 0,
+# where a RoleBinding's `subjects[].kind` or a `roleRef.kind` is indented;
+# its own `metadata:` sits at column 0, where a pod template's is indented.
+# Documents are split on `---`. The \r? is for manifests committed from
+# Windows: the snapshot is the file as the repository holds it.
+K8S_DOC_SEPARATOR_RE = re.compile(r"^---[ \t]*\r?$", re.MULTILINE)
+K8S_KIND_RE = re.compile(r"^kind:[ \t]*(\S+)", re.MULTILINE)
+K8S_METADATA_RE = re.compile(r"^metadata:[ \t]*\r?$", re.MULTILINE)
+
 
 def handler(event, context):
     pr_id = event["pr_id"]
@@ -428,7 +442,11 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
     # Both stay proposals a human has to weigh, so the verdict is overridden
     # even when the scanner is satisfied. Scanned first regardless -- the
     # rescan result is still worth showing the reviewer.
-    dropped_resources = _find_dropped_resources(base_content, corrected_content)
+    # A record from before the target_type split has none, and was Terraform
+    # by construction: nothing else was admitted to the scanner then.
+    dropped_resources = _find_dropped_resources(
+        base_content, corrected_content, finding.get("target_type", "terraform")
+    )
     # An unanswered question is the third gate: "we looked and the
     # repository does not say" is still something the fix may rest on, and
     # the model is not trusted to decide that it does not.
@@ -777,7 +795,22 @@ def _call_remediation_agent(finding, original_content, answers=None, flagged="")
 # Directives that make a scanner stop reporting a finding without changing
 # any infrastructure. tfsec and checkov are what this project runs; trivy is
 # tfsec's successor and accepts the same comment under its own name.
-SUPPRESSION_MARKERS = ("tfsec:ignore", "trivy:ignore", "checkov:skip", "nosec")
+#
+# One set for every language rather than one per target_type, on purpose: a
+# marker is a substring of an added line, so the union costs nothing but a
+# held-for-review on the odd .tf file that gains a Kubernetes annotation,
+# while a per-language set is exactly the shape that fails open when a
+# language is added to the scanner and not here (multi-iac-spec §4). What
+# each language needs, so the set can be audited when one is added:
+#   Terraform/OpenTofu  -- HCL comments: tfsec:ignore, trivy:ignore,
+#                          checkov:skip, nosec.
+#   Kubernetes/Helm     -- trivy:ignore and checkov:skip work as YAML
+#                          comments too, and checkov additionally reads the
+#                          `checkov.io/skipN: CKV_K8S_..=reason` annotation
+#                          under metadata.annotations. The annotation is the
+#                          one that is not a comment, so it is the one an
+#                          HCL-shaped set misses.
+SUPPRESSION_MARKERS = ("tfsec:ignore", "trivy:ignore", "checkov:skip", "checkov.io/skip", "nosec")
 
 
 def _find_added_suppressions(diff_text):
@@ -814,7 +847,7 @@ def _find_added_suppressions(diff_text):
     ]
 
 
-def _find_dropped_resources(original_content, corrected_content):
+def _find_dropped_resources(original_content, corrected_content, target_type):
     """Resources the fix deletes outright, rather than tightening in place.
 
     Deleting a resource always satisfies the self-check -- the finding is gone
@@ -831,12 +864,24 @@ def _find_dropped_resources(original_content, corrected_content):
     Compared per resource *type*, not per address, so renaming a resource
     (a delete plus an add, as in a legitimate
     nodeport_from_internet -> nodeport_from_admin rescope) isn't mistaken for
-    a deletion. Returns "<type>.<name>" for the addresses that vanished, so a
-    reviewer sees which ones, but only reports when the type's count actually
-    falls.
+    a deletion. Returns the addresses that vanished ("<type>.<name>" for
+    Terraform, "<Kind>/<name>" for Kubernetes), so a reviewer sees which
+    ones, but only reports when the type's count actually falls.
+
+    Dispatches on target_type, and refuses one it has no reader for. The
+    HCL regex matches nothing in YAML, so without the dispatch an agent could
+    delete a whole Deployment and this would return [] -- the gate failing
+    open, which multi-iac-spec §4 names as worse than not scanning the
+    language at all. Raising keeps the admission list honest: a language
+    reaches here only once its reader exists.
     """
-    before = RESOURCE_BLOCK_RE.findall(original_content)
-    after = RESOURCE_BLOCK_RE.findall(corrected_content)
+    reader = STRUCTURAL_READERS.get(target_type)
+    if reader is None:
+        raise ValueError(
+            f"no structural guard for target_type {target_type!r}; "
+            "a language is not admitted to remediation until one exists"
+        )
+    before, after = reader(original_content), reader(corrected_content)
 
     before_types = collections.Counter(t for t, _ in before)
     after_types = collections.Counter(t for t, _ in after)
@@ -845,7 +890,62 @@ def _find_dropped_resources(original_content, corrected_content):
 
     vanished = set(before) - set(after)
     shrunk = {t for t, n in before_types.items() if after_types[t] < n}
-    return sorted(f"{t}.{n}" for t, n in vanished if t in shrunk)
+    join = "/" if target_type in K8S_TARGET_TYPES else "."
+    return sorted(f"{t}{join}{n}" for t, n in vanished if t in shrunk)
+
+
+def _hcl_resources(content):
+    """(type, name) per `resource` block."""
+    return RESOURCE_BLOCK_RE.findall(content)
+
+
+def _k8s_resources(content):
+    """(kind, name) per YAML document, read structurally (see K8S_KIND_RE).
+
+    A document with no column-0 `kind:` is not a manifest (a values file, a
+    comment-only trailer after the last `---`) and is skipped; one with a
+    kind but no readable name still counts, under an empty name, so deleting
+    it is not free. In a Helm template the name is often `{{ .Release.Name
+    }}`, which is fine -- it only has to be stable between the two versions.
+    """
+    found = []
+    for doc in K8S_DOC_SEPARATOR_RE.split(content):
+        kind = K8S_KIND_RE.search(doc)
+        if not kind:
+            continue
+        found.append((kind.group(1), _k8s_metadata_name(doc)))
+    return found
+
+
+def _k8s_metadata_name(doc):
+    """`metadata.name` of one document: the `name:` at the first child
+    indent of the column-0 `metadata:` block, stopping at the next column-0
+    line. `labels: {name: ..}` sits one indent deeper and is not it."""
+    meta = K8S_METADATA_RE.search(doc)
+    if not meta:
+        return ""
+    child_indent = None
+    for line in doc[meta.end():].splitlines()[1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            break
+        if child_indent is None:
+            child_indent = indent
+        if indent == child_indent and line.lstrip().startswith("name:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+K8S_TARGET_TYPES = ("kubernetes", "helm")
+# target_type -> reader. Adding a language to the scanner's admission list
+# means adding it here, or _find_dropped_resources refuses it.
+STRUCTURAL_READERS = {
+    "terraform": _hcl_resources,
+    "opentofu": _hcl_resources,
+    **{t: _k8s_resources for t in K8S_TARGET_TYPES},
+}
 
 
 def _compute_diff(original_content, corrected_content, file_path):

@@ -220,6 +220,9 @@ def test_detects_the_real_suppression_diff_from_pugetscope():
     "# trivy:ignore:AVD-AWS-0107",
     "#checkov:skip=CKV_AWS_18:reviewed",
     "# nosec",
+    # Kubernetes: checkov's annotation, the one suppression that is not a
+    # comment. Trivy's YAML form is the same trivy:ignore comment as HCL.
+    "checkov.io/skip1: CKV_K8S_20=Runs as root by design",
 ])
 def test_every_suppression_dialect_is_caught(marker):
     diff = f"--- a/main.tf\n+++ b/main.tf\n@@ -1 +1,2 @@\n {marker.upper()}\n+  {marker}\n"
@@ -319,7 +322,7 @@ def test_deleting_a_resource_is_reported():
 }
 ''', "# Plaintext HTTP is not exposed.\n")
 
-    assert handler._find_dropped_resources(SG_ORIGINAL, corrected) == [
+    assert handler._find_dropped_resources(SG_ORIGINAL, corrected, "terraform") == [
         "aws_security_group_rule.http_from_internet"
     ]
 
@@ -333,19 +336,178 @@ def test_renaming_a_resource_is_not_treated_as_a_deletion():
     ).replace('from_port   = 30000\n  cidr_blocks = ["0.0.0.0/0"]',
               'from_port   = 30000\n  cidr_blocks = var.admin_cidrs')
 
-    assert handler._find_dropped_resources(SG_ORIGINAL, corrected) == []
+    assert handler._find_dropped_resources(SG_ORIGINAL, corrected, "terraform") == []
 
 
 def test_tightening_a_resource_in_place_is_not_a_deletion():
     corrected = SG_ORIGINAL.replace('cidr_blocks = ["0.0.0.0/0"]', 'cidr_blocks = ["10.0.0.0/8"]')
 
-    assert handler._find_dropped_resources(SG_ORIGINAL, corrected) == []
+    assert handler._find_dropped_resources(SG_ORIGINAL, corrected, "terraform") == []
 
 
 def test_adding_a_resource_is_not_a_deletion():
     corrected = SG_ORIGINAL + '\nresource "aws_flow_log" "vpc" {\n}\n'
 
-    assert handler._find_dropped_resources(SG_ORIGINAL, corrected) == []
+    assert handler._find_dropped_resources(SG_ORIGINAL, corrected, "terraform") == []
+
+
+# ---------- deletion gate: Kubernetes ----------
+
+# Shaped like PugetScope's k8s/: a Deployment whose pod template has its own
+# nested metadata, a Service, and a RoleBinding whose `kind:` lines under
+# subjects/roleRef must not be mistaken for documents of their own.
+K8S_ORIGINAL = """apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: web
+    name: not-the-name
+  name: web
+  namespace: pugetscope
+spec:
+  template:
+    metadata:
+      name: web-pod
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: web:1.0
+          securityContext:
+            privileged: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  selector:
+    app: web
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: web-reader
+subjects:
+  - kind: ServiceAccount
+    name: web
+roleRef:
+  kind: Role
+  name: reader
+"""
+
+
+def test_k8s_documents_are_read_by_top_level_kind_and_metadata_name():
+    """The reader is what the gate stands on, so its output is pinned: three
+    documents, named from the column-0 metadata block -- not from the pod
+    template's nested one, not from a `name` under labels, and with none of
+    the indented `kind:` lines in the RoleBinding counted as documents."""
+    assert handler._k8s_resources(K8S_ORIGINAL) == [
+        ("Deployment", "web"), ("Service", "web"), ("RoleBinding", "web-reader"),
+    ]
+
+
+def test_k8s_deleting_a_document_is_reported():
+    """Removing the Service scans clean: nothing raised a finding on it any
+    more because it is gone. Same failure shape as the port-80 rule."""
+    corrected = K8S_ORIGINAL.replace(
+        "---\napiVersion: v1\nkind: Service\nmetadata:\n  name: web\nspec:\n"
+        "  selector:\n    app: web\n", "")
+    assert "\nkind: Service\n" not in corrected
+
+    assert handler._find_dropped_resources(K8S_ORIGINAL, corrected, "kubernetes") == [
+        "Service/web"
+    ]
+
+
+def test_k8s_deleting_a_document_is_reported_even_when_the_regex_saw_nothing_of_it_in_hcl():
+    """The reason for the dispatch: the HCL regex reads a manifest as
+    containing no resources at all, so before it a whole Deployment could
+    vanish and the gate would return []."""
+    corrected = "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\n"
+
+    assert handler._hcl_resources(K8S_ORIGINAL) == []
+    assert handler._find_dropped_resources(K8S_ORIGINAL, corrected, "kubernetes") == [
+        "Deployment/web", "RoleBinding/web-reader",
+    ]
+
+
+def test_k8s_tightening_in_place_is_not_a_deletion():
+    """The fix the 239 PugetScope findings mostly want: a securityContext
+    change inside the pod spec, which touches no document boundary."""
+    corrected = K8S_ORIGINAL.replace(
+        "            privileged: true",
+        "            privileged: false\n            runAsNonRoot: true",
+    )
+
+    assert handler._find_dropped_resources(K8S_ORIGINAL, corrected, "kubernetes") == []
+
+
+def test_k8s_renaming_a_document_is_not_a_deletion():
+    corrected = K8S_ORIGINAL.replace("  name: web-reader", "  name: web-read-only")
+
+    assert handler._find_dropped_resources(K8S_ORIGINAL, corrected, "kubernetes") == []
+
+
+def test_k8s_adding_a_document_is_not_a_deletion():
+    corrected = K8S_ORIGINAL + "---\napiVersion: v1\nkind: NetworkPolicy\nmetadata:\n  name: deny-all\n"
+
+    assert handler._find_dropped_resources(K8S_ORIGINAL, corrected, "kubernetes") == []
+
+
+def test_k8s_reader_holds_on_a_helm_template():
+    """Why this is not a YAML parser: a chart template is not valid YAML
+    until rendered, but its `kind:` and `metadata:` still sit at column 0,
+    and a name only has to be stable between the two versions."""
+    template = """{{- if .Values.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "web.fullname" . }}
+  labels:
+    {{- include "web.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "web.fullname" . }}
+"""
+    assert handler._k8s_resources(template) == [
+        ("Deployment", '{{ include "web.fullname" . }}'),
+        ("Service", '{{ include "web.fullname" . }}'),
+    ]
+    dropped = handler._find_dropped_resources(
+        template, template.split("---")[0], "helm")
+    assert dropped == ['Service/{{ include "web.fullname" . }}']
+
+
+def test_k8s_document_without_a_kind_is_not_a_resource():
+    """A values file, or a trailing comment after the last `---`, is not a
+    manifest; deleting it is not a deleted resource."""
+    with_trailer = K8S_ORIGINAL + "---\n# end of file\n"
+
+    assert handler._find_dropped_resources(with_trailer, K8S_ORIGINAL, "kubernetes") == []
+
+
+def test_k8s_reader_holds_on_crlf_manifests():
+    """A snapshot is the file as the repository holds it, and a repository
+    committed from Windows holds `---\\r\\n`. The line anchors have to see
+    through the \\r or every document after the first is folded into it."""
+    crlf = K8S_ORIGINAL.replace("\n", "\r\n")
+
+    assert handler._k8s_resources(crlf) == handler._k8s_resources(K8S_ORIGINAL)
+
+
+def test_unknown_target_type_is_refused_rather_than_passed():
+    """multi-iac-spec §4: a language with no structural guard must not reach
+    remediation. Refusing here is what makes the scanner's admission list
+    the only place a language can be enabled."""
+    with pytest.raises(ValueError, match="cloudformation"):
+        handler._find_dropped_resources("a", "b", "cloudformation")
 
 
 def _run_one_finding(mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, payload,
