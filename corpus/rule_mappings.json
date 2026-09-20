@@ -1,5 +1,5 @@
 {
-  "_comment": "Maps a scanner finding's (source, rule_id) to candidate controls in frameworks/*.json. mapping-agent uses this as a deterministic first pass -- it looks up candidates here, pulls their text from S3, and only asks the LLM to pick/cite/explain among those candidates rather than freely guessing a control_id. Trivy entries are keyed on the id Trivy emits (\"trivy:AWS-0086\"; the tfsec long id aws-s3-block-public-acls it replaced is not in Trivy's report). Entries are grounded in rule_ids actually observed -- first from lambda/iac-scanner/fixtures/vulnerable-sample, then from the third-party repositories in external/ (2026-09-18); extend as new rule_ids show up in real scans rather than guessing ahead of evidence. A rule with no confident mapping (e.g. pure hygiene checks like missing descriptions) is deliberately left out rather than force-mapped.",
+  "_comment": "Maps a scanner finding's (source, rule_id) to candidate controls in frameworks/*.json. mapping-agent uses this as a deterministic first pass -- it looks up candidates here, pulls their text from S3, and only asks the LLM to pick/cite/explain among those candidates rather than freely guessing a control_id. Trivy entries are keyed on the id Trivy emits (\"trivy:AWS-0086\"; the tfsec long id aws-s3-block-public-acls it replaced is not in Trivy's report). Entries are grounded in rule_ids actually observed -- first from lambda/iac-scanner/fixtures/vulnerable-sample, then from the third-party repositories in external/ (2026-09-18), then the Kubernetes rules from PugetScope's k8s/ under the pinned scanners (2026-09-19, KSV-*/CKV_K8S_*); extend as new rule_ids show up in real scans rather than guessing ahead of evidence. A rule with no confident mapping (e.g. pure hygiene checks like missing descriptions) is deliberately left out rather than force-mapped.",
   "mappings": {
     "checkov:CKV2_AWS_11": [
       {
@@ -27,6 +27,12 @@
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.1.5"
+      }
+    ],
+    "checkov:CKV2_K8S_6": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.3.2"
       }
     ],
     "checkov:CKV_AWS_1": [
@@ -227,6 +233,80 @@
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.3.1"
+      }
+    ],
+    "checkov:CKV_K8S_14": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-4"
+      },
+      {
+        "framework": "OWASP-CICD-Top10",
+        "control_id": "CICD-SEC-9"
+      }
+    ],
+    "checkov:CKV_K8S_20": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.6"
+      }
+    ],
+    "checkov:CKV_K8S_23": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.7"
+      }
+    ],
+    "checkov:CKV_K8S_28": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.8"
+      }
+    ],
+    "checkov:CKV_K8S_29": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.6.3"
+      }
+    ],
+    "checkov:CKV_K8S_30": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.6.3"
+      }
+    ],
+    "checkov:CKV_K8S_31": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.6.2"
+      }
+    ],
+    "checkov:CKV_K8S_35": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.4.1"
+      }
+    ],
+    "checkov:CKV_K8S_37": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.9"
+      }
+    ],
+    "checkov:CKV_K8S_38": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.1.6"
+      }
+    ],
+    "checkov:CKV_K8S_43": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-4"
+      },
+      {
+        "framework": "OWASP-CICD-Top10",
+        "control_id": "CICD-SEC-9"
       }
     ],
     "checkov:CKV_SECRET_2": [
@@ -449,6 +529,76 @@
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
+      }
+    ],
+    "trivy:KSV-0001": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.6"
+      }
+    ],
+    "trivy:KSV-0003": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.9"
+      }
+    ],
+    "trivy:KSV-0004": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.9"
+      }
+    ],
+    "trivy:KSV-0012": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.7"
+      }
+    ],
+    "trivy:KSV-0013": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-4"
+      },
+      {
+        "framework": "OWASP-CICD-Top10",
+        "control_id": "CICD-SEC-9"
+      }
+    ],
+    "trivy:KSV-0030": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.6.2"
+      }
+    ],
+    "trivy:KSV-0104": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.6.2"
+      }
+    ],
+    "trivy:KSV-0106": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.9"
+      }
+    ],
+    "trivy:KSV-0113": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.1.2"
+      }
+    ],
+    "trivy:KSV-0118": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.6.3"
+      }
+    ],
+    "trivy:KSV-0125": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.5.1"
       }
     ]
   }

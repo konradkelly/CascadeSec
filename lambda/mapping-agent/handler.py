@@ -76,6 +76,7 @@ _FRAMEWORK_FILES = {
     "CIS-AWS-1.4": "cis-aws-1.4.json",
     "OWASP-CloudNative": "owasp-cloud-native.json",
     "OWASP-CICD-Top10": "owasp-cicd-top10.json",
+    "CIS-Kubernetes-2.0": "cis-kubernetes-2.0.json",
 }
 
 MAPPING_OUTPUT_SCHEMA = {
