@@ -1,0 +1,99 @@
+{
+  "framework": "CIS-Kubernetes-2.0",
+  "framework_name": "CIS Kubernetes Benchmark v2.0.0",
+  "source": "https://workbench.cisecurity.org/benchmarks/26831",
+  "verified_against": "https://github.com/aquasecurity/kube-bench/blob/main/cfg/cis-2.0/policies.yaml",
+  "_comment": "Section 5 (Kubernetes Policies) only: it is the one section a manifest can satisfy or violate, where sections 1-4 audit the control plane and nodes. Control ids and titles verified 2026-09-19 against kube-bench's cis-2.0 config, which carries the benchmark's own numbering; section 5 is numbered identically in v1.10 through v2.0, so a citation here reads the same against any of them, but NOT against v1.9 or earlier, which had an extra 5.2.9 (added capabilities) and General Policies at 5.7 rather than 5.6. Partial by design, as the CIS AWS file is: the controls rules have been observed to raise, plus the Pod Security ones an eval case is likely to exercise. `text` is an original summary, not benchmark wording.",
+  "controls": [
+    {
+      "control_id": "5.1.2",
+      "title": "Minimize access to secrets",
+      "text": "Roles and ClusterRoles should not grant get, list or watch on Secret objects unless the subject genuinely needs to read them; a subject that can list secrets in a namespace can read every credential in it."
+    },
+    {
+      "control_id": "5.1.3",
+      "title": "Minimize wildcard use in Roles and ClusterRoles",
+      "text": "Roles and ClusterRoles should name the specific resources and verbs they grant rather than using \"*\", since a wildcard silently extends to every resource or verb the API server adds later."
+    },
+    {
+      "control_id": "5.1.6",
+      "title": "Ensure that Service Account Tokens are only mounted where necessary",
+      "text": "Pods and ServiceAccounts that do not call the Kubernetes API should set automountServiceAccountToken: false, so a compromised container does not hold a credential to the API server it never needed."
+    },
+    {
+      "control_id": "5.2.2",
+      "title": "Minimize the admission of privileged containers",
+      "text": "Containers should not set securityContext.privileged: true; a privileged container has every capability and unrestricted device access on the node, which is equivalent to root on the host."
+    },
+    {
+      "control_id": "5.2.3",
+      "title": "Minimize the admission of containers wishing to share the host process ID namespace",
+      "text": "Pods should not set hostPID: true, which exposes every process on the node to the container and lets it inspect or signal them."
+    },
+    {
+      "control_id": "5.2.4",
+      "title": "Minimize the admission of containers wishing to share the host IPC namespace",
+      "text": "Pods should not set hostIPC: true, which gives the container access to shared memory and IPC objects of every process on the node."
+    },
+    {
+      "control_id": "5.2.5",
+      "title": "Minimize the admission of containers wishing to share the host network namespace",
+      "text": "Pods should not set hostNetwork: true, which places the container on the node's own network stack, bypassing NetworkPolicy and exposing the node's interfaces and loopback services."
+    },
+    {
+      "control_id": "5.2.6",
+      "title": "Minimize the admission of containers with allowPrivilegeEscalation",
+      "text": "Containers should set securityContext.allowPrivilegeEscalation: false so a process cannot gain more privileges than its parent, for example through setuid binaries; the default when unset permits escalation."
+    },
+    {
+      "control_id": "5.2.7",
+      "title": "Minimize the admission of root containers",
+      "text": "Containers should run as a non-root user, by setting runAsNonRoot: true or a runAsUser that is not 0, so a breakout from the container does not start with UID 0 on the node."
+    },
+    {
+      "control_id": "5.2.8",
+      "title": "Minimize the admission of containers with the NET_RAW capability",
+      "text": "Containers should drop the NET_RAW capability, which the default capability set includes and which allows crafting raw packets for spoofing and sniffing on the pod network."
+    },
+    {
+      "control_id": "5.2.9",
+      "title": "Minimize the admission of containers with capabilities assigned",
+      "text": "Containers that do not need Linux capabilities to operate should drop them all (capabilities.drop: [\"ALL\"]) rather than keep the runtime's default set, adding back only the specific capability a workload requires."
+    },
+    {
+      "control_id": "5.2.11",
+      "title": "Minimize the admission of HostPath volumes",
+      "text": "Pods should not mount hostPath volumes, which expose the node's filesystem to the container and, with a writable path, allow escalation to the node."
+    },
+    {
+      "control_id": "5.2.12",
+      "title": "Minimize the admission of containers which use HostPorts",
+      "text": "Containers should not bind hostPort, which exposes the container directly on the node's network interface outside the cluster's Service and NetworkPolicy model."
+    },
+    {
+      "control_id": "5.3.2",
+      "title": "Ensure that all Namespaces have NetworkPolicies defined",
+      "text": "Every namespace running workloads should define NetworkPolicy objects for its pods; without one, a pod accepts traffic from every other pod in the cluster by default."
+    },
+    {
+      "control_id": "5.4.1",
+      "title": "Prefer using Secrets as files over Secrets as environment variables",
+      "text": "Secrets should be mounted into containers as files rather than injected as environment variables, since environment variables are visible to child processes, in crash dumps and in logs that print the environment."
+    },
+    {
+      "control_id": "5.5.1",
+      "title": "Configure Image Provenance using ImagePolicyWebhook admission controller",
+      "text": "The cluster should only admit container images whose origin is verified, restricting workloads to images from trusted registries rather than any image a pod specification happens to name."
+    },
+    {
+      "control_id": "5.6.2",
+      "title": "Ensure that the seccomp profile is set to docker/default in your Pod definitions",
+      "text": "Pod and container securityContext should set seccompProfile.type to RuntimeDefault (the docker/default profile), which blocks a set of syscalls a typical workload never needs; with no profile set, every syscall is allowed."
+    },
+    {
+      "control_id": "5.6.3",
+      "title": "Apply SecurityContext to your Pods and Containers",
+      "text": "Every pod and container should declare a securityContext setting its user, group, capabilities and other operating-system security controls explicitly, rather than inheriting the runtime's permissive defaults."
+    }
+  ]
+}

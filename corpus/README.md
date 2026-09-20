@@ -73,6 +73,48 @@ different judgement call: the `text` of a control is what `mapping-agent`
 cites verbatim, so adding one means writing text that will be quoted as
 ground truth.
 
+### Kubernetes (added 2026-09-19)
+
+`cis-kubernetes-2.0.json` is section 5 of the CIS Kubernetes Benchmark
+v2.0.0 -- the Policies section, the one a manifest can satisfy or violate;
+sections 1-4 audit the control plane and nodes. 18 controls. Ids and titles
+were verified against kube-bench's `cfg/cis-2.0/policies.yaml`, which
+carries the benchmark's own numbering (the benchmark PDF needs a CIS
+WorkBench login and is not redistributable, so the summaries are ours as
+above). Section 5 is numbered identically from v1.10 through v2.0; v1.9 and
+earlier are *not* the same numbering, so a citation here should not be read
+against them.
+
+The 23 new mappings are grounded the same way as the AWS ones: every rule
+was raised by the pinned Trivy 0.74.0 and checkov 3.3.16 on PugetScope's
+`k8s/` (14 manifests; 239 Trivy findings across 19 rules, 250 checkov across
+20). Measured against that scan, **296 of 489 findings (23 of 39 rules) now
+have a candidate control.** `:latest` tags and images not pinned by digest
+map to the same CNAS-4 / CICD-SEC-9 pair the Terraform module-pinning rules
+do, since it is the same problem.
+
+The 16 unmapped rules are unmapped on purpose, and again they cluster:
+
+- **Resource requests and limits** (`KSV-0011/0015/0016/0018`,
+  `CKV_K8S_10-13`; 104 findings) -- not in the CIS Kubernetes Benchmark at
+  all. A control gap, like log retention was for AWS, not a missing mapping.
+- **Read-only root filesystem** (`KSV-0014`, `CKV_K8S_22`; 28 findings, the
+  only unmapped rule Trivy rates HIGH) -- the benchmark reaches it only by
+  reference, 5.6.3 pointing at the Docker benchmark's list of security
+  contexts. Mapping it to 5.6.3 would be force-mapping: a container with a
+  securityContext and a writable root does not violate "apply a
+  SecurityContext".
+- **High UID/GID** (`KSV-0020/0021`, `CKV_K8S_40`; 42 findings) -- stricter
+  than 5.2.7, which asks for not-root, not for UID > 10000.
+- **Hygiene** -- liveness probes (`CKV_K8S_8`), `imagePullPolicy: Always`
+  (`CKV_K8S_15`), privileged ports (`KSV-0117`).
+
+What the number means for the pipeline: multi-iac-spec §5 warned that the
+only thing keeping 239 Kubernetes findings out of remediation was the
+*absence* of this corpus. It is no longer absent. 296 findings on one
+repository would each be drafted at full price, so the deliberate volume
+filter in that section is now due, not deferred.
+
 ## Not the corpus: `eval/`
 
 `eval/` is the detection-recall harness for `iac-scanner` (spec §7.1),
