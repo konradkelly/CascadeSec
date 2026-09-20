@@ -62,6 +62,9 @@ resource "aws_lambda_function" "remediation_agent" {
       # case of 120s each. Tied to the other functions' timeouts so the
       # numbers cannot drift apart silently.
       FINDING_TIME_RESERVE_SECONDS = aws_lambda_function.iac_scanner.timeout + aws_lambda_function.context_agent.timeout + 240
+      # The per-file draft budget; the backstop on remediation volume
+      # (multi-iac-spec §5).
+      MAX_DRAFTS_PER_FILE = var.max_drafts_per_file
     }
   }
 

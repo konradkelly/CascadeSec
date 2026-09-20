@@ -10,6 +10,12 @@ export type FindingStatus =
    *  is rejected, this finding comes back. Not 'resolved', which means a human
    *  accepted something. */
   | 'superseded'
+  /** The file's draft budget ran out before this finding was reached, so no
+   *  fix was drafted and nothing has been decided about it. Its own status
+   *  rather than 'mapped', so the count of what was not drafted is visible
+   *  instead of reading as "still waiting". The next run picks it up again;
+   *  once the drafted fixes are accepted, most come back superseded. */
+  | 'not-drafted'
   | 'resolved'
 
 export type ReviewAction = 'approved' | 'edited' | 'rejected'
@@ -142,6 +148,8 @@ export interface Finding {
   status: FindingStatus
   /** Set with status 'superseded': the finding whose fix cleared this one. */
   superseded_by?: string
+  /** Set with status 'not-drafted': which budget ran out, and how far it got. */
+  not_drafted_reason?: string
   proposed_fix?: ProposedFix | null
   created_at?: string
   updated_at?: string

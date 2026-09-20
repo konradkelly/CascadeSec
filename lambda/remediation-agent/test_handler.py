@@ -807,6 +807,7 @@ def test_handler_marks_fix_proposed_on_clean_self_check(mock_dynamodb, mock_s3, 
         "fix_proposed_count": 1,
         "needs_human_only_count": 0,
         "superseded_count": 0,
+        "not_drafted_count": 0,
         "error_count": 0,
         "remaining": 0,
     }
@@ -864,6 +865,7 @@ def test_handler_marks_needs_human_only_when_fix_does_not_clear_finding(
         "fix_proposed_count": 0,
         "needs_human_only_count": 1,
         "superseded_count": 0,
+        "not_drafted_count": 0,
         "error_count": 0,
         "remaining": 0,
     }
@@ -929,6 +931,7 @@ def test_handler_isolates_a_failing_finding_and_keeps_going(
         "fix_proposed_count": 1,
         "needs_human_only_count": 0,
         "superseded_count": 0,
+        "not_drafted_count": 0,
         "error_count": 1,
         "remaining": 0,
     }
@@ -1272,6 +1275,136 @@ def test_a_partially_cleared_rule_does_not_supersede(
     assert result["superseded_count"] == 0
     assert result["fix_proposed_count"] == 2
     assert mock_get_client.return_value.messages.create.call_count == 2
+
+
+# ---------- draft budget ----------
+
+@patch.object(handler, "MAX_DRAFTS_PER_FILE", 1)
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_findings_past_the_file_budget_are_written_not_drafted(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """The backstop for a file whose fixes come one field at a time. Past the
+    budget a finding is neither drafted nor left `mapped` (which would read as
+    still waiting): it gets its own status and the reason, so the count spec
+    §8.1 asks for -- N not drafted -- is a query, not an inference."""
+    before = _load_fixture("s3-bucket-encryption", "before")
+    after = _load_fixture("s3-bucket-encryption", "after")
+    original = _read_fixture_tf("s3-bucket-encryption", "before")
+    first_fix = _read_fixture_tf("s3-bucket-encryption", "after")
+    pair = _encryption_then_logging()
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": pair}, {"Items": before["findings"]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: original.encode())}
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response(
+        {"corrected_file_content": first_fix, "rationale": "Added SSE.", "assumptions": []}
+    )
+    # Logging still fires after the first fix, so the second is a real draft.
+    mock_lambda_client.invoke.side_effect = [_scan_reply(after)]
+
+    result = handler.handler({"pr_id": "chain-1"}, None)
+
+    assert result["fix_proposed_count"] == 1
+    assert result["not_drafted_count"] == 1
+    assert result["superseded_count"] == 0
+    # One model call, one scan: the budget stopped the second before either.
+    assert mock_get_client.return_value.messages.create.call_count == 1
+    assert mock_lambda_client.invoke.call_count == 1
+
+    written = mock_table.update_item.call_args_list[1].kwargs
+    assert written["Key"]["sk"] == pair[1]["sk"]
+    values = written["ExpressionAttributeValues"]
+    assert values[":status"] == "not-drafted"
+    assert values[":reason"] == "file draft budget reached (1 of 1)"
+    assert ":pf" not in values
+
+
+@patch.object(handler, "MAX_DRAFTS_PER_FILE", 1)
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_the_budget_does_not_stop_a_supersede(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """Superseded findings are free -- no model call -- and are the whole
+    reason one fix per file can be enough. Checking the budget first would
+    tell a finding an earlier fix already resolved that it was over budget,
+    hiding the resolution. So the supersede is checked first."""
+    before = _load_fixture("s3-bucket-encryption", "before")
+    after = _load_fixture("s3-bucket-encryption", "after")
+    original = _read_fixture_tf("s3-bucket-encryption", "before")
+    first_fix = _read_fixture_tf("s3-bucket-encryption", "after")
+    clears_both = {"findings": [f for f in after["findings"] if f["rule_id"] != LOGGING_RULE]}
+    pair = _encryption_then_logging()
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": pair}, {"Items": before["findings"]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: original.encode())}
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response(
+        {"corrected_file_content": first_fix, "rationale": "Added SSE.", "assumptions": []}
+    )
+    mock_lambda_client.invoke.side_effect = [_scan_reply(clears_both)]
+
+    result = handler.handler({"pr_id": "chain-1"}, None)
+
+    assert result["fix_proposed_count"] == 1
+    assert result["superseded_count"] == 1
+    assert result["not_drafted_count"] == 0
+
+
+@patch.object(handler, "MAX_DRAFTS_PER_FILE", 2)
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_the_budget_spans_a_files_continuations(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """In per-file mode a continuation carries the file's counters in, and
+    the drafts they count were spent on this file. Otherwise every yield
+    would hand the file a fresh budget and the cap would be per invocation,
+    which is not a cap on anything."""
+    before = _load_fixture("s3-bucket-encryption", "before")
+    original = _read_fixture_tf("s3-bucket-encryption", "before")
+    pair = _encryption_then_logging()
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": pair}, {"Items": before["findings"]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: original.encode())}
+
+    result = handler.handler({
+        "pr_id": "chain-1", "file": "main.tf",
+        "fix_proposed_count": 1, "needs_human_only_count": 1,
+    }, None)
+
+    assert result["not_drafted_count"] == 2
+    assert result["fix_proposed_count"] == 1     # carried, not reset
+    mock_get_client.assert_not_called()
+
+
+@patch.object(handler, "dynamodb")
+def test_not_drafted_findings_are_queried_back_up_with_mapped_ones(mock_dynamodb):
+    """A not-drafted finding is still a finding with a control and no fix.
+    The next run has to see it, or the budget would be a permanent drop
+    rather than a deferral."""
+    mock_table = MagicMock()
+    mock_table.query.return_value = {"Items": []}
+    mock_dynamodb.Table.return_value = mock_table
+
+    handler._query_mapped_findings("chain-1")
+
+    kwargs = mock_table.query.call_args.kwargs
+    assert "IN (:status, :not_drafted)" in kwargs["FilterExpression"]
+    assert kwargs["ExpressionAttributeValues"][":status"] == "mapped"
+    assert kwargs["ExpressionAttributeValues"][":not_drafted"] == "not-drafted"
 
 
 # ---------- chain root: where a file's chain starts ----------

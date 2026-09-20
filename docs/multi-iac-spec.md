@@ -165,6 +165,35 @@ open is worse than not scanning the language at all, because the output
 *looks* verified. This is the single most important sentence in this
 document.
 
+**Built for Kubernetes/Helm 2026-09-19**, ahead of the language, per the rule
+above. Three things the build settled that the table did not predict:
+
+- *The markers are one set, not one per language.* A marker is a substring
+  of an added line, so the union costs nothing but a held-for-review on the
+  odd `.tf` that gains a Kubernetes annotation -- and a per-language set is
+  exactly the shape that fails open when a language is added to the scanner
+  and not to it. `checkov.io/skip` is the only addition: Trivy's YAML
+  suppression is the same `trivy:ignore` comment as HCL, and checkov reads
+  `checkov:skip` comments in YAML too, so the annotation was the one form an
+  HCL-shaped set missed.
+- *The structural guard dispatches on `target_type` and refuses one it has
+  no reader for.* `_find_dropped_resources` raises on an unknown type rather
+  than returning `[]`, so the scanner's admission list is the only place a
+  language can be enabled. A record from before the §3.1 split carries no
+  `target_type` and defaults to `terraform`, which is what every such record
+  was by construction.
+- *The Kubernetes reader is line-based, not a YAML parser*, for two reasons
+  that turned out to be the same one: PyYAML is in neither the runtime nor
+  the layer, and a Helm template is not valid YAML until rendered -- the
+  guard has to hold on the file the agent edited. It reads each `---`
+  document's column-0 `kind:` and the `name:` at the first child indent of
+  its column-0 `metadata:`, which is enough to tell a deleted Service from a
+  tightened `securityContext`, and ignores the indented `kind:` under a
+  RoleBinding's `subjects`/`roleRef` and a pod template's nested `metadata`.
+  Anchors tolerate `\r`, because a snapshot from a Windows-committed repo
+  folds every document into the first without it (tested). Reports
+  `Kind/name` where Terraform reports `type.name`.
+
 **And where only one tool covers the language** (Bicep), the self-check has
 one source rather than two. That is weaker but not broken — the comparison is
 per `(source, rule_id)`, so it degrades to checkov alone. It should be said
@@ -180,6 +209,16 @@ coverage. Nothing maps `CKV_AZURE_*`, `KSV-*`, or `CKV_K8S_*`. mapping-agent
 leaves an unmapped finding at status `raw`, so **enabling Kubernetes today
 would produce 239 findings on PugetScope alone, every one of them unmapped
 and unremediated.** Breadth without corpus is a longer list, not more value.
+
+*Kubernetes corpus built 2026-09-19:* `cis-kubernetes-2.0.json`, section 5
+of CIS Kubernetes v2.0.0 (18 controls), and 23 mappings for the rules the
+pinned scanners raised on PugetScope's `k8s/` -- 296 of the 489 findings
+(Trivy's 239 plus checkov's 250) now have a candidate; the 16 unmapped
+rules and why are in `corpus/README.md`. Grounded the same way as the AWS
+corpus, by re-running both tools from the deployed image against the
+repository. So the paragraph above is no longer true, and the accidental
+filter it describes is gone the moment Kubernetes is admitted: the volume
+decision in this section is now the blocker for step 3, not a nice-to-have.
 
 Each language needs framework content before it is worth enabling:
 Kubernetes → CIS Kubernetes Benchmark; Bicep/ARM → CIS Azure. That is
@@ -237,6 +276,86 @@ accidental one goes away".** Candidates, none chosen:
   invisible, which is the failure mode §8.1 exists to prevent. Only with a
   clear "N not drafted" surfaced to the reviewer.
 
+### 5.1 Measured, and decided (2026-09-19)
+
+**The measurement the decision was blocked on.** PugetScope's
+`api-deployment.yaml`, hardened one edit unit at a time and rescanned by the
+pinned tools after each -- no model in the loop, so this is the ceiling the
+supersede can reach, not what a draft will reach:
+
+| edit | findings left | mapped left | cleared |
+|---|---|---|---|
+| (none) | 36 | 22 | -- |
+| `securityContext`, pod and container | 15 | 6 | **21** -- every 5.2.6/5.2.7/5.2.8/5.2.9/5.6.2/5.6.3 finding from both tools |
+| `resources` | 7 | 6 | 8, all unmapped |
+| image by digest | 4 | 3 | 3 |
+| `automountServiceAccountToken: false` | 3 | 2 | 1 |
+| liveness probe | 2 | 2 | 1, unmapped |
+| NetworkPolicy document | 2 | 2 | 0 (see below) |
+| secrets as files | 1 | 1 | 1 |
+
+22 mapped findings, **5 distinct edits**, one of which clears 16. So the
+per-file supersede is real -- if the first `securityContext` draft is
+complete. The prompt's "configure an added block completely" exception
+exists for exactly that and is unmeasured on YAML; the worst case, one field
+per draft, is ~16 calls for that family alone. Cross-file: 14 Deployments ×
+5-6 = **70-84 drafts for ~6 distinct decisions**, which is the estimate above
+confirmed. Two side findings: `CKV2_K8S_6` is a graph check across the whole
+scan directory, so the self-check -- which scans one file in isolation --
+only sees a NetworkPolicy added to the *same* file; and `KSV-0125` (trusted
+registry) has no fix that does not need to know the registry, so it will be
+held on an assumption every time.
+
+**Three facts that settled it:**
+
+1. **checkov reports no severity.** All 250 Kubernetes findings carry
+   `severity: None` (Prisma Cloud assigns them), which the scanner records as
+   `UNKNOWN`. A severity floor is Trivy-only in practice, and checkov is the
+   sole source for `CKV_K8S_35/38/43` and `CKV2_K8S_6`. The floor is dead --
+   and severity was the wrong axis anyway: the cost is repetition.
+2. **Files are remediated in parallel** (`Map`, `remediation_concurrency`
+   4). A cross-file "draft once" cannot live in remediation-agent without
+   racing; it belongs in mapping-agent (sequential over the PR) or in the
+   review layer.
+3. The spec's own line: ~$8-11 a run is tolerable; **the scarce resource is
+   reviewer attention**, and that is spent in the dashboard, not the
+   pipeline.
+
+**Decided: draft everything, collapse the repetition where it is reviewed,
+and cap the pipeline per file as a backstop.**
+
+- *The pipeline is unchanged.* Every mapped finding is drafted, every draft
+  is self-checked on its own file. §8.1 is untouched: nothing is filtered
+  from view.
+- *`MAX_DRAFTS_PER_FILE`* (remediation-agent, Terraform
+  `max_drafts_per_file`, default 8): the backstop between the measured 5-6
+  and the one-field-at-a-time 16. Superseded findings are free and do not
+  count. Past the budget a finding is written **`not-drafted`** with the
+  reason -- its own status, not `mapped`, so "N not drafted" is a count on
+  the PR page rather than an inference -- and the next run queries it back
+  up: once the drafted fixes are accepted, most come back superseded at
+  baseline 0 without a call, and the rest get a fresh budget. Per file
+  because of fact 2. The budget spans a file's continuations, since the
+  counters a continuation carries in are that file's.
+- *The dashboard groups drafted fixes by `(target_type, framework,
+  control_id)`* -- "By control" on the PR page -- one card per group, the
+  files inside it, and a group approve for the fixes that are
+  scanner-verified `fix-proposed` with no unmet prerequisite. Keyed on the
+  control rather than the rule, because the same `securityContext` fix is
+  reached by a Trivy rule and a checkov rule. A `needs-human-only` fix is
+  listed in the group and never bulk-approved: it is held because it deletes
+  something or rests on a claim, and that is a per-fix judgement by
+  construction. Each approval is its own audit event, noted as one of the
+  group, so the trail explains itself without the page.
+
+*Rejected:* the severity floor (fact 1); a per-PR cap as the primary filter
+(the first N drafts are still fourteen copies, so it bounds cost without
+reducing decisions). *Deferred, not rejected:* fix-once-apply-many in the
+pipeline -- the right shape for the drafting cost, and fact 2 says how:
+mapping-agent defers later occurrences of a pattern behind the first, and
+approval triggers drafting the rest with the approved diff as template. Its
+own spec, if the drafting cost ever matters more than it does now.
+
 ## 6. Order, and why
 
 By cost, and each step earns the next:
@@ -254,8 +373,10 @@ By cost, and each step earns the next:
    from 71/73 only because the two OpenTofu cases were added).
 3. **Kubernetes/Helm** — the planned v2. Trivy does it today, the YAML is
    already in the snapshot for context-agent. Gated on: CIS Kubernetes in the
-   corpus, annotation-based suppression markers, a YAML structural guard,
-   eval cases, and a decision on volume (§5).
+   ~~corpus~~ (built 2026-09-19, §5), ~~annotation-based suppression
+   markers, a YAML structural guard~~ (both built 2026-09-19, §4), eval
+   cases, and ~~a decision on volume~~ (decided and built 2026-09-19,
+   §5.1). What is left is the eval cases and the admission itself.
 4. **CloudFormation.** AWS, so much of the corpus carries over — the same CIS
    AWS controls, reached through different rule ids. Cheapest of the
    remaining.
@@ -318,10 +439,10 @@ to find out whether the schema mapping holds.**
 - [x] Rename `terraform-scanner` → `iac-scanner` (§3). Decided 2026-09-16;
       done with the multi-type refactor so the destroy-and-create happens
       once.
-- [ ] The deliberate filter on remediation volume (§5), before corpus growth
-      removes the accidental one. Leaning: a severity floor, because it is
-      the only candidate that changes nothing structural. Blocked on
-      measuring how much the per-file supersede already collapses.
+- [x] The deliberate filter on remediation volume (§5). Measured and
+      decided 2026-09-19 (§5.1): draft everything, group by control at
+      review, `MAX_DRAFTS_PER_FILE` as the backstop. The severity floor it
+      was leaning toward is dead -- checkov reports no severity.
 - [x] `iac_type` splits into `target_type` and `finding_class` (§3.1).
       Decided 2026-09-16, done with the function rename. Both are per
       finding, from the tool's reported `Type`/`Class`, which both tools
@@ -331,4 +452,11 @@ to find out whether the schema mapping holds.**
       milder than §7, but not nothing.
 - [ ] Whether a language with single-tool coverage (Bicep) is enabled at all,
       given the weaker self-check, or held until Trivy adds a Bicep scanner.
-- [ ] Which CIS benchmark editions to vendor, and their licensing.
+- [x] Which CIS benchmark editions to vendor, and their licensing. Decided
+      2026-09-19 for Kubernetes: v2.0.0, the current edition (Kubernetes
+      1.34-1.35), section 5 only. Ids and titles are verified against
+      kube-bench's public config rather than the benchmark PDF, and the
+      control text is our own summary, as it is for CIS AWS. Section 5's
+      numbering has been stable since v1.10, so the choice of edition
+      within 1.10-2.0 does not change a citation; v1.9 and earlier differ.
+      Azure is still open.

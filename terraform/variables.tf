@@ -51,3 +51,9 @@ variable "remediation_concurrency" {
   type        = number
   default     = 4
 }
+
+variable "max_drafts_per_file" {
+  description = "How many fixes one pipeline run may draft for one file (remediation-agent's MAX_DRAFTS_PER_FILE). Superseded findings cost nothing and do not count. Past the budget a finding is written not-drafted with the reason and picked up by the next run. Sized from measurement (multi-iac-spec §5): a Kubernetes Deployment's ~22 mapped findings need ~5 distinct edits when the model drafts a block completely, ~16 when it drafts one field at a time; 8 is the backstop between the two, not the expected path."
+  type        = number
+  default     = 8
+}
