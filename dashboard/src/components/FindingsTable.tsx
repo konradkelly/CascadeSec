@@ -24,6 +24,8 @@ const ALL_STATUSES: FindingStatus[] = [
   'mapped',
   'fix-proposed',
   'needs-human-only',
+  'superseded',
+  'not-drafted',
   'resolved',
 ]
 

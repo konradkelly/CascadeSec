@@ -456,6 +456,16 @@ textarea {
   font-style: italic;
 }
 
+/* Not reached by the file's draft budget: nothing drafted, nothing decided.
+   Warn-coloured like needs-human, because it is work the reviewer has not
+   seen yet, but dashed to say there is no fix behind it. */
+.badge--not-drafted {
+  background: var(--warn-dim);
+  border-color: var(--warn);
+  border-style: dashed;
+  color: var(--warn);
+}
+
 .badge--resolved {
   background: var(--neutral-dim);
   border-color: var(--neutral);
@@ -552,6 +562,62 @@ textarea {
   font-size: 0.7rem;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+/* View toggle: by finding / by control */
+
+.view-toggle {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Fix groups: one card per (control, target type), the same fix across
+   files listed inside it. */
+
+.fix-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.fix-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  padding: 0.9rem 1rem;
+}
+
+.fix-group__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.6rem;
+}
+
+.fix-group__header p {
+  margin: 0;
+}
+
+.fix-group__target {
+  margin-left: 0.5rem;
+}
+
+.fix-group .findings-table--compact {
+  margin-bottom: 0.75rem;
+}
+
+.fix-group__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fix-group__confirm {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
 }
 
 /* Findings table */

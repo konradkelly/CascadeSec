@@ -92,6 +92,21 @@ CONTEXT_AGENT_FUNCTION_NAME = os.environ.get("CONTEXT_AGENT_FUNCTION_NAME")
 # drift apart; the default here is only for a direct invoke without it.
 FINDING_TIME_RESERVE_MS = int(os.environ.get("FINDING_TIME_RESERVE_SECONDS", "690")) * 1000
 
+# How many fixes one run may draft for one file. Superseded findings are
+# free and do not count; only a model call does. Past the budget a finding
+# is written as not-drafted, with the reason, and picked up again by the
+# next run -- where, once the drafted fixes are accepted, most of them are
+# superseded at baseline 0 without a call, and the rest get a fresh budget.
+#
+# Sized from measurement, not guessed (multi-iac-spec §5, 2026-09-19): a
+# PugetScope Deployment carries 22 mapped findings that need 5 distinct
+# edits, one of which clears 16 of the 22. The budget is the backstop for
+# the case where the model drafts them one field at a time instead -- ~16
+# calls for the securityContext family alone -- not the expected path. It is
+# per file because files are remediated in parallel (Map, concurrency 4) and
+# this invocation cannot see the others.
+MAX_DRAFTS_PER_FILE = int(os.environ.get("MAX_DRAFTS_PER_FILE", "8"))
+
 s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
 secretsmanager = boto3.client("secretsmanager")
@@ -184,6 +199,7 @@ def handler(event, context):
     fix_proposed_count = event.get("fix_proposed_count", 0)
     needs_human_count = event.get("needs_human_only_count", 0)
     superseded_count = event.get("superseded_count", 0)
+    not_drafted_count = event.get("not_drafted_count", 0)
     error_count = event.get("error_count", 0)
     # How many of this invocation's findings were left untouched, and the fix
     # the next invocation should root at. Both stay at their defaults unless
@@ -216,6 +232,11 @@ def handler(event, context):
         # and aws-s3-enable-bucket-encryption wants any encryption, so a KMS
         # fix satisfies both.
         cleared_by = {}
+        # Drafts this run has already spent on this file. In per-file mode the
+        # counters carried in from a continuation are this file's, so the
+        # budget spans continuations; in whole-PR mode they are the PR's, and
+        # the budget is per invocation.
+        drafted = (fix_proposed_count + needs_human_count) if only_file else 0
 
         for index, finding in enumerate(findings):
             # Yield rather than be killed. A timeout mid-finding would lose
@@ -258,6 +279,18 @@ def handler(event, context):
                 superseded_count += 1
                 continue
 
+            # Checked after the supersede, not before: a superseded finding
+            # costs nothing, and telling it "over budget" would hide that an
+            # earlier fix already resolved it.
+            if drafted >= MAX_DRAFTS_PER_FILE:
+                logger.info(
+                    "finding %s not drafted: %d of %d drafts spent on %s",
+                    finding["finding_id"], drafted, MAX_DRAFTS_PER_FILE, file_path,
+                )
+                _write_not_drafted(finding, drafted)
+                not_drafted_count += 1
+                continue
+
             try:
                 outcome = _remediate_finding(
                     pr_id, finding, base_content, baseline_counts, list(applies_after),
@@ -272,6 +305,7 @@ def handler(event, context):
                 error_count += 1
                 continue
 
+            drafted += 1
             if outcome.final_passed:
                 fix_proposed_count += 1
             else:
@@ -308,6 +342,7 @@ def handler(event, context):
         "fix_proposed_count": fix_proposed_count,
         "needs_human_only_count": needs_human_count,
         "superseded_count": superseded_count,
+        "not_drafted_count": not_drafted_count,
         "error_count": error_count,
         # Non-zero means "invoke me again with this output as the input".
         "remaining": remaining,
@@ -573,10 +608,14 @@ def _query_findings_on_file(pr_id, file_path):
 
 
 def _query_mapped_findings(pr_id, only_file=None):
+    """Findings with a control and no fix yet: mapped, and not-drafted from a
+    run whose budget for the file ran out. Both are the same thing to this
+    loop -- something to draft, or to supersede if a fix already cleared it."""
     table = dynamodb.Table(DYNAMODB_TABLE)
     names = {"#status": "status"}
-    values = {":pk": f"PR#{pr_id}", ":sk_prefix": "FINDING#", ":status": "mapped"}
-    filter_expression = "#status = :status"
+    values = {":pk": f"PR#{pr_id}", ":sk_prefix": "FINDING#",
+              ":status": "mapped", ":not_drafted": "not-drafted"}
+    filter_expression = "#status IN (:status, :not_drafted)"
     if only_file:
         names["#file"] = "file"
         values[":file"] = only_file
@@ -1082,6 +1121,30 @@ def _write_superseded(finding, superseded_by):
         ExpressionAttributeValues={
             ":status": "superseded",
             ":by": superseded_by,
+            ":now": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+def _write_not_drafted(finding, drafted):
+    """Record that the file's draft budget ran out before this finding.
+
+    Like superseded, no proposed_fix is written and review-api refuses an
+    approve or edit on it. Unlike superseded, nothing has been decided about
+    it -- so the status is its own, not folded into `mapped` where it would
+    read as "still waiting" and never surface as the count spec §8.1 asks
+    for. The next run queries it back up with the mapped ones.
+    """
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    table.update_item(
+        Key={"pk": finding["pk"], "sk": finding["sk"]},
+        UpdateExpression=(
+            "SET #status = :status, not_drafted_reason = :reason, updated_at = :now"
+        ),
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={
+            ":status": "not-drafted",
+            ":reason": f"file draft budget reached ({drafted} of {MAX_DRAFTS_PER_FILE})",
             ":now": datetime.now(timezone.utc).isoformat(),
         },
     )

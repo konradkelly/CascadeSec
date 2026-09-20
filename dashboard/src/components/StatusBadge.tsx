@@ -6,6 +6,7 @@ const LABELS: Record<FindingStatus, string> = {
   'fix-proposed': 'Fix proposed',
   'needs-human-only': 'Needs human',
   superseded: 'Superseded',
+  'not-drafted': 'Not drafted',
   resolved: 'Resolved',
 }
 

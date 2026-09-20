@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ApiClientError, listFindings } from '../api/client'
 import { FindingsTable } from '../components/FindingsTable'
+import { FixGroups } from '../components/FixGroups'
+import { DRAFTED_STATUSES } from '../review/fixGroups'
 import type { Finding, FindingStatus } from '../types/finding'
 
 export function PrFindingsPage() {
@@ -10,6 +12,10 @@ export function PrFindingsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<FindingStatus | 'all'>('all')
+  // 'by-control' collapses the same fix drafted across many files into one
+  // decision (docs/multi-iac-spec.md §5). Offered only once there is
+  // something to collapse.
+  const [view, setView] = useState<'by-finding' | 'by-control'>('by-finding')
 
   const load = useCallback(async () => {
     if (!prId) return
@@ -65,7 +71,7 @@ export function PrFindingsPage() {
       {!loading && !error && (
         <>
           <div className="summary-cards">
-            {(['fix-proposed', 'needs-human-only', 'mapped', 'raw', 'resolved'] as const).map(
+            {(['fix-proposed', 'needs-human-only', 'not-drafted', 'mapped', 'raw', 'resolved'] as const).map(
               (status) =>
                 statusCounts[status] ? (
                   <button
@@ -81,12 +87,37 @@ export function PrFindingsPage() {
             )}
           </div>
 
-          <FindingsTable
-            prId={prId}
-            findings={findings}
-            statusFilter={statusFilter}
-            onStatusFilterChange={setStatusFilter}
-          />
+          {findings.some((f) => DRAFTED_STATUSES.has(f.status)) && (
+            <div className="view-toggle" role="group" aria-label="View">
+              <button
+                type="button"
+                className={`btn btn--small${view === 'by-finding' ? ' btn--primary' : ' btn--secondary'}`}
+                aria-pressed={view === 'by-finding'}
+                onClick={() => setView('by-finding')}
+              >
+                By finding
+              </button>
+              <button
+                type="button"
+                className={`btn btn--small${view === 'by-control' ? ' btn--primary' : ' btn--secondary'}`}
+                aria-pressed={view === 'by-control'}
+                onClick={() => setView('by-control')}
+              >
+                By control
+              </button>
+            </div>
+          )}
+
+          {view === 'by-control' ? (
+            <FixGroups prId={prId} findings={findings} onReviewed={load} />
+          ) : (
+            <FindingsTable
+              prId={prId}
+              findings={findings}
+              statusFilter={statusFilter}
+              onStatusFilterChange={setStatusFilter}
+            />
+          )}
         </>
       )}
     </div>
