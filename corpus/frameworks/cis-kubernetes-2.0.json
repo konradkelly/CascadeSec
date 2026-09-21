@@ -86,6 +86,11 @@
       "text": "Secrets should be mounted into containers as files rather than injected as environment variables, since environment variables are visible to child processes, in crash dumps and in logs that print the environment."
     },
     {
+      "control_id": "5.4.2",
+      "title": "Consider external secret storage",
+      "text": "Secrets should be held in a dedicated secret-management system rather than in Kubernetes Secret objects alone. A Kubernetes Secret is base64-encoded, not encrypted: without encryption at rest enabled on etcd, anyone who can read etcd or holds broad API access reads every secret in plaintext, and a Secret committed to version control is plaintext to everyone with the repository."
+    },
+    {
       "control_id": "5.5.1",
       "title": "Configure Image Provenance using ImagePolicyWebhook admission controller",
       "text": "The cluster should only admit container images whose origin is verified, restricting workloads to images from trusted registries rather than any image a pod specification happens to name."

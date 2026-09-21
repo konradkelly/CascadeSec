@@ -51,10 +51,10 @@ every other number in this file was produced.
 
 | | |
 |---|---|
-| labelled pairs | 51, all firing |
-| by source | checkov 25/25 · trivy 26/26 |
-| labelled pairs with a candidate control | **40/42 (95%)** |
-| all distinct rules these cases raise | **45/52 (87%)** mapped |
+| labelled pairs | 52, all firing |
+| by source | checkov 25/25 · trivy 27/27 |
+| labelled pairs with a candidate control | **41/43 (95%)** |
+| all distinct rules these cases raise | **46/53 (87%)** mapped |
 
 The labelled-pair coverage is far above Terraform's 72% for one reason worth
 naming: these cases were written *after* the CIS Kubernetes corpus, against
@@ -89,12 +89,12 @@ purpose: it is the PugetScope shape, one missing block raising eleven
 labelled pairs across both tools, and it is what keeps the per-file collapse
 in multi-iac-spec §5.1 measurable.
 
-### The third miss: a literal password in an env var
+### The third miss, and the check that closed it
 
 Added 2026-09-20 after the cases above, from a question about what
 `k8s-secret-in-env` actually proves. **A hardcoded password in a container's
-`env:` is detected by neither tool, and the direction is backwards: the
-*correct* form raises a finding and the dangerous one does not.**
+`env:` was detected by neither tool, and the direction was backwards: the
+*correct* form raised a finding and the dangerous one did not.**
 
 | manifest | fires |
 |---|---|
@@ -117,9 +117,33 @@ position fires `CKV_SECRET_2`, because `AWSKeyDetector` matches a shape and
 needs no keyword. The blind spot is confined to credentials that are only
 recognisable from the name beside them.
 
-This is the third labelled miss in the eval and the first that is not a
-Terraform one. Closing it means a custom check, the way `IACP-0001` closed
-the port-range gap -- and this is the number that should move when it does.
+It was the third labelled miss in the eval and the first that was not a
+Terraform one. **`IACP-0002` closes it** (`lambda/iac-scanner/checks/`), the
+way `IACP-0001` closed the port-range gap, so `k8s-literal-secret-in-env` is
+now a labelled hit rather than a labelled miss.
+
+The check pairs the keyword with the value structurally rather than by
+entropy: an `env` entry whose name contains a credential keyword and whose
+value is a literal. **Entropy is deliberately not scored** -- a weak password
+is still a hardcoded credential, and `changeme` in a manifest is a finding,
+not a false positive. It walks Pod, Deployment, ReplicaSet, StatefulSet,
+DaemonSet, ReplicationController, Job and CronJob, and `initContainers` as
+well as `containers`, since a schema-migration init container is a normal
+place for a password to sit.
+
+What it excludes is only what is not a credential by construction: an empty
+value, a `$(VAR)` reference to another variable (Kubernetes expands those at
+runtime, and PugetScope's `DATABASE_URL` is built that way), and names that
+point *at* a secret rather than hold one -- `..._NAME`, `..._FILE`,
+`..._PATH`. Verified against eight fixtures covering each branch, and
+against PugetScope's twelve real manifests, where it raises **zero**: that
+repository uses `secretKeyRef` and `$(VAR)` throughout, which is exactly the
+code the check must stay quiet on.
+
+Like `IACP-0001` it admits cases a human may judge acceptable -- a throwaway
+value in a local-development overlay looks exactly like this finding. Whether
+that matters is a reviewer's call recorded in the dashboard, not something
+the scanner decides (spec §8.1).
 
 ## Mapping coverage
 
