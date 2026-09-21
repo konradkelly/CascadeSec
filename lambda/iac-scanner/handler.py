@@ -100,6 +100,17 @@ SCAN_TIMEOUT_SECONDS = 240
 # .tfvars: Trivy auto-loads terraform.tfvars and *.auto.tfvars to resolve
 # variables, and checkov's secrets framework scans them for literals.
 #
+# .yaml/.yml are Kubernetes manifests, added 2026-09-20. Unlike every other
+# suffix here the extension does not say what the file is: a .yaml is a
+# manifest, a Helm template, a CloudFormation stack, a CI workflow or none of
+# them. Nothing pre-classifies it -- the admission lists below do, and both
+# tools were measured on a directory holding all five (2026-09-20): each
+# reported only the Kubernetes manifest and skipped the rest silently, with
+# no parse error and nothing on stderr. So a repository full of unrelated
+# YAML costs a download and nothing else. scripts/scan.py already uploaded
+# these for context-agent, so the snapshot does not change shape; what
+# changes is that the scanner now opens them.
+#
 # .tofu/.tofu.json are OpenTofu's, and are the same HCL -- Trivy parses them
 # as terraform, including blocks Terraform itself rejects (measured, see
 # multi-iac-spec §2). A directory holding both main.tf and main.tofu is
@@ -108,13 +119,14 @@ SCAN_TIMEOUT_SECONDS = 240
 # 2026-09-12 this was .tf alone, which is exactly where a hardcoded password
 # is *not* -- it is in the .tfvars that was never uploaded. scripts/scan.py
 # and corpus/eval/run_eval.py upload the same set; keep the three aligned.
-SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json")
+SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json",
+                     ".yaml", ".yml")
 
 # checkov frameworks. `secrets` is detect-secrets over every file in the
 # snapshot: AWS key patterns, `password = "..."` assignments, high-entropy
 # strings. It was off, so spec §2's "hardcoded secrets" goal measured 75% on
 # the eval corpus with the miss being a literal RDS master password.
-CHECKOV_FRAMEWORKS = "terraform,secrets"
+CHECKOV_FRAMEWORKS = "terraform,kubernetes,secrets"
 
 # Trivy scans every config type it knows unless told otherwise, so this is
 # the admission list and it is deliberately short. A language reaches
@@ -122,7 +134,21 @@ CHECKOV_FRAMEWORKS = "terraform,secrets"
 # (multi-iac-spec §4); until then, finding it would mean drafting fixes whose
 # gates fail open. OpenTofu needs no entry -- Trivy reports .tofu as
 # terraform.
-TRIVY_MISCONFIG_SCANNERS = "terraform"
+#
+# kubernetes added 2026-09-20, with its gates built first: the annotation
+# marker and the YAML structural guard landed in remediation-agent on
+# 2026-09-19, the CIS Kubernetes corpus on the same day, and the eval cases
+# with this change. `helm` is deliberately NOT here even though Trivy
+# supports it and the chart files are already in the snapshot -- see
+# multi-iac-spec §6 step 3. Two reasons, and the second is the blocking one:
+# rendering a chart executes its templates, and the self-check scans one
+# corrected file in isolation, where a template without its Chart.yaml and
+# values.yaml renders nothing at all. No findings on a rescan is exactly what
+# this pipeline reads as "the fix worked", so enabling helm would make the
+# self-check fail open on every chart. Measured on a chart in the same mixed
+# directory: with helm off, Trivy skips the template silently rather than
+# reporting a parse error.
+TRIVY_MISCONFIG_SCANNERS = "terraform,kubernetes"
 # The secrets runner only opens files on checkov's SUPPORTED_FILE_EXTENSIONS
 # (.tf, .yml, .yaml, .json, .template, .bicep, .hcl) unless told to scan
 # everything. .tfvars is not on that list, which is the one file a hardcoded

@@ -140,8 +140,10 @@ def test_trivy_is_run_offline_with_the_projects_own_checks(mock_run):
     assert args[args.index("--check-namespaces") + 1] == "user"
     # The second half of language admission -- the download filter is the
     # first. Terraform covers OpenTofu; anything else needs its gates built
-    # before it appears here (docs/multi-iac-spec.md §4).
-    assert args[args.index("--misconfig-scanners") + 1] == "terraform"
+    # before it appears here (docs/multi-iac-spec.md §4). kubernetes joined
+    # on 2026-09-20, once its markers, structural guard, corpus and eval
+    # cases existed.
+    assert args[args.index("--misconfig-scanners") + 1] == "terraform,kubernetes"
 
 
 @patch.object(handler.subprocess, "run")
@@ -307,9 +309,10 @@ def test_snapshot_download_takes_every_file_type_the_scanner_reads(mock_s3):
         {"Key": "scans/pr-1/prod.auto.tfvars.json"},
         {"Key": "scans/pr-1/main.tofu"},
         {"Key": "scans/pr-1/modules/vpc/net.tofu.json"},
+        {"Key": "scans/pr-1/k8s/deploy.yaml"},
+        {"Key": "scans/pr-1/k8s/service.yml"},
         {"Key": "scans/pr-1/README.md"},
         {"Key": "scans/pr-1/.terraform.lock.hcl"},
-        {"Key": "scans/pr-1/k8s/deploy.yaml"},
     ]}]
 
     with patch.object(handler.os, "makedirs"):
@@ -317,27 +320,47 @@ def test_snapshot_download_takes_every_file_type_the_scanner_reads(mock_s3):
 
     assert [pathlib_name(p) for p in downloaded] == [
         "main.tf", "main.tf.json", "terraform.tfvars", "prod.auto.tfvars.json",
-        "main.tofu", "net.tofu.json",
+        "main.tofu", "net.tofu.json", "deploy.yaml", "service.yml",
     ]
 
 
 @patch.object(handler, "s3")
 def test_the_snapshot_stops_at_the_languages_the_scanner_admits(mock_s3):
-    """scripts/scan.py uploads YAML for context-agent, which reads the same
-    prefix. The scanner must not pick it up: Trivy would scan it as
-    Kubernetes, and remediation's suppression and deletion gates are
-    HCL-shaped and would fail open on it (docs/multi-iac-spec.md §4). The
-    download filter is the first of the two guards; --misconfig-scanners is
-    the other."""
+    """A language reaches the scanner only once its remediation gates exist
+    (docs/multi-iac-spec.md §4). Bicep and npm have none, so their files are
+    not downloaded however well the tools would parse them. The download
+    filter is the first of the two guards; --misconfig-scanners is the
+    other."""
     mock_s3.get_paginator.return_value.paginate.return_value = [{"Contents": [
-        {"Key": "scans/pr-1/k8s/deployment.yaml"},
-        {"Key": "scans/pr-1/k8s/service.yml"},
         {"Key": "scans/pr-1/template.bicep"},
         {"Key": "scans/pr-1/package-lock.json"},
+        {"Key": "scans/pr-1/Dockerfile"},
+        {"Key": "scans/pr-1/cloudformation.template"},
     ]}]
 
     with patch.object(handler.os, "makedirs"):
         assert handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x") == []
+
+
+@patch.object(handler.subprocess, "run")
+def test_helm_is_not_admitted_even_though_trivy_supports_it(mock_run):
+    """The one exclusion that is not about missing gates. Chart files are in
+    the snapshot already (they are .yaml), and Trivy renders charts natively,
+    so enabling `helm` would be one word. It stays off because the self-check
+    scans a single corrected file in isolation: a template without its
+    Chart.yaml and values.yaml renders nothing, no findings come back, and
+    this pipeline reads no findings as "the fix worked". That is the
+    fail-open §4 exists to prevent, so the word stays out until the
+    self-check can render a chart. See multi-iac-spec §6 step 3."""
+    mock_run.return_value = _proc(stdout=json.dumps(_trivy_report()), returncode=0)
+
+    handler._run_trivy(WORK_DIR)
+
+    args = mock_run.call_args.args[0]
+    scanners = args[args.index("--misconfig-scanners") + 1].split(",")
+    assert "helm" not in scanners
+    # The same reasoning, from the other side: these have no gates at all.
+    assert not {"cloudformation", "azure-arm", "dockerfile", "ansible"} & set(scanners)
 
 
 def pathlib_name(path):
@@ -385,7 +408,7 @@ def test_checkov_runs_the_secrets_framework_too(mock_run):
     handler._run_checkov(WORK_DIR)
 
     argv = mock_run.call_args.args[0]
-    assert argv[argv.index("--framework") + 1] == "terraform,secrets"
+    assert argv[argv.index("--framework") + 1] == "terraform,kubernetes,secrets"
     # Without this the secrets runner skips .tfvars: it is not on checkov's
     # SUPPORTED_FILE_EXTENSIONS, and that is where the passwords are.
     assert "--enable-secret-scan-all-files" in argv

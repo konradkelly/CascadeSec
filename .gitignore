@@ -28,3 +28,6 @@ venv/
 # OS / editor cruft
 .DS_Store
 Thumbs.db
+
+# pytest-cov output, written wherever a suite is run from.
+.coverage

@@ -371,12 +371,33 @@ By cost, and each step earns the next:
    and OpenTofu as the only enabled types, and the rename and field split
    in the same deploy. Eval held at 97.3% across the refactor (73/75, up
    from 71/73 only because the two OpenTofu cases were added).
-3. **Kubernetes/Helm** — the planned v2. Trivy does it today, the YAML is
-   already in the snapshot for context-agent. Gated on: CIS Kubernetes in the
-   ~~corpus~~ (built 2026-09-19, §5), ~~annotation-based suppression
-   markers, a YAML structural guard~~ (both built 2026-09-19, §4), eval
-   cases, and ~~a decision on volume~~ (decided and built 2026-09-19,
-   §5.1). What is left is the eval cases and the admission itself.
+3. **Kubernetes.** ✅ **Built 2026-09-20**, every gate first: the CIS
+   Kubernetes corpus and the two remediation gates (2026-09-19, §4 and §5),
+   the volume decision (§5.1), then 19 eval cases and a clean control, then
+   the admission — `.yaml`/`.yml` in `SNAPSHOT_SUFFIXES`, `kubernetes` in
+   `--misconfig-scanners` and `--framework`. 50 of 50 labelled pairs fire
+   locally against the pinned tools; the deployed number needs a rebuild and
+   a `run_eval.py` run.
+
+   **Helm is not in it.** Chart files are already in the snapshot — they are
+   `.yaml` — and Trivy renders charts natively, so enabling it is one word.
+   The word stays out because of the self-check, not because of the
+   rendering: remediation scans *one corrected file in isolation*, and a
+   template without its `Chart.yaml` and `values.yaml` renders nothing, so
+   the rescan returns no findings and this pipeline reads no findings as
+   "the fix worked". That is precisely the fail-open §4 exists to prevent.
+   Enabling Helm means teaching the self-check to rescan a chart, not adding
+   a scanner name. Measured alongside: with `helm` off, Trivy skips a chart
+   template silently rather than reporting a parse error, so the cost of
+   leaving it out is zero noise.
+
+   **What admission actually cost, measured 2026-09-20.** A `.yaml` is the
+   first suffix that does not say what the file is — manifest, Helm template,
+   CloudFormation stack, CI workflow, or none. Nothing pre-classifies it:
+   both tools were run over a directory holding all five, and each reported
+   only the Kubernetes manifest, skipping the rest silently with no parse
+   error and nothing on stderr. So the admission lists are the classifier,
+   and a repository full of unrelated YAML costs a download.
 4. **CloudFormation.** AWS, so much of the corpus carries over — the same CIS
    AWS controls, reached through different rule ids. Cheapest of the
    remaining.
@@ -447,9 +468,14 @@ to find out whether the schema mapping holds.**
       Decided 2026-09-16, done with the function rename. Both are per
       finding, from the tool's reported `Type`/`Class`, which both tools
       emit on every Result.
-- [ ] Whether Helm is scanned as charts (Trivy renders them) or only as
-      rendered output the user supplies. Rendering runs templates — far
-      milder than §7, but not nothing.
+- [x] Whether Helm is scanned as charts (Trivy renders them) or only as
+      rendered output the user supplies. **Decided 2026-09-20: neither, for
+      now.** The question turned out not to be about rendering safety at all
+      — the blocker is that the self-check rescans a single file, where a
+      chart template renders to nothing and an empty rescan reads as a
+      verified fix. Reopen it with a design for a chart-aware self-check
+      (rescan the chart directory, not the file), which is also what
+      `applies_after` would need to chain across a chart. See §6 step 3.
 - [ ] Whether a language with single-tool coverage (Bicep) is enabled at all,
       given the weaker self-check, or held until Trivy adds a Bicep scanner.
 - [x] Which CIS benchmark editions to vendor, and their licensing. Decided
