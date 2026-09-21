@@ -2,7 +2,7 @@
 
 The labelled corpus in `../eval` measures recall. Every case in it was
 written by someone who already knew what the scanner looks for, so it
-cannot say how the scanner behaves on Terraform nobody here wrote. This
+cannot say how the scanner behaves on code nobody here wrote. This
 directory points the same **deployed** function at third-party repositories
 and records what a label cannot: parse errors on real module trees, wall
 time against the function's timeout, mapping coverage on the real long tail
@@ -204,3 +204,85 @@ Add an entry to `repos.json` with `sha: null`, then run
 branch's tip, scan it, and record both. Prefer a `subdir` when the
 repository holds several independent roots (terragoat has one per cloud)
 so the baseline describes one thing.
+
+## Kubernetes repositories (added 2026-09-20)
+
+Three, chosen to mirror the Terraform three rather than to maximise
+findings:
+
+| repository | plays the part of | why |
+|---|---|---|
+| `madhuakula/kubernetes-goat` | terragoat | vulnerable by design; volume and remediation workload |
+| `GoogleCloudPlatform/microservices-demo` | terraform-aws-vpc | a maintained real application; false positives and repo shape |
+| `argoproj/argocd-example-apps` | terragrunt example | the same app packaged eight ways; what the scanner does with formats it does not handle |
+
+**Measured locally 2026-09-20**, with the pinned Trivy 0.74.0 / checkov
+3.3.16 from the scanner image and `IACP-0001`/`IACP-0002`, because the
+deployed function does not admit Kubernetes until the image is rebuilt.
+*Re-run `run_external.py --baseline` after that deploy to set the real
+baselines*; `repos.json` deliberately carries none yet, so the first
+deployed run establishes them rather than inheriting a number produced a
+different way.
+
+| repository | findings | distinct rules | mapped | files with findings |
+|---|---|---|---|---|
+| kubernetes-goat | 592 | 66 | 43 — 65% | 32 |
+| microservices-demo | 618 | 47 | 15 — 32% | 55 |
+| argocd-example-apps | 832 | 43 | 27 — 63% | 60 |
+
+2,042 findings across three repositories, against PugetScope's 489. Zero
+scan errors, and nothing on Trivy's stderr on any of them.
+
+### Mapping coverage falls the same way Terraform's did
+
+`../eval` reports 87% of distinct rules fired on the Kubernetes cases
+having a candidate control. On real repositories it is 32–65%, for exactly
+the reason the Terraform section above already records: the labelled cases
+were written against the corpus, and a real repository raises the long
+tail. **This is the number that matters, and it is the one PugetScope alone
+could not have produced** -- one workload's problems repeated, where these
+are three unrelated workloads' problems.
+
+One genuine corpus gap came out of it and is now closed: **`CKV_K8S_21` and
+`KSV-0110`, "the default namespace should not be used", were the single
+largest unmapped rule at 257 findings across the three.** That is CIS
+Kubernetes 5.6.4, which the first pass of the framework file did not
+vendor. Added, with both rules mapped to it.
+
+The rest of the unmapped tail is the same set the corpus README already
+argues for leaving alone, and seeing it hold on three unfamiliar
+repositories is the useful result: resource requests and limits (`KSV-0011`,
+`_0015`, `_0016`, `_0018`, `CKV_K8S_10`-`13`, ~200 findings, not in the
+benchmark), high UID/GID (`KSV-0020`/`_0021`, `CKV_K8S_40`, ~237, stricter
+than 5.2.7 asks), and read-only root filesystem (`KSV-0014`, `CKV_K8S_22`,
+~63, reached by the benchmark only by reference). None of those decisions
+needed revisiting.
+
+`microservices-demo` is the low one at 32% for a reason worth naming: its
+`.github/terraform/main.tf` is **GCP**, and raises `GCP-0051`, `GCP-0059`
+and friends. The corpus is AWS and Kubernetes, so every GCP rule is
+unmapped. It is the first non-AWS cloud any scan here has produced, and the
+same shape as the Azure gap multi-iac-spec §5 predicts for Bicep.
+
+### The packaging formats, confirmed on real charts
+
+The Helm exclusion (`multi-iac-spec` §6 step 3) was argued from a synthetic
+chart. These repositories carry four real ones -- `microservices-demo`'s
+`helm-chart/`, and argocd's `helm-guestbook`, `helm-dependency` and
+`helm-hooks`. Every chart's `templates/` raised **zero findings and zero
+parse errors**: with `helm` off, Trivy skips a template rather than failing
+on it, so the cost of leaving Helm out is nothing but the absence.
+
+`jsonnet-guestbook` is likewise untouched, for a simpler reason -- a
+`.jsonnet` file is not in `SNAPSHOT_SUFFIXES`, so it is never uploaded.
+Kustomize *is* scanned, because its overlays are plain `.yaml`: argocd's
+`kustomize-guestbook` and microservices-demo's `kustomize/` both produce
+findings. Worth knowing that a kustomize patch is read as a manifest in its
+own right, not as the overlay it is -- a patch fragment that removes a
+`securityContext` will not be understood as removing one.
+
+**GitHub Actions workflows raised nothing**, which confirms the admission
+list is doing the filtering: `microservices-demo/.github/workflows` holds
+nine `.yaml` files, all downloaded and none reported. The five findings
+under `.github` are from `.github/terraform/main.tf`, not from a workflow.
+
