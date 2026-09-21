@@ -618,3 +618,36 @@ def test_each_model_call_logs_its_usage_as_a_metric(capsys):
 def test_a_response_without_usage_logs_nothing(capsys):
     handler._log_usage(SimpleNamespace(content=[]))
     assert capsys.readouterr().out == ""
+
+
+@patch.object(handler, "_get_anthropic_client")
+def test_the_prompt_carries_the_scanner_s_words_for_the_rule_when_the_record_has_them(mock_get_client):
+    """The rationale this call writes is the reviewer's reason for the
+    mapping. A Trivy id is a number, so what the rule means comes from the
+    record's title and description (iac-scanner, 2026-09-21), and an older
+    record without them gets the prompt it always had."""
+    mock_get_client.return_value.messages.create.return_value = _model_reply({
+        "finding_id": "f1", "framework": "CIS-AWS-1.4", "control_id": "2.1.5",
+        "citation": "Block Public Access", "rationale": "r",
+    })
+    candidates = [{"framework": "CIS-AWS-1.4", "control_id": "2.1.5",
+                   "title": "S3 Block Public Access", "text": "All four settings.",
+                   "s3_key": "corpus/frameworks/cis-aws-1.4.json"}]
+
+    handler._call_mapping_agent({
+        **_finding(rule_id="AWS-0091", source="trivy"),
+        "title": "S3 Access Block should Ignore Public Acls",
+        "description": "S3 buckets should ignore public ACLs on buckets.",
+    }, candidates)
+    prompt = mock_get_client.return_value.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert (
+        "  rule_id: AWS-0091\n"
+        "  title: S3 Access Block should Ignore Public Acls\n"
+        "  description: S3 buckets should ignore public ACLs on buckets.\n"
+        "  severity: HIGH\n"
+    ) in prompt
+
+    handler._call_mapping_agent(_finding(rule_id="AWS-0091", source="trivy"), candidates)
+    prompt = mock_get_client.return_value.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert "  rule_id: AWS-0091\n  severity: HIGH\n" in prompt
+    assert "title: S3 Access" not in prompt

@@ -298,10 +298,19 @@ def _call_mapping_agent(finding, candidates):
         for c in candidates
     )
 
+    # The scanner's own words for the rule, when the record has them (added
+    # to iac-scanner 2026-09-21; an older record has only the id). A Trivy
+    # id is a number, and the rationale this call writes is what the
+    # reviewer reads as the reason for the mapping -- it should come from
+    # what the rule says, not from what the model remembers of the number.
+    rule_text = "".join(
+        f"  {key}: {finding[key]}\n" for key in ("title", "description") if finding.get(key)
+    )
     prompt = (
         "Scanner finding:\n"
         f"  source: {finding['source']}\n"
         f"  rule_id: {finding['rule_id']}\n"
+        f"{rule_text}"
         f"  severity: {finding['severity']}\n"
         f"  file: {finding['file']}\n\n"
         "Candidate controls (pick exactly one -- the single best match):\n"

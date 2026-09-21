@@ -1566,7 +1566,7 @@ def test_the_root_is_the_accepted_fix_with_the_longest_chain():
         mock_dynamodb.Table.return_value = mock_table
         mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: b"x")}
 
-        _, _, chain = handler._chain_root("chain-1", "main.tf")
+        _, _, _, chain = handler._chain_root("chain-1", "main.tf")
 
     assert [c["finding_id"] for c in chain] == ["f1", "f2", "f3"]
     assert mock_s3.get_object.call_args.kwargs["Key"] == "fixes/chain-1/f3/main.tf"
@@ -2039,3 +2039,150 @@ def test_a_draft_on_a_shifted_base_is_shown_the_original_lines(
     assert "lines may have moved" in second_prompt
     assert "Locate that configuration in the file below by its content" in second_prompt
     assert "locals {" in second_prompt
+
+
+# ---------- the prompt says what the rule means ----------
+
+def test_the_prompt_carries_the_rule_s_title_description_resource_and_control():
+    """A Trivy id is a number. On terragoat's s3.tf the model was given
+    `rule_id: AWS-0091` and added versioning; AWS-0091 is "ignore public
+    ACLs". Everything the scanner and the mapping already know about the
+    rule goes in front of the model, in the order it reads: what the rule
+    is, on what, and which control it has to satisfy."""
+    finding = {
+        **_mapped("AWS-0091", 42, "f1"),
+        "title": "S3 Access Block should Ignore Public Acls",
+        "description": "S3 buckets should ignore public ACLs on buckets and any objects they contain.",
+        "resource": "aws_s3_bucket.financials",
+        "control_mappings": [{
+            "framework": "CIS-AWS-1.4", "control_id": "2.1.5",
+            "citation_span": "All four S3 Block Public Access settings",
+        }],
+    }
+    with patch.object(handler, "_get_anthropic_client") as mock_get_client:
+        mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response(
+            {"corrected_file_content": "x", "rationale": "r", "assumptions": []}
+        )
+        handler._call_remediation_agent(finding, "x")
+
+    prompt = _prompt_of(mock_get_client, 0)
+    assert (
+        "  rule_id: AWS-0091\n"
+        "  title: S3 Access Block should Ignore Public Acls\n"
+        "  description: S3 buckets should ignore public ACLs on buckets and any objects they contain.\n"
+        "  resource: aws_s3_bucket.financials\n"
+        "  mapped control: CIS-AWS-1.4 2.1.5 -- All four S3 Block Public Access settings\n"
+        "  severity: HIGH\n"
+    ) in prompt
+
+
+def test_a_record_without_those_fields_gets_the_prompt_it_always_had():
+    """Findings written before the scanner carried them, and a checkov
+    finding's empty description: no line is emitted for an absent or empty
+    field, rather than "title: " with nothing after it."""
+    finding = {**_mapped("CKV_AWS_18", 1, "f1"), "title": "", "description": "", "resource": ""}
+    with patch.object(handler, "_get_anthropic_client") as mock_get_client:
+        mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response(
+            {"corrected_file_content": "x", "rationale": "r", "assumptions": []}
+        )
+        handler._call_remediation_agent(finding, "x")
+
+    prompt = _prompt_of(mock_get_client, 0)
+    assert "  rule_id: CKV_AWS_18\n  severity: HIGH\n" in prompt
+    for absent in ("title:", "description:", "resource:", "mapped control:"):
+        assert absent not in prompt
+
+
+# ---------- supersede per resource ----------
+
+def _on(finding, resource):
+    return {**finding, "resource": resource}
+
+
+def _two_buckets():
+    """One file, two buckets, and Trivy's block-public-ACLs rule on each. The
+    checkov finding on bucket a comes first in chain order, and its fix (a
+    complete public-access block) also settles AWS-0086 on that bucket."""
+    return sorted([
+        _on(_mapped("CKV2_AWS_6", 1, "f1", source="checkov"), "aws_s3_bucket.a"),
+        _on(_mapped("AWS-0086", 1, "f2"), "aws_s3_bucket.a"),
+        _on(_mapped("AWS-0086", 10, "f3"), "aws_s3_bucket.b"),
+    ], key=handler._remediation_order)
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_rule_a_chained_fix_settled_on_this_resource_is_superseded_while_it_still_fires_elsewhere(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """terragoat's s3.tf, 2026-09-21: five buckets, and a per-bucket fix takes
+    AWS-0086 from 5 to 4, never to 0, so the count-based supersede never
+    fired. Thirteen findings an earlier fix had already resolved were
+    drafted, the model returned the file unchanged, and each was scored as
+    a fix that failed to clear. The resource address is the difference
+    between "this bucket is done" and "the rule still fires on another"."""
+    trio = _two_buckets()
+    assert [f["finding_id"] for f in trio] == ["f1", "f2", "f3"]
+    # After f1's fix: AWS-0086 is gone from bucket a, still on bucket b.
+    after_f1 = {"findings": [_on(_mapped("AWS-0086", 10, "r3"), "aws_s3_bucket.b")]}
+    after_f3 = {"findings": []}
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": trio}, {"Items": trio}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: b"original")}
+    mock_get_client.return_value.messages.create.side_effect = [
+        _fake_anthropic_response({"corrected_file_content": "fix a", "rationale": "block a", "assumptions": []}),
+        _fake_anthropic_response({"corrected_file_content": "fix a b", "rationale": "block b", "assumptions": []}),
+    ]
+    mock_lambda_client.invoke.side_effect = [_scan_reply(after_f1), _scan_reply(after_f3)]
+
+    result = handler.handler({"pr_id": "chain-1"}, None)
+
+    assert result["fix_proposed_count"] == 2
+    assert result["superseded_count"] == 1
+    assert result["needs_human_only_count"] == 0
+    # f2 cost nothing: no draft, no scan.
+    assert mock_get_client.return_value.messages.create.call_count == 2
+    assert mock_lambda_client.invoke.call_count == 2
+
+    superseded = mock_table.update_item.call_args_list[1].kwargs
+    assert superseded["Key"]["sk"] == "FINDING#f2"
+    assert superseded["ExpressionAttributeValues"][":status"] == "superseded"
+    assert superseded["ExpressionAttributeValues"][":by"] == "f1"
+    # f3 was drafted against f1's content, as the chain says.
+    assert "fix a" in _prompt_of(mock_get_client, 1)
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_baseline_that_names_no_resources_never_supersedes_by_resource(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """A rescan from a scanner that does not carry the field leaves the
+    baseline's resource set empty, and "not in an empty set" would
+    supersede every finding behind the first fix. The per-resource check
+    is skipped, and the count-based one decides as it did before: AWS-0086
+    went 2 -> 1, not to 0, so f2 is drafted."""
+    trio = _two_buckets()
+    after_f1 = {"findings": [_mapped("AWS-0086", 10, "r3")]}  # no resource field
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": trio}, {"Items": [
+        {k: v for k, v in f.items() if k != "resource"} for f in trio
+    ]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: b"original")}
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response(
+        {"corrected_file_content": "fix", "rationale": "r", "assumptions": []}
+    )
+    mock_lambda_client.invoke.return_value = _scan_reply(after_f1)
+
+    result = handler.handler({"pr_id": "chain-1"}, None)
+
+    assert result["superseded_count"] == 0
+    assert mock_get_client.return_value.messages.create.call_count == 3

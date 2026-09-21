@@ -131,6 +131,10 @@ class _Outcome(typing.NamedTuple):
     scanner_verified: bool
     content: str | None
     rescan_counts: "collections.Counter | None"
+    # (source, rule_id, resource) for every rescan finding that names its
+    # resource -- see _present_triples. The counts say how many times a rule
+    # fires; this says on what.
+    rescan_triples: "set | None"
     # This fix's diff, kept so the next fix in the file can record a hash of
     # it in its own applies_after. Only set when scanner_verified, for the
     # same reason content is: an unverified fix never becomes a base.
@@ -214,7 +218,7 @@ def handler(event, context):
             remaining += len(findings)
             continue
         try:
-            base_content, baseline_counts, applies_after = _chain_root(
+            base_content, baseline_counts, baseline_triples, applies_after = _chain_root(
                 pr_id, file_path, resume_from,
             )
             # The scanner's line numbers refer to this, not to the chain's
@@ -232,6 +236,11 @@ def handler(event, context):
         # and aws-s3-enable-bucket-encryption wants any encryption, so a KMS
         # fix satisfies both.
         cleared_by = {}
+        # (source, rule_id, resource) -> the fix that stopped the rule firing
+        # on that resource. The per-resource form of cleared_by, for files
+        # where one rule fires on several resources and a fix settles one of
+        # them at a time -- see _present_triples.
+        resolved_by = {}
         # Drafts this run has already spent on this file. In per-file mode the
         # counters carried in from a continuation are this file's, so the
         # budget spans continuations; in whole-PR mode they are the PR's, and
@@ -271,11 +280,22 @@ def handler(event, context):
             # diff was scored `cleared=False`.
             if target not in cleared_by and applies_after and baseline_counts[target] == 0:
                 cleared_by[target] = applies_after[-1]["finding_id"]
-            if target in cleared_by:
+            superseded_by = cleared_by.get(target)
+            # The same question per resource, for the rule that is still
+            # firing elsewhere in the file. Only asked when the baseline
+            # names resources at all: a rescan from a scanner without the
+            # field would leave the set empty, and "not in an empty set"
+            # would supersede everything behind the first fix.
+            triple = target + (finding.get("resource"),)
+            if superseded_by is None and finding.get("resource") and baseline_triples:
+                if triple not in resolved_by and applies_after and triple not in baseline_triples:
+                    resolved_by[triple] = applies_after[-1]["finding_id"]
+                superseded_by = resolved_by.get(triple)
+            if superseded_by is not None:
                 logger.info(
-                    "finding %s superseded by %s", finding["finding_id"], cleared_by[target],
+                    "finding %s superseded by %s", finding["finding_id"], superseded_by,
                 )
-                _write_superseded(finding, cleared_by[target])
+                _write_superseded(finding, superseded_by)
                 superseded_count += 1
                 continue
 
@@ -324,9 +344,12 @@ def handler(event, context):
                 for pair, previous in baseline_counts.items():
                     if previous > 0 and outcome.rescan_counts[pair] == 0:
                         cleared_by[pair] = finding["finding_id"]
+                for triple in baseline_triples - outcome.rescan_triples:
+                    resolved_by[triple] = finding["finding_id"]
 
                 base_content = outcome.content
                 baseline_counts = outcome.rescan_counts
+                baseline_triples = outcome.rescan_triples
                 # The hash is what makes staleness detectable at review time:
                 # review-api compares it against the prerequisite's *current*
                 # diff, so a reviewer editing an earlier fix invalidates every
@@ -439,7 +462,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
             suppression_attempt=suppressions, applies_after=applies_after,
             questions=answers,
         )
-        return _Outcome(False, False, None, None, None)
+        return _Outcome(False, False, None, None, None, None)
 
     _upload_scratch_file(pr_id, finding_id, file_path, corrected_content)
     rescan_findings, scan_errors = _invoke_self_check(pr_id, finding_id)
@@ -460,7 +483,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
             assumptions=assumptions, scan_errors=scan_errors,
             applies_after=applies_after, questions=answers,
         )
-        return _Outcome(False, False, None, None, None)
+        return _Outcome(False, False, None, None, None, None)
 
     self_check_passed, self_check_new_findings, cleared = _evaluate_self_check(
         finding, rescan_findings, baseline_counts
@@ -502,6 +525,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
         scanner_verified,
         corrected_content if scanner_verified else None,
         rescan_counts if scanner_verified else None,
+        _present_triples(rescan_findings) if scanner_verified else None,
         diff_text if scanner_verified else None,
     )
 
@@ -522,7 +546,8 @@ def _query_all(table, **kwargs):
 
 
 def _chain_root(pr_id, file_path, resume_from=None):
-    """Where this file's chain starts: (content, finding counts, applies_after).
+    """Where this file's chain starts: (content, finding counts, finding
+    triples, applies_after).
 
     The pristine snapshot, unless a fix on this file has already been accepted
     -- then the chain starts from the *last* accepted fix's corrected file, so
@@ -568,7 +593,7 @@ def _chain_root(pr_id, file_path, resume_from=None):
             # the self-check has to distinguish "one of them was fixed" from
             # "none".
             counts = _count_pairs(on_file)
-            return _fetch_original_content(pr_id, file_path), counts, []
+            return _fetch_original_content(pr_id, file_path), counts, _present_triples(on_file), []
         root = max(accepted, key=lambda f: len(f["proposed_fix"].get("applies_after") or []))
 
     root_id = root["finding_id"]
@@ -589,7 +614,7 @@ def _chain_root(pr_id, file_path, resume_from=None):
 
     chain = list(root["proposed_fix"].get("applies_after") or [])
     chain.append({"finding_id": root_id, "diff_sha256": _diff_sha256(root["proposed_fix"]["diff"])})
-    return content, counts, chain
+    return content, counts, _present_triples(rescan_findings), chain
 
 
 def _query_findings_on_file(pr_id, file_path):
@@ -705,11 +730,41 @@ def _format_answers(answers):
     return "\n".join(lines)
 
 
+def _describe_rule(finding):
+    """The lines that say what the rule means, for the prompt.
+
+    The id alone is not enough. Trivy's are numbers, and on terragoat's
+    s3.tf (2026-09-21) the model, given `rule_id: AWS-0091` and nothing
+    else, added versioning -- AWS-0091 is "ignore public ACLs" -- and for
+    AWS-0093 (restrict public buckets) added encryption. Seven of the file's
+    fixes were for a rule other than the one flagged, and the self-check
+    held every one of them. The ec2 and eks rules it had guessed right; the
+    S3 family it had not. So the scanner's own title and description travel
+    with the finding (iac-scanner _build_finding), and the control the
+    finding was mapped to says what the fix has to satisfy in the
+    framework's words. A record from before those fields existed still
+    works: it gets the id and whatever mapping it has.
+    """
+    lines = []
+    if finding.get("title"):
+        lines.append(f"  title: {finding['title']}")
+    if finding.get("description"):
+        lines.append(f"  description: {finding['description']}")
+    if finding.get("resource"):
+        lines.append(f"  resource: {finding['resource']}")
+    for m in finding.get("control_mappings") or []:
+        if m.get("framework") and m.get("control_id"):
+            span = f" -- {m['citation_span']}" if m.get("citation_span") else ""
+            lines.append(f"  mapped control: {m['framework']} {m['control_id']}{span}")
+    return "".join(line + "\n" for line in lines)
+
+
 def _call_remediation_agent(finding, original_content, answers=None, flagged=""):
     prompt = (
         "Scanner finding to fix:\n"
         f"  source: {finding['source']}\n"
         f"  rule_id: {finding['rule_id']}\n"
+        f"{_describe_rule(finding)}"
         f"  severity: {finding['severity']}\n"
         f"  file: {finding['file']}\n"
         f"  line_range: {finding['line_range']}\n\n"
@@ -1066,6 +1121,32 @@ def _count_pairs(findings):
             seen.add(finding_id)
         counts[(f["source"], f["rule_id"])] += 1
     return counts
+
+
+def _present_triples(findings):
+    """(source, rule_id, resource) for every finding that names its resource.
+
+    Counts by (source, rule_id) cannot say *which* instance of a rule a fix
+    removed, only that there is one fewer. That was enough while the rule
+    reaching zero was the question. It is not enough to tell that a rule is
+    already settled for the resource this finding is about: terragoat's
+    s3.tf (2026-09-21) holds five buckets, CKV2_AWS_6's fix for each added a
+    fully configured public-access block, and that also satisfies Trivy's
+    four block-public-access rules on that bucket -- but takes AWS-0086
+    from 5 to 4, never to 0, so each of the thirteen findings a chained
+    fix had already resolved was drafted anyway, the model returned the file
+    unchanged, and `rescan < baseline` scored it as a fix that failed. The
+    resource address is what tells those thirteen apart from the ones still
+    firing on a bucket nothing has touched.
+
+    A finding without a resource (a secret, or a record from before the
+    scanner carried the field) is not in the set, and the count-based
+    supersede in handler() still covers it.
+    """
+    return {
+        (f["source"], f["rule_id"], f["resource"])
+        for f in findings if f.get("resource")
+    }
 
 
 def _evaluate_self_check(finding, rescan_findings, baseline_counts):
