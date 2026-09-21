@@ -1,0 +1,6 @@
+{
+  "description": "Database password hardcoded as a literal container environment variable",
+  "category": "hardcoded-secrets",
+  "expected": [],
+  "note": "Expected to MISS, and kept as a case so the gap is measured rather than assumed -- the same treatment as rds-literal-password. checkov's secret detection is EntropyKeywordCombinator: a keyword (`password`) must combine with a detect-secrets entropy hit on the value. In Kubernetes' env list the two live under SEPARATE YAML keys -- the keyword is `name:`, the secret is `value:` on the next line -- so the combinator never pairs them and nothing fires. Measured 2026-09-20: the identical value under a `password:` key in a Secret's stringData DOES fire CKV_SECRET_6 (see the sibling case k8s-literal-secret-in-secret-object), which is what isolates the cause to the env structure rather than to the value. The value is base64-charset only on purpose, so this case does not also trip the punctuation gap that rds-literal-password isolates. Worth its own weight because the direction is backwards: the CORRECT form (valueFrom.secretKeyRef) raises CKV_K8S_35, while this, the dangerous form, raises nothing. Closing it means a custom check, the way IACP-0001 closed the port-range gap."
+}

@@ -1,0 +1,11 @@
+{
+  "description": "The same literal password under a `password:` key in a Secret's stringData",
+  "category": "hardcoded-secrets",
+  "expected": [
+    {
+      "source": "checkov",
+      "rule_id": "CKV_SECRET_6"
+    }
+  ],
+  "note": "The sibling of k8s-literal-secret-in-env and the reason that case's empty label is evidence rather than an absence. Same value, same entropy, same file type; the only difference is that here the keyword and the secret are one YAML pair, which is what EntropyKeywordCombinator needs. A Secret committed with a plaintext stringData is also a real finding in its own right -- Kubernetes Secrets are base64-encoded, not encrypted, so this value is readable by anyone who can read the manifest or etcd."
+}

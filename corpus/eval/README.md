@@ -40,9 +40,9 @@ Previous: 97.0% (65/67) on 2026-09-10 with tfsec v1.28.14, before the
 
 ## The Kubernetes cases (added 2026-09-20)
 
-19 positive cases and one clean control, covering the CIS Kubernetes 5.1 and
+21 positive cases and one clean control, covering the CIS Kubernetes 5.1 and
 5.2 families, seccomp, image provenance, secrets-as-env and the service
-account token. **50 of 50 labelled pairs fire, and the clean control raises
+account token. **51 of 51 labelled pairs fire, and the clean control raises
 nothing** -- measured locally against the same pinned Trivy 0.74.0 and
 checkov 3.3.16 the scanner image carries, because the deployed scanner had
 not yet been rebuilt when they were written. *Re-run `run_eval.py` after the
@@ -51,10 +51,10 @@ every other number in this file was produced.
 
 | | |
 |---|---|
-| labelled pairs | 50, all firing |
-| by source | checkov 24/24 · trivy 26/26 |
-| labelled pairs with a candidate control | **39/41 (95%)** |
-| all distinct rules these cases raise | **44/51 (86%)** mapped |
+| labelled pairs | 51, all firing |
+| by source | checkov 25/25 · trivy 26/26 |
+| labelled pairs with a candidate control | **40/42 (95%)** |
+| all distinct rules these cases raise | **45/52 (87%)** mapped |
 
 The labelled-pair coverage is far above Terraform's 72% for one reason worth
 naming: these cases were written *after* the CIS Kubernetes corpus, against
@@ -88,6 +88,38 @@ Three things the iterations taught, all of them recorded in the case notes:
 purpose: it is the PugetScope shape, one missing block raising eleven
 labelled pairs across both tools, and it is what keeps the per-file collapse
 in multi-iac-spec §5.1 measurable.
+
+### The third miss: a literal password in an env var
+
+Added 2026-09-20 after the cases above, from a question about what
+`k8s-secret-in-env` actually proves. **A hardcoded password in a container's
+`env:` is detected by neither tool, and the direction is backwards: the
+*correct* form raises a finding and the dangerous one does not.**
+
+| manifest | fires |
+|---|---|
+| `valueFrom.secretKeyRef` (correct, but env) | `CKV_K8S_35` |
+| `value: "<literal password>"` (dangerous) | **nothing** |
+| the same literal under `password:` in a Secret's `stringData` | `CKV_SECRET_6` |
+
+Isolated by a pair of cases, `k8s-literal-secret-in-env` and
+`k8s-literal-secret-in-secret-object`, which differ only in where the value
+sits. The cause is structural: checkov's `EntropyKeywordCombinator` needs a
+keyword next to a high-entropy value, and Kubernetes' env list puts the
+keyword under `name:` and the secret under `value:` -- two separate YAML
+keys, never paired. The value is base64-charset only in both, so this does
+not confound with the punctuation gap `rds-literal-password` isolates, and
+the sibling firing is what makes the empty label evidence rather than an
+absence.
+
+It is *not* that env values go unscanned: an `AKIA...` key in the same
+position fires `CKV_SECRET_2`, because `AWSKeyDetector` matches a shape and
+needs no keyword. The blind spot is confined to credentials that are only
+recognisable from the name beside them.
+
+This is the third labelled miss in the eval and the first that is not a
+Terraform one. Closing it means a custom check, the way `IACP-0001` closed
+the port-range gap -- and this is the number that should move when it does.
 
 ## Mapping coverage
 
