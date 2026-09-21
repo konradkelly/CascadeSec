@@ -175,6 +175,41 @@ def test_trivy_findings_normalize_to_the_record_shape():
     assert "iac_type" not in finding
 
 
+def test_findings_carry_the_tool_s_own_words_and_the_resource_address():
+    """A Trivy id is a number. On terragoat's s3.tf the model drafting a fix
+    for AWS-0091 (ignore public ACLs) had only that id in front of it and
+    added versioning instead; the title is what tells it what the rule
+    means. The resource address is what lets remediation-agent see that a
+    fix to one of five buckets in a file resolved *this* finding. Neither is
+    in the id hash, so an old record gains them on its next scan."""
+    [trivy] = handler._normalize_trivy(
+        [{**TRIVY_SQS_MISCONF, "Description": "Queues should be encrypted at rest.",
+          "Target": "main.tf", "Type": "terraform", "Class": "config"}],
+        "pr-1",
+    )
+    assert trivy["title"] == "Unencrypted SQS queue."
+    assert trivy["description"] == "Queues should be encrypted at rest."
+    assert trivy["resource"] == "aws_sqs_queue.plain"
+
+    [checkov] = handler._normalize_checkov(_checkov_report(failed_checks=[{
+        "check_id": "CKV_AWS_145", "check_name": "Ensure that S3 buckets are encrypted with KMS by default",
+        "resource": "aws_s3_bucket.financials", "file_path": "/main.tf",
+        "file_line_range": [1, 3], "severity": None,
+    }]), "pr-1")
+    assert checkov["title"] == "Ensure that S3 buckets are encrypted with KMS by default"
+    assert checkov["description"] == ""
+    assert checkov["resource"] == "aws_s3_bucket.financials"
+
+    # A report field the tool left out is an empty string, not a KeyError:
+    # every record has the field, so readers need no fallback.
+    [bare] = handler._normalize_trivy(
+        [{"ID": "AWS-0001", "Target": "main.tf", "Type": "terraform", "Class": "config",
+          "CauseMetadata": {"StartLine": 1, "EndLine": 1}}],
+        "pr-1",
+    )
+    assert (bare["title"], bare["description"], bare["resource"]) == ("", "", "")
+
+
 # ---------- the two axes ----------
 #
 # docs/multi-iac-spec.md §3.1. One field could not answer both "what do I

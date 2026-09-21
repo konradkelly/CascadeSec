@@ -190,6 +190,112 @@ ran out mid-run (`400 credit balance is too low`). They are still
 Each failed in ~4s and the file's pass ended cleanly with the count, which
 is the behaviour wanted from a persistent fault.
 
+### s3.tf: what five of the same resource in one file does to the chain
+
+`s3.tf` + `consts.tf` from terragoat (2026-09-21, `external-terragoat-s3-…`),
+chosen because S3 was the second-largest unmapped tail above and the
+Block Public Access mappings had been added since. 65 findings, 45 mapped
+(69% -- terragoat as a whole was 35%, so the sixteen rules landed), 51
+minutes, 0 errors, $7.77 over 146 calls -- remediation's output tokens are
+85% of it, as on `eks.tf`.
+
+| agent | calls | input | output | cost |
+|---|---|---|---|---|
+| mapping-agent | 45 | 25.8k | 7.0k | $0.30 |
+| remediation-agent | 56 | 248.8k | 212.6k | $6.56 |
+| context-agent | 45 | 119.1k | 12.6k | $0.91 |
+| **total** | 146 | 394k | 232k | **$7.77** |
+
+7 `fix-proposed`, 32 `needs-human-only`, 6 superseded. The 20 raw are the
+deliberate tail (`CKV2_AWS_61`/`_62` lifecycle and event notifications,
+`CKV_AWS_144` replication, `AWS-0090` versioning, `CKV_AWS_21`). Ten of the
+32 holds are the kind the eks run established as normal: the scanner
+accepted the fix and the model stated an assumption -- that principals
+reading the bucket can be granted `kms:Decrypt` on the new key, that S3 log
+delivery can write to a KMS-encrypted bucket. **The other 22 are
+`cleared=False` with no new findings and no assumption, and none of them
+are the model's fault in the way that reads.** They are two defects the
+ec2 and eks files were the wrong shape to show.
+
+**Supersede was per rule, and s3.tf has five buckets.** The `CKV2_AWS_6`
+fixes (public access block) each added a fully configured
+`aws_s3_bucket_public_access_block`, which also satisfies Trivy's
+`AWS-0086`/`0087`/`0093`/`0094` on that bucket. remediation-agent already
+knew one fix routinely clears another's rule, and superseded a finding
+when its rule's count reached zero -- but a per-bucket fix takes
+`AWS-0086` from 5 to 4, and the rule never reaches zero until the last
+bucket. So each of the thirteen findings a chained fix had already
+resolved was drafted anyway (a model call and a self-check scan each), the
+model returned the file unchanged with a rationale saying so ("an earlier
+fix in this file already added `aws_s3_bucket_public_access_block.financials`
+… returning the file unchanged"), and `rescan < baseline` scored an equal
+count as a fix that failed to clear. The same case was seen and patched on
+2026-09-18 for the count-hits-zero form; this is its general form, and
+any file with N instances of one resource type hits it. iac-scanner now
+carries the resource address the rule fired on (`CauseMetadata.Resource`,
+checkov's `resource`) on every finding, and remediation-agent supersedes
+by `(source, rule_id, resource)` as well as by count: a rule that stopped
+firing on *this* bucket is resolved, whatever it does on the other four.
+Not in the finding-id hash, so no record is renumbered; a record from
+before the field gains it on its next scan, and a baseline that names no
+resources falls back to the count rule rather than superseding everything.
+
+**The prompt gave the model a number.** The other seven: `AWS-0091` (S3
+Access Block should ignore public ACLs) was "fixed" three times by adding
+versioning or encryption, `AWS-0093` (restrict public buckets) twice by
+adding encryption, `AWS-0087` once by encryption and `AWS-0089` once by
+versioning.
+The remediation prompt said `rule_id: AWS-0091` and nothing about what it
+meant: `_build_finding` kept only the id, dropping Trivy's `Title`,
+`Description` and `Resolution` and checkov's `check_name`. Trivy's ids
+are numbers, and the model was fixing from what it remembered of them --
+right on the EC2, EKS and ECR rules, wrong on the S3 family. Findings now
+carry the scanner's `title` and `description`, and the remediation and
+mapping prompts put them, the resource, and the mapped control's text in
+front of the model. The mapping rationales were the tell in hindsight:
+"Trivy rule AWS-0091 flags an S3 bucket lacking full public access block
+configuration" is a plausible sentence written without knowing what
+AWS-0091 checks.
+
+**Re-run the same day, both deployed** (`external-terragoat-s3-20260921T133700`,
+same two files, fresh PR id so nothing was inherited):
+
+| | run 1 | run 2 |
+|---|---|---|
+| drafted (a model call + a self-check each) | 39 | 17 |
+| fix-proposed | 7 | 8 |
+| needs-human-only | 32 | 9 |
+| -- of which `cleared=False` | 23 | **0** |
+| -- of which new findings (`CKV2_AWS_64`, the new KMS key has no policy) | 7 | 8 |
+| -- of which a stated assumption | 2 | 1 |
+| superseded, no call | 6 | 28 |
+| model cost | $7.77 | $4.49 |
+
+Every one of the 17 drafted fixes cleared the rule it was drafted for. The
+28 supersedes are the shape predicted: on each bucket, `CKV2_AWS_6`'s
+public-access block settled Trivy's four block-public-access rules and
+`CKV_AWS_18`'s logging block settled `AWS-0089`, and each was recorded as
+resolved by resource without a draft. The seven wrong-rule fixes did not
+recur -- but not because the prompt was better: `AWS-0091` and the
+others were superseded before they could be drafted, so the title and
+description in the prompt are exercised by run 2 only in that every draft
+targeted its own rule, not on the rules that went wrong.
+
+Two things to know about the run. The per-file draft budget
+(`MAX_DRAFTS_PER_FILE`, committed 2026-09-20) was deployed for the first
+time in the same apply and stopped the state machine at 8 drafts with 25
+`not-drafted`; the chain was continued by hand with the handler's own
+`resume_from` event, four direct invokes, the last of which took 8s
+because all five remaining were supersedes. And `superseded_by` across a
+continuation boundary names the chain root -- the last verified fix
+before the yield, `CKV_AWS_18` on `financials` -- rather than the
+`CKV2_AWS_6` fix that actually settled the rule, because `resolved_by`
+starts empty in each invocation and the root is what was just rescanned
+to prove it. That is what the count rule did too. It is safe for
+reversal: `applies_after` is cumulative, so rejecting the real fix
+reopens the root and, one hop later, everything the root superseded
+(docs/fix-chain-review-spec.md).
+
 ### Terragrunt is not scanned at all
 
 The repository holds `terragrunt.hcl` files and no `.tf`, so nothing

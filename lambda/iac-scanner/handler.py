@@ -450,6 +450,9 @@ def _normalize_trivy(results, pr_id):
             target_type=_target_type_for(r.get("Target", ""), r.get("Type")),
             finding_class=TRIVY_CLASS_TO_FINDING_CLASS.get(r.get("Class"), "misconfiguration"),
             now=now,
+            resource=cause.get("Resource") or "",
+            title=r.get("Title") or "",
+            description=r.get("Description") or "",
         ))
     return findings
 
@@ -515,12 +518,16 @@ def _normalize_checkov(report, pr_id):
                 ),
                 finding_class=finding_class,
                 now=now,
+                resource=c.get("resource") or "",
+                title=c.get("check_name") or "",
+                # checkov carries no prose beyond the name; guideline is a URL.
+                description="",
             ))
     return findings
 
 
 def _build_finding(pr_id, source, rule_id, file_path, line_range, severity,
-                   target_type, finding_class, now):
+                   target_type, finding_class, now, resource="", title="", description=""):
     # Deterministic id, so re-scanning the same PR recognises a finding it has
     # seen before rather than accumulating duplicates. Because the id hashes
     # the location as well as the rule, an id that fires again is the same
@@ -539,6 +546,21 @@ def _build_finding(pr_id, source, rule_id, file_path, line_range, severity,
         "file": file_path,
         "line_range": line_range,
         "severity": severity,
+        # What the rule means, in the scanner's own words. A Trivy id is a
+        # number ("AWS-0091") and the model drafting a fix for it had only
+        # that to go on: on terragoat's s3.tf (2026-09-21) it read AWS-0091
+        # (ignore public ACLs) as versioning and AWS-0093 (restrict public
+        # buckets) as encryption, and fixed those instead. Not in the id
+        # hash: the text is the tool's, and a tool upgrade rewording a title
+        # must not renumber the finding.
+        "title": title,
+        "description": description,
+        # The resource address the rule fired on ("aws_s3_bucket.financials").
+        # Not in the id hash either (see _write_findings); it is what lets
+        # remediation-agent tell that a fix to one of five buckets in a file
+        # resolved *this* finding rather than only that the rule fires once
+        # less often.
+        "resource": resource,
         "control_mappings": [],
         "status": "raw",
         "proposed_fix": None,
@@ -562,8 +584,9 @@ def _write_findings(pr_id, findings):
 
     So each finding is an update, not a put, and the fields divide in two:
 
-      scanner-owned   severity, last_seen_at, updated_at -- always refreshed,
-                      because the tool is the authority on them
+      scanner-owned   severity, title, description, resource, last_seen_at,
+                      updated_at -- always refreshed, because the tool is the
+                      authority on them
       decided         status, control_mappings, proposed_fix, created_at --
                       written only if absent (if_not_exists), because a human
                       or an agent owns them
@@ -599,6 +622,7 @@ def _write_findings(pr_id, findings):
                 "finding_class = :finding_class, "
                 "#source = :source, rule_id = :rule_id, #file = :file, "
                 "line_range = :line_range, severity = :severity, "
+                "title = :title, description = :description, #resource = :resource, "
                 "last_seen_at = :now, updated_at = :now, "
                 "created_at = if_not_exists(created_at, :now), "
                 "#status = if_not_exists(#status, :raw), "
@@ -610,7 +634,10 @@ def _write_findings(pr_id, findings):
                 # first time it is re-scanned.
                 "REMOVE no_longer_detected, iac_type"
             ),
-            ExpressionAttributeNames={"#source": "source", "#file": "file", "#status": "status"},
+            ExpressionAttributeNames={
+                "#source": "source", "#file": "file", "#status": "status",
+                "#resource": "resource",
+            },
             ExpressionAttributeValues={
                 ":finding_id": finding["finding_id"],
                 ":target_type": finding["target_type"],
@@ -620,6 +647,9 @@ def _write_findings(pr_id, findings):
                 ":file": finding["file"],
                 ":line_range": finding["line_range"],
                 ":severity": finding["severity"],
+                ":title": finding.get("title", ""),
+                ":description": finding.get("description", ""),
+                ":resource": finding.get("resource", ""),
                 ":now": now,
                 ":raw": "raw",
                 ":empty": [],
