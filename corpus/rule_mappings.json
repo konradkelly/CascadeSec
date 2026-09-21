@@ -1,5 +1,5 @@
 {
-  "_comment": "Maps a scanner finding's (source, rule_id) to candidate controls in frameworks/*.json. mapping-agent uses this as a deterministic first pass -- it looks up candidates here, pulls their text from S3, and only asks the LLM to pick/cite/explain among those candidates rather than freely guessing a control_id. Trivy entries are keyed on the id Trivy emits (\"trivy:AWS-0086\"; the tfsec long id aws-s3-block-public-acls it replaced is not in Trivy's report). Entries are grounded in rule_ids actually observed -- first from lambda/iac-scanner/fixtures/vulnerable-sample, then from the third-party repositories in external/ (2026-09-18), then the Kubernetes rules from PugetScope's k8s/ under the pinned scanners (2026-09-19, KSV-*/CKV_K8S_*), then the rules the Kubernetes eval cases raise (2026-09-20); extend as new rule_ids show up in real scans rather than guessing ahead of evidence. A rule with no confident mapping (e.g. pure hygiene checks like missing descriptions) is deliberately left out rather than force-mapped.",
+  "_comment": "Maps a scanner finding's (source, rule_id) to candidate controls in frameworks/*.json. mapping-agent uses this as a deterministic first pass -- it looks up candidates here, pulls their text from S3, and only asks the LLM to pick/cite/explain among those candidates rather than freely guessing a control_id. Trivy entries are keyed on the id Trivy emits (\"trivy:AWS-0086\"; the tfsec long id aws-s3-block-public-acls it replaced is not in Trivy's report). Entries are grounded in rule_ids actually observed -- first from lambda/iac-scanner/fixtures/vulnerable-sample, then from the third-party repositories in external/ (2026-09-18), then the Kubernetes rules from PugetScope's k8s/ under the pinned scanners (2026-09-19, KSV-*/CKV_K8S_*), then the rules the Kubernetes eval cases raise (2026-09-20); extend as new rule_ids show up in real scans rather than guessing ahead of evidence. A rule with no confident mapping (e.g. pure hygiene checks like missing descriptions) is deliberately left out rather than force-mapped. A candidate may carry an optional `target_type`, which scopes it to findings from that target: CKV_SECRET_6 fires on Terraform and on Kubernetes, and CIS Kubernetes 5.4.2 is a candidate only for the Kubernetes one. A candidate without the field applies to every target, which is most of them.",
   "mappings": {
     "checkov:CKV2_AWS_11": [
       {
@@ -397,6 +397,11 @@
       {
         "framework": "OWASP-CICD-Top10",
         "control_id": "CICD-SEC-6"
+      },
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.4.2",
+        "target_type": "kubernetes"
       }
     ],
     "checkov:CKV_TF_1": [

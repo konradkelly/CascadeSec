@@ -14,6 +14,21 @@ Reference text `mapping-agent` cites when it maps a raw finding to a control
   letting it freely guess a control_id from scratch — this is what keeps
   citations grounded instead of hallucinated.
 
+  A candidate may carry an optional **`target_type`**, which offers it only
+  to findings from that target:
+
+  ```json
+  "checkov:CKV_SECRET_6": [
+    { "framework": "OWASP-CloudNative",   "control_id": "CNAS-5" },
+    { "framework": "CIS-Kubernetes-2.0",  "control_id": "5.4.2",
+      "target_type": "kubernetes" }
+  ]
+  ```
+
+  A candidate without the field applies to every target, which is most of
+  them — the field is only needed for a rule that fires on more than one
+  language. Added 2026-09-20; see below.
+
 ## On the control text
 
 The `text` field in each framework file is an **original summary I wrote**,
@@ -107,16 +122,22 @@ credential in a container `env` (see `eval/README.md`). `IACP-0002` maps to
 `5.4.1` plus the `CNAS-5`/`CICD-SEC-6` pair the other hardcoded-secret rules
 use.
 
-**`5.4.2` is vendored but uncited, and the reason is a real limit of this
-file.** The finding that most wants it is a Secret committed with a
-plaintext `stringData`, which raises `CKV_SECRET_6` -- but mappings are
-keyed by `(source, rule_id)` alone, not by `target_type`, and
-`CKV_SECRET_6` fires on Terraform too. Adding a Kubernetes control to it
-would offer that control as a candidate for a `.tf` finding, which is
-force-mapping by a different route. So the control is here as reference text
-for when a Kubernetes-specific rule exists to carry it. Worth knowing before
-assuming a control can always be reached: **a language-agnostic rule cannot
-carry a language-specific control under the current key.**
+**`5.4.2` is cited through a scoped candidate, which is why that field
+exists.** The finding that wants it is a Secret committed with a plaintext
+`stringData`, which raises `CKV_SECRET_6` -- and that rule fires on
+Terraform too, so before scoping the control could only be added to both
+languages or neither. Adding it to both would have offered a Kubernetes
+control as a candidate for a `.tf` finding, which is force-mapping by a
+different route. `CKV_SECRET_6` now carries `CNAS-5` and `CICD-SEC-6` for
+every target and `5.4.2` for Kubernetes alone.
+
+Two things follow, and both are tested. A `target_type` that does not exist
+is the worst typo this file can hold -- the candidate is silently never
+offered, the finding stays `raw`, and nothing reports an error, so it looks
+exactly like a rule nobody mapped; `test_a_scoped_candidate_names_a_target_type_that_can_exist`
+catches it. And a finding written before the `target_type` split carries
+none, so it is offered universal candidates only: withholding a control is
+the safe direction when the language is unknown.
 
 The 16 unmapped rules are unmapped on purpose, and again they cluster:
 

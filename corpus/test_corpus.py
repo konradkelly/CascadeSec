@@ -31,6 +31,13 @@ EVAL_CASES = sorted(p for p in (CORPUS / "eval" / "cases").iterdir() if p.is_dir
 # eval label naming a third would be a typo, not a new tool.
 KNOWN_SOURCES = {"trivy", "checkov"}
 
+# What a candidate's optional `target_type` scope may say. Must stay in step
+# with iac-scanner's SUFFIX_TARGET_TYPES and the types the tools report
+# (multi-iac-spec §3.1); the ones not yet admitted to the scanner are listed
+# so a mapping can be written the day a language lands.
+KNOWN_TARGET_TYPES = {"terraform", "opentofu", "kubernetes", "helm",
+                      "cloudformation", "bicep", "npm", "dockerfile"}
+
 
 def _load(path):
     return json.loads(path.read_text(encoding="utf-8"))
@@ -108,6 +115,37 @@ def test_every_mapping_key_is_a_source_and_a_rule_id():
             bad.append(key)
 
     assert not bad, f"keys that are not <source>:<rule_id> with source in {KNOWN_SOURCES}: {bad}"
+
+
+def test_a_scoped_candidate_names_a_target_type_that_can_exist():
+    """A candidate may carry `target_type` to scope it to one language. A
+    typo there is the worst kind of bug this file can hold: the candidate is
+    silently never offered, the finding stays `raw`, and nothing anywhere
+    reports an error -- it looks exactly like a rule nobody mapped."""
+    bad = [
+        f"{key} -> {ref['framework']}:{ref['control_id']} scoped to {ref['target_type']!r}"
+        for key, refs in _mappings().items()
+        for ref in refs
+        if "target_type" in ref and ref["target_type"] not in KNOWN_TARGET_TYPES
+    ]
+
+    assert not bad, "candidate(s) scoped to an unknown target_type:\n  " + "\n  ".join(bad)
+
+
+def test_a_rule_does_not_scope_every_candidate_away():
+    """A rule whose candidates are all scoped to one language offers nothing
+    at all for the others, which is the same as being unmapped there -- fine
+    when deliberate, but it should be visible rather than an accident of
+    editing. Today every such rule keeps at least one universal candidate."""
+    stranded = [
+        key for key, refs in _mappings().items()
+        if refs and all("target_type" in r for r in refs)
+    ]
+
+    assert not stranded, (
+        "rule(s) with no universal candidate; intended? then note it here: "
+        f"{stranded}"
+    )
 
 
 def test_a_mapping_offers_no_duplicate_candidates():

@@ -55,9 +55,30 @@ RULE_MAPPINGS = HERE.parent / "rule_mappings.json"
 
 
 def load_mappings():
-    """(source, rule_id) pairs that have at least one candidate control."""
-    raw = json.loads(RULE_MAPPINGS.read_text(encoding="utf-8"))["mappings"]
-    return {tuple(k.split(":", 1)) for k, v in raw.items() if v}
+    """The raw candidate lists, keyed `source:rule_id`."""
+    return json.loads(RULE_MAPPINGS.read_text(encoding="utf-8"))["mappings"]
+
+
+def mapped_pairs(scan_body, mappings):
+    """(source, rule_id) pairs with a candidate control that applies to the
+    target_type they actually fired with.
+
+    Not simply "the rule has an entry": a candidate may be scoped to one
+    target_type (mapping-agent's _candidates_for), so CKV_SECRET_6 on a
+    manifest has a Kubernetes control to cite and the same rule on a .tf
+    file does not. Counting the entry rather than the applicable candidates
+    would report coverage this corpus cannot actually deliver.
+    """
+    mapped = set()
+    for finding in scan_body["findings"]:
+        pair = (finding["source"], finding["rule_id"])
+        if pair in mapped:
+            continue
+        target_type = finding.get("target_type")
+        refs = mappings.get(f"{pair[0]}:{pair[1]}") or []
+        if any("target_type" not in r or r["target_type"] == target_type for r in refs):
+            mapped.add(pair)
+    return mapped
 
 
 def bucket_from_terraform():
@@ -272,7 +293,7 @@ def main():
             delete_prefix(s3, bucket, prefix)
     print(f" {time.time() - t0:.0f}s, {body['finding_count']} findings")
 
-    mapped = load_mappings()
+    mapped = mapped_pairs(body, load_mappings())
     results = evaluate(cases, body, mapped)
     summary = summarise(results, body, mapped)
     print_report(results, summary)

@@ -108,7 +108,7 @@ def handler(event, context):
     remaining = 0
 
     for index, finding in enumerate(raw_findings):
-        candidate_refs = rule_mappings.get(f"{finding['source']}:{finding['rule_id']}")
+        candidate_refs = _candidates_for(rule_mappings, finding)
         if not candidate_refs:
             skipped_count += 1
             continue
@@ -229,6 +229,34 @@ def _query_raw_findings(pr_id):
             ":status": "raw",
         },
     )
+
+
+def _candidates_for(rule_mappings, finding):
+    """The candidate controls that apply to this finding.
+
+    A rule's candidates are keyed by (source, rule_id), which is all a rule
+    normally needs: CKV_AWS_145 only ever fires on Terraform. It is not
+    enough for the rules that fire on more than one language. CKV_SECRET_6
+    is the case that forced this -- a plaintext secret, raised on a .tf file
+    and on a Kubernetes manifest alike. The Kubernetes control that fits it
+    (CIS Kubernetes 5.4.2, external secret storage) must not be offered as a
+    candidate for the Terraform finding, and before this it could only be
+    added to both or neither.
+
+    So a candidate may carry an optional `target_type` that scopes it. One
+    without it is universal, which is every candidate written before
+    2026-09-20 and most written after. One with it is offered only when the
+    finding came from that target type.
+
+    A finding with no target_type -- written before the field split
+    (multi-iac-spec §3.1) -- matches universal candidates only. That is the
+    safe direction: it withholds a control rather than citing one against a
+    finding whose language is unknown.
+    """
+    refs = rule_mappings.get(f"{finding['source']}:{finding['rule_id']}") or []
+    target_type = finding.get("target_type")
+    return [r for r in refs
+            if "target_type" not in r or r["target_type"] == target_type]
 
 
 def _load_rule_mappings():

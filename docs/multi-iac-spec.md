@@ -144,6 +144,19 @@ directly, checkov's `check_type` for the rest. Done in the same deploy
 window as the function rename — one breaking change rather than two, and the
 dev table is disposable demo data, so this is the cheapest it will ever be.
 
+*A consequence in the corpus, found 2026-09-20.* `rule_mappings.json` keys
+candidates by `(source, rule_id)`, which is enough while a rule only ever
+fires on one language — `CKV_AWS_145` is Terraform's by construction. It
+stops being enough for the rules that cross languages. `CKV_SECRET_6`, a
+plaintext secret, fires on a `.tf` file and on a Kubernetes manifest, and
+the control that fits the manifest (CIS Kubernetes 5.4.2, external secret
+storage) must not be offered as a candidate for the Terraform one. So a
+candidate may now carry an optional `target_type` that scopes it, and
+`mapping-agent` filters the candidate list per finding. The key did not
+change and no existing entry moved — an unscoped candidate is universal,
+which is nearly all of them. This is `target_type` earning its keep on the
+corpus side, having been introduced for the self-check.
+
 ## 4. What the self-check means per language
 
 This is the part that cannot be copied from Terraform, and it is where a

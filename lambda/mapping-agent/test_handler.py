@@ -107,6 +107,50 @@ def _run(mock_dynamodb, mock_s3, mock_client, findings, mappings, replies, event
     return result, table, create
 
 
+# ---------- candidate scoping by target_type ----------
+
+SECRET_REFS = [
+    {"framework": "OWASP-CloudNative", "control_id": "CNAS-5"},
+    {"framework": "CIS-Kubernetes-2.0", "control_id": "5.4.2", "target_type": "kubernetes"},
+]
+
+
+def test_a_scoped_candidate_is_offered_to_its_own_target_type():
+    """CKV_SECRET_6 fires on a .tf file and on a manifest. The Kubernetes
+    control belongs to the manifest finding."""
+    finding = {"source": "checkov", "rule_id": "CKV_SECRET_6", "target_type": "kubernetes"}
+
+    refs = handler._candidates_for({"checkov:CKV_SECRET_6": SECRET_REFS}, finding)
+
+    assert [r["control_id"] for r in refs] == ["CNAS-5", "5.4.2"]
+
+
+def test_a_scoped_candidate_is_withheld_from_another_target_type():
+    """The reason the field exists. Before it, adding 5.4.2 to this rule
+    would have offered a Kubernetes control as a candidate for a Terraform
+    finding -- force-mapping by a different route."""
+    finding = {"source": "checkov", "rule_id": "CKV_SECRET_6", "target_type": "terraform"}
+
+    refs = handler._candidates_for({"checkov:CKV_SECRET_6": SECRET_REFS}, finding)
+
+    assert [r["control_id"] for r in refs] == ["CNAS-5"]
+
+
+def test_a_finding_from_before_the_field_split_gets_universal_candidates_only():
+    """A record written before target_type existed has none. Withholding the
+    scoped control is the safe direction: the alternative is citing a
+    Kubernetes control against a finding whose language is unknown."""
+    finding = {"source": "checkov", "rule_id": "CKV_SECRET_6"}
+
+    refs = handler._candidates_for({"checkov:CKV_SECRET_6": SECRET_REFS}, finding)
+
+    assert [r["control_id"] for r in refs] == ["CNAS-5"]
+
+
+def test_an_unmapped_rule_has_no_candidates():
+    assert handler._candidates_for({}, {"source": "trivy", "rule_id": "KSV-0999"}) == []
+
+
 # ---------- the candidate set is the whole point ----------
 
 @patch.object(handler, "_get_anthropic_client")
