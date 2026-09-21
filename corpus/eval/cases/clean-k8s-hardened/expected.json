@@ -1,0 +1,6 @@
+{
+  "description": "Hardened Deployment with a NetworkPolicy -- should raise nothing",
+  "category": "clean-control",
+  "expected": [],
+  "note": "The base every positive case is built from, with nothing broken: pod and container securityContext, dropped capabilities, RuntimeDefault seccomp, read-only root, non-root high UID and GID, resource requests and limits, both probes, no service account token, a bare digest-pinned image, and a NetworkPolicy so CKV2_K8S_6 is satisfied. Raises nothing under Trivy 0.74.0 and checkov 3.3.16 as of 2026-09-20."
+}

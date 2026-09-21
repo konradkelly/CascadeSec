@@ -1,0 +1,51 @@
+{
+  "description": "Deployment with no securityContext at all -- the PugetScope shape",
+  "category": "iam-over-permissioning",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0001"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0003"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0004"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0012"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0014"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_20"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_22"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_23"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_28"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_30"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_37"
+    }
+  ],
+  "note": "The case the volume decision came from: one missing block raises eleven labelled pairs across both tools, and one securityContext fix clears all of them at once. Every other case here isolates a single rule; this one exists to keep the collapse measurable. Deliberately labelled with the whole family rather than a minimum -- see multi-iac-spec §5.1."
+}

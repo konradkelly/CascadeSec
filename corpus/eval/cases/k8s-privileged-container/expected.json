@@ -1,0 +1,15 @@
+{
+  "description": "Container with securityContext.privileged: true",
+  "category": "network-exposure",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0017"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_16"
+    }
+  ],
+  "note": "CIS Kubernetes 5.2.2. A privileged container holds every capability and unrestricted device access on the node, so this is the closest a manifest gets to root on the host. Also raises the allowPrivilegeEscalation pair (KSV-0001, CKV_K8S_20), which the k8s-privilege-escalation case owns."
+}

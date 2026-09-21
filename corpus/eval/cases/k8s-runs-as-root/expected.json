@@ -1,0 +1,15 @@
+{
+  "description": "Container with runAsNonRoot: false and runAsUser: 0",
+  "category": "iam-over-permissioning",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0105"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_23"
+    }
+  ],
+  "note": "CIS Kubernetes 5.2.7. Trivy splits this: KSV-0105 is the explicit runAsUser: 0, where KSV-0012 (runs as root user) is the *absent* securityContext -- that one belongs to k8s-no-security-context. Also raises KSV-0020 and CKV_K8S_40 (UID <= 10000), which are stricter than the benchmark asks and are deliberately unmapped."
+}

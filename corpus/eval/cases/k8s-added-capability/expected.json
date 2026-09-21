@@ -1,0 +1,23 @@
+{
+  "description": "Container that drops ALL and then adds SYS_ADMIN back",
+  "category": "iam-over-permissioning",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0005"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0022"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_39"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_25"
+    }
+  ],
+  "note": "CIS Kubernetes 5.2.9. The sibling of k8s-capabilities-not-dropped and the harder case: the manifest looks hardened -- it does drop ALL -- and adds back the one capability equivalent to privileged."
+}

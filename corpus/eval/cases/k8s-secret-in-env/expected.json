@@ -1,0 +1,11 @@
+{
+  "description": "Secret injected into a container as an environment variable",
+  "category": "hardcoded-secrets",
+  "expected": [
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_35"
+    }
+  ],
+  "note": "CIS Kubernetes 5.4.1. checkov-only: Trivy has no equivalent, so this file's self-check has a single source. Not a hardcoded secret -- the value is a proper secretKeyRef -- but the same category, because an env var is readable from child processes, crash dumps and anything that logs the environment."
+}

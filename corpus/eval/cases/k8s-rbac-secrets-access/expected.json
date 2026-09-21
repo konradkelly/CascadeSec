@@ -1,0 +1,11 @@
+{
+  "description": "Role granting get/list/watch on secrets",
+  "category": "iam-over-permissioning",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0113"
+    }
+  ],
+  "note": "CIS Kubernetes 5.1.2. Trivy-only, and narrower than it looks: a subject that can list secrets in a namespace can read every credential in it. checkov has no equivalent check, so single-source again."
+}

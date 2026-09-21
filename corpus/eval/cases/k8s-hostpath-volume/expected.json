@@ -1,0 +1,15 @@
+{
+  "description": "Pod mounting the node root filesystem as a hostPath volume",
+  "category": "network-exposure",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0023"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0121"
+    }
+  ],
+  "note": "CIS Kubernetes 5.2.11. Trivy-only: checkov raised nothing on a hostPath volume here, so this file's self-check has one source rather than two -- the same single-source caveat as OpenTofu, from the other direction."
+}

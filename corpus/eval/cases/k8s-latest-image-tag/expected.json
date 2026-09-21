@@ -1,0 +1,19 @@
+{
+  "description": "Container image with the :latest tag and no digest",
+  "category": "unpinned-modules",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0013"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_14"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_43"
+    }
+  ],
+  "note": "The Kubernetes half of the pinning category the Terraform module cases cover: what runs is whatever the registry resolves the tag to today. CKV_K8S_43 (pin by digest) is the same problem stated as its remedy."
+}
