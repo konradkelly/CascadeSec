@@ -53,11 +53,14 @@ CLONES = HERE / ".repos"
 # The eval harness already knows the bucket, the mappings file, and how to
 # clear a prefix; there is no reason to have two of each.
 sys.path.insert(0, str(HERE.parent / "eval"))
-from run_eval import bucket_from_terraform, delete_prefix, load_mappings  # noqa: E402
+from run_eval import (  # noqa: E402
+    bucket_from_terraform, delete_prefix, load_mappings, mapped_pairs,
+)
 
 # Must match iac-scanner's SNAPSHOT_SUFFIXES and scripts/scan.py's SKIP_DIRS:
 # what scan.py would upload is what a real run would scan.
-SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json")
+SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json",
+                     ".yaml", ".yml")
 SKIP_DIRS = {".terraform", ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"}
 
 # The scanner's own timeout is 300s (terraform/lambda_iac_scanner.tf). boto3's
@@ -221,8 +224,10 @@ def main():
         repos = chosen
 
     bucket = args.bucket or bucket_from_terraform()
-    mapped = load_mappings()
-    mapped_names = {f"{s}:{r}" for s, r in mapped}
+    # Which candidates apply depends on the target_type a rule fired with, so
+    # coverage is computed per repository from its own findings rather than
+    # once from the file (corpus/README.md, scoped candidates).
+    mappings = load_mappings()
     s3 = boto3.client("s3")
     lam = boto3.client("lambda", config=LAMBDA_CONFIG)
     stamp = time.strftime("%Y%m%dT%H%M%S")
@@ -262,6 +267,8 @@ def main():
             if "error" in body:
                 result["error"] = body["error"]
             else:
+                mapped = mapped_pairs(body, mappings)
+                result["mapped_names"] = sorted(f"{src}:{rid}" for src, rid in mapped)
                 result["summary"] = summarise(body, mapped)
                 result["findings"] = body["findings"]
                 observed = {"files": len(files), **{k: result["summary"][k] for k in BASELINE_KEYS[1:]}}
@@ -271,7 +278,7 @@ def main():
         report[name] = result
 
     for name, result in report.items():
-        print_repo(name, result, mapped_names)
+        print_repo(name, result, set(result.get("mapped_names") or ()))
     print()
 
     if args.pin or args.baseline:
