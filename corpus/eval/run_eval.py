@@ -49,7 +49,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 CASES = HERE / "cases"
 
 # Must match iac-scanner's SNAPSHOT_SUFFIXES.
-SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json")
+SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json",
+                     ".yaml", ".yml")
 RULE_MAPPINGS = HERE.parent / "rule_mappings.json"
 
 

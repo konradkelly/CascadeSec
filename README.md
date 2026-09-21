@@ -92,14 +92,14 @@ CI runs the Lambda test suites (pytest, 217 tests) and the dashboard lint + type
 ## Roadmap
 
 - [x] v1 — Terraform scanning, mapping, remediation, review dashboard (manual trigger, no GitHub write-back)
-- [ ] v2 — Kubernetes manifest + Helm chart scanning
+- [~] v2 — Kubernetes manifest scanning (**built 2026-09-20**); Helm charts held back, see [`docs/multi-iac-spec.md`](docs/multi-iac-spec.md) §6
 - [ ] v3 — GitHub App / PR-triggered CI integration
 - [ ] v4 — Approved-fix write-back to PR branch
 
 ## Tech stack
 
 - **Infra:** AWS Lambda (zip and container-image), Step Functions, API Gateway, DynamoDB, S3, ECR, Cognito, CloudFront, Secrets Manager, CloudWatch (EMF metrics, alarms), X-Ray, SNS — all in Terraform
-- **Scanning:** Trivy, Checkov, custom Trivy checks in Rego (Terraform); kubesec, Helm (v2)
+- **Scanning:** Trivy, Checkov, custom Trivy checks in Rego — Terraform, OpenTofu and Kubernetes manifests
 - **Agents:** Anthropic API, strict JSON-schema-constrained outputs
 - **Frontend:** React, Vite, TypeScript
 - **CI:** GitHub Actions — pytest per Lambda, oxlint + `tsc` for the dashboard
