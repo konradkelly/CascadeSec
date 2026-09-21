@@ -101,6 +101,23 @@ hostNetwork, added capabilities, hostPath, hostPort -- plus wildcard RBAC
 (5.1.3). Across those cases **44 of the 51 distinct rules raised now have a
 candidate control**.
 
+Extended again 2026-09-20 with `5.4.2` (consider external secret storage)
+and a mapping for `IACP-0002`, this project's own check for a literal
+credential in a container `env` (see `eval/README.md`). `IACP-0002` maps to
+`5.4.1` plus the `CNAS-5`/`CICD-SEC-6` pair the other hardcoded-secret rules
+use.
+
+**`5.4.2` is vendored but uncited, and the reason is a real limit of this
+file.** The finding that most wants it is a Secret committed with a
+plaintext `stringData`, which raises `CKV_SECRET_6` -- but mappings are
+keyed by `(source, rule_id)` alone, not by `target_type`, and
+`CKV_SECRET_6` fires on Terraform too. Adding a Kubernetes control to it
+would offer that control as a candidate for a `.tf` finding, which is
+force-mapping by a different route. So the control is here as reference text
+for when a Kubernetes-specific rule exists to carry it. Worth knowing before
+assuming a control can always be reached: **a language-agnostic rule cannot
+carry a language-specific control under the current key.**
+
 The 16 unmapped rules are unmapped on purpose, and again they cluster:
 
 - **Resource requests and limits** (`KSV-0011/0015/0016/0018`,

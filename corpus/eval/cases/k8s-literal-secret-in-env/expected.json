@@ -1,6 +1,11 @@
 {
   "description": "Database password hardcoded as a literal container environment variable",
   "category": "hardcoded-secrets",
-  "expected": [],
-  "note": "Expected to MISS, and kept as a case so the gap is measured rather than assumed -- the same treatment as rds-literal-password. checkov's secret detection is EntropyKeywordCombinator: a keyword (`password`) must combine with a detect-secrets entropy hit on the value. In Kubernetes' env list the two live under SEPARATE YAML keys -- the keyword is `name:`, the secret is `value:` on the next line -- so the combinator never pairs them and nothing fires. Measured 2026-09-20: the identical value under a `password:` key in a Secret's stringData DOES fire CKV_SECRET_6 (see the sibling case k8s-literal-secret-in-secret-object), which is what isolates the cause to the env structure rather than to the value. The value is base64-charset only on purpose, so this case does not also trip the punctuation gap that rds-literal-password isolates. Worth its own weight because the direction is backwards: the CORRECT form (valueFrom.secretKeyRef) raises CKV_K8S_35, while this, the dangerous form, raises nothing. Closing it means a custom check, the way IACP-0001 closed the port-range gap."
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "IACP-0002"
+    }
+  ],
+  "note": "Was labelled empty, and is the number that moved. Neither tool reports a password typed straight into a manifest, and the direction is backwards: the CORRECT form (valueFrom.secretKeyRef) raises CKV_K8S_35, while this, the dangerous form, raised nothing. IACP-0002 (lambda/iac-scanner/checks/) is this project's check for it, added 2026-09-20 the same way IACP-0001 closed the port-range gap.\n\nThe upstream cause is structural and specific to Kubernetes. checkov's secret detection is EntropyKeywordCombinator: a keyword must combine with a detect-secrets entropy hit on the value. In a Secret's stringData the two are one YAML pair and CKV_SECRET_6 fires -- see the sibling case k8s-literal-secret-in-secret-object, which carries the identical value. In a container's env list the keyword is under `name:` and the secret under `value:`, two separate keys, so they are never paired. Shape-matched credentials are unaffected: an AKIA... key here fires CKV_SECRET_2, because AWSKeyDetector needs no keyword. The value is base64-charset only so this does not also trip the punctuation gap rds-literal-password isolates."
 }

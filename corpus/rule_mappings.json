@@ -601,6 +601,20 @@
         "control_id": "CNAS-6"
       }
     ],
+    "trivy:IACP-0002": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.4.1"
+      },
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-5"
+      },
+      {
+        "framework": "OWASP-CICD-Top10",
+        "control_id": "CICD-SEC-6"
+      }
+    ],
     "trivy:KSV-0001": [
       {
         "framework": "CIS-Kubernetes-2.0",
