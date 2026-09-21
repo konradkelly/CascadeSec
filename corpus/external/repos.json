@@ -1,5 +1,5 @@
 {
-  "_comment": "Third-party Terraform repositories run_external.py scans. `sha` pins the commit so a target cannot drift under its baseline; `baseline` is what the last --baseline run observed (absent until one has), and any later difference is reported as drift. `subdir` narrows the scan to one directory of the repo. Nothing here is vendored: the runner clones at run time into .repos/, which is gitignored.",
+  "_comment": "Third-party repositories run_external.py scans -- Terraform and, since 2026-09-20, Kubernetes. `sha` pins the commit so a target cannot drift under its baseline; `baseline` is what the last --baseline run observed (absent until one has), and any later difference is reported as drift. `subdir` narrows the scan to one directory of the repo. Nothing here is vendored: the runner clones at run time into .repos/, which is gitignored.",
   "repos": [
     {
       "name": "terragoat",
@@ -35,6 +35,27 @@
       "sha": "d106b47ad1e22cae3a841cd495eae48e9bbe3a03",
       "subdir": null,
       "why": "Terragrunt: .hcl wrappers over remote modules and no .tf at all. Documents what the scanner does with a repo shape it does not handle."
+    },
+    {
+      "name": "kubernetes-goat",
+      "url": "https://github.com/madhuakula/kubernetes-goat",
+      "sha": "723a0db478f050d173d23b4ce5044b65bce0bdd0",
+      "subdir": null,
+      "why": "Vulnerable by design, and the Kubernetes analogue of terragoat. A volume and remediation-workload target, not a detection test: its scenarios are written to be found."
+    },
+    {
+      "name": "microservices-demo",
+      "url": "https://github.com/GoogleCloudPlatform/microservices-demo",
+      "sha": "38e7348eb289eb5b87c0c6e8cb19ced0449dc389",
+      "subdir": null,
+      "why": "Google's Online Boutique: a well-maintained real application carrying plain manifests, a Helm chart, kustomize overlays, istio manifests, GitHub Actions workflows and GCP Terraform in one tree. The false-positive and repo-shape target -- and the only one where a single scan crosses two languages."
+    },
+    {
+      "name": "argocd-example-apps",
+      "url": "https://github.com/argoproj/argocd-example-apps",
+      "sha": "8088f4c0d970abb09e250248cc97e35623447cb5",
+      "subdir": null,
+      "why": "The same guestbook app expressed eight ways -- plain, Helm, kustomize, jsonnet, sync hooks -- plus sock-shop. Documents what the scanner does with the packaging formats it does not handle, the way terragrunt does for Terraform."
     }
   ]
 }

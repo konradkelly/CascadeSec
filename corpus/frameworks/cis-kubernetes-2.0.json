@@ -104,6 +104,11 @@
       "control_id": "5.6.3",
       "title": "Apply SecurityContext to your Pods and Containers",
       "text": "Every pod and container should declare a securityContext setting its user, group, capabilities and other operating-system security controls explicitly, rather than inheriting the runtime's permissive defaults."
+    },
+    {
+      "control_id": "5.6.4",
+      "title": "The default namespace should not be used",
+      "text": "Workloads should be placed in a namespace created for them rather than in `default`. The default namespace is where anything unqualified lands, so resources in it cannot be separated by namespace-scoped RBAC, NetworkPolicy or quota from anything else that lands there."
     }
   ]
 }
