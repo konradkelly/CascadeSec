@@ -5,10 +5,6 @@
 ![CI](https://img.shields.io/github/actions/workflow/status/konradkelly/CascadeSec/ci.yml?branch=main&label=CI)
 ![AWS](https://img.shields.io/badge/AWS-Lambda%20%7C%20Step%20Functions%20%7C%20DynamoDB-orange)
 
-Formerly **IaCPosture**. The old name persists in the code — `var.project`, the
-deployed AWS resource names, `iacposture-spec.md` — because renaming those means
-recreating live infrastructure, and the name of a Lambda is not worth that.
-
 ---
 
 ## What it does
@@ -22,6 +18,27 @@ CascadeSec scans Terraform for security misconfigurations, maps every finding to
 - A second LLM agent drafts a minimal diff — then re-runs the same scanner against its own proposed fix before surfacing it. If the fix doesn't clear the finding, introduces a new one, or suppresses the scanner instead of fixing anything, it never reaches a human as a suggestion
 - When a fix needs to know something about the rest of the repository, the agent asks a context agent rather than assuming, and every answer is cited to `file:line`
 - Every finding and every fix is reviewed and approved by a human — nothing is auto-merged
+
+## What it looks like
+
+A fix the agent proposed for a security group in [terragoat](https://github.com/bridgecrewio/terragoat)
+— code nobody on this project wrote. The `0.0.0.0/0, all ports` egress is
+replaced by four scoped rules, and the descriptions show where each one came
+from: the agent read the instance's `user_data` and found the `apt-get` that
+needs ports 80 and 443.
+
+![Proposed diff replacing an open egress rule with four scoped rules](docs/images/proposed-diff-egress.png)
+
+A finding the agent would *not* propose a fix for. The self-check failed and
+the fix rested on something the agent could only assume about the repository
+— so it is held for a human, with the assumption spelled out.
+
+![Finding detail: control mapping, remediation rationale, and the facts the agent could not check](docs/images/finding-detail-needs-human.png)
+
+The review queue for one scan. Every finding carries its status, the rule
+that raised it, and whether the proposed fix survived the self-check.
+
+![Findings table for one PR, showing resolved, needs-human, and fix-proposed states](docs/images/findings-table.png)
 
 ## Why
 
