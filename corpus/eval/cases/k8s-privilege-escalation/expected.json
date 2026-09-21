@@ -1,0 +1,15 @@
+{
+  "description": "Container with allowPrivilegeEscalation: true",
+  "category": "iam-over-permissioning",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0001"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_20"
+    }
+  ],
+  "note": "CIS Kubernetes 5.2.6. The default when the field is unset also permits escalation, which is why the hardened base sets it false explicitly."
+}

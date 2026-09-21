@@ -1,0 +1,15 @@
+{
+  "description": "Pod with hostPID: true",
+  "category": "network-exposure",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0010"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_17"
+    }
+  ],
+  "note": "CIS Kubernetes 5.2.3."
+}

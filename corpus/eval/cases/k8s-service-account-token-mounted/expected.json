@@ -1,0 +1,11 @@
+{
+  "description": "Pod that mounts a service account token it does not need",
+  "category": "iam-over-permissioning",
+  "expected": [
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_38"
+    }
+  ],
+  "note": "CIS Kubernetes 5.1.6. checkov-only. The hardened base sets automountServiceAccountToken: false; this case is that line removed, which is the default and therefore the common case."
+}

@@ -1,0 +1,19 @@
+{
+  "description": "Role granting * on * in the app namespace",
+  "category": "iam-over-permissioning",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0044"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0112"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_49"
+    }
+  ],
+  "note": "CIS Kubernetes 5.1.3, the Kubernetes analogue of CIS AWS 1.16's \"*:*\" admin policy. Also raises CKV_K8S_157/158 (bind and escalate permissions), which a wildcard necessarily includes."
+}

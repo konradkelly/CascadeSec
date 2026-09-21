@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bare
+  namespace: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bare
+  template:
+    metadata:
+      labels:
+        app: bare
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: bare
+          image: app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bare
+  namespace: app
+spec:
+  podSelector:
+    matchLabels:
+      app: bare
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}

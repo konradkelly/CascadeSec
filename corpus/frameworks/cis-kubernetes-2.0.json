@@ -21,6 +21,11 @@
       "text": "Pods and ServiceAccounts that do not call the Kubernetes API should set automountServiceAccountToken: false, so a compromised container does not hold a credential to the API server it never needed."
     },
     {
+      "control_id": "5.1.8",
+      "title": "Limit use of the Bind, Impersonate and Escalate permissions in the Kubernetes cluster",
+      "text": "Roles and ClusterRoles should not grant the bind, impersonate or escalate verbs, each of which lets a subject acquire permissions it was not granted directly -- escalate by writing a more powerful role, bind by attaching one, impersonate by acting as another subject."
+    },
+    {
       "control_id": "5.2.2",
       "title": "Minimize the admission of privileged containers",
       "text": "Containers should not set securityContext.privileged: true; a privileged container has every capability and unrestricted device access on the node, which is equivalent to root on the host."

@@ -1,0 +1,11 @@
+{
+  "description": "Container image from a registry the scanner does not trust",
+  "category": "unpinned-modules",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0125"
+    }
+  ],
+  "note": "CIS Kubernetes 5.5.1, and a measured quirk worth keeping: KSV-0125 treats only a *bare* image name as trusted. docker.io, registry.k8s.io and ghcr.io all fire it (measured 2026-09-20), so on a real repository this rule fires on essentially every image. Every other case here uses a bare name so that this rule is not noise in all of them."
+}

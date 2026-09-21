@@ -1,0 +1,15 @@
+{
+  "description": "Container binding a hostPort",
+  "category": "network-exposure",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0024"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_26"
+    }
+  ],
+  "note": "CIS Kubernetes 5.2.12. Exposes the container on the node's interface, outside the Service and NetworkPolicy model."
+}

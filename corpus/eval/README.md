@@ -1,8 +1,9 @@
 # Detection-recall eval for `iac-scanner`
 
-Spec §7.1, §8.2 item 1. Labelled Terraform cases with known injected
-vulnerabilities, one command that scans them against the **deployed** scanner
-and reports what fraction of the expected findings fired.
+Spec §7.1, §8.2 item 1. Labelled cases with known injected
+vulnerabilities -- Terraform, OpenTofu and (since 2026-09-20) Kubernetes --
+one command that scans them against the **deployed** scanner and reports what
+fraction of the expected findings fired.
 
 ```
 python run_eval.py                          # bucket from `terraform output`
@@ -36,6 +37,57 @@ Both clean controls raised nothing.
 
 Previous: 97.0% (65/67) on 2026-09-10 with tfsec v1.28.14, before the
 `.tfvars`/secrets surface (§8.2 item 4) and the Trivy swap (item 6).
+
+## The Kubernetes cases (added 2026-09-20)
+
+19 positive cases and one clean control, covering the CIS Kubernetes 5.1 and
+5.2 families, seccomp, image provenance, secrets-as-env and the service
+account token. **50 of 50 labelled pairs fire, and the clean control raises
+nothing** -- measured locally against the same pinned Trivy 0.74.0 and
+checkov 3.3.16 the scanner image carries, because the deployed scanner had
+not yet been rebuilt when they were written. *Re-run `run_eval.py` after the
+next deploy and replace this paragraph with the deployed number*, the way
+every other number in this file was produced.
+
+| | |
+|---|---|
+| labelled pairs | 50, all firing |
+| by source | checkov 24/24 · trivy 26/26 |
+| labelled pairs with a candidate control | **39/41 (95%)** |
+| all distinct rules these cases raise | **44/51 (86%)** mapped |
+
+The labelled-pair coverage is far above Terraform's 72% for one reason worth
+naming: these cases were written *after* the CIS Kubernetes corpus, against
+the controls it holds, where the Terraform cases predate their corpus by
+months. The second number is the honest one for a real repository, and the
+gap between them is smaller here for the same reason.
+
+**Every case isolates its own rule.** The base manifest is hardened in every
+other respect -- pod and container `securityContext`, dropped capabilities,
+`RuntimeDefault` seccomp, read-only root, non-root high UID and GID, resource
+requests and limits, both probes, no service account token, a digest-pinned
+image, and a NetworkPolicy -- so a case's label is the one thing it breaks.
+That took four measured iterations to reach; the first pass had five rules
+firing on all twenty cases and a clean control that raised five findings.
+
+Three things the iterations taught, all of them recorded in the case notes:
+
+- **`KSV-0125` (trusted registries) trusts only a bare image name.**
+  `docker.io/...`, `registry.k8s.io/...` and `ghcr.io/...` all fire it. On a
+  real repository it therefore fires on essentially every image, which is
+  why `k8s-untrusted-registry` owns it and every other case uses a bare name.
+- **Either seccomp profile satisfies both tools.** The pod-level and the
+  container-level `seccompProfile` are interchangeable for detection, so
+  `k8s-no-seccomp-profile` has to drop both -- and a fix may legitimately add
+  either.
+- **Trivy splits "runs as root" in two.** `KSV-0105` is an explicit
+  `runAsUser: 0`; `KSV-0012` is the *absent* securityContext. The two cases
+  are labelled accordingly.
+
+`k8s-no-security-context` is the exception to the one-rule-per-case rule, on
+purpose: it is the PugetScope shape, one missing block raising eleven
+labelled pairs across both tools, and it is what keeps the per-file collapse
+in multi-iac-spec §5.1 measurable.
 
 ## Mapping coverage
 

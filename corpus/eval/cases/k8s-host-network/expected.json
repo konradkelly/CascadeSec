@@ -1,0 +1,15 @@
+{
+  "description": "Pod with hostNetwork: true",
+  "category": "network-exposure",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0009"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_19"
+    }
+  ],
+  "note": "CIS Kubernetes 5.2.5. The pod is on the node's own network stack, which bypasses NetworkPolicy entirely -- so this one finding invalidates the control CKV2_K8S_6 checks for."
+}

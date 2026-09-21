@@ -93,6 +93,14 @@ have a candidate control.** `:latest` tags and images not pinned by digest
 map to the same CNAS-4 / CICD-SEC-9 pair the Terraform module-pinning rules
 do, since it is the same problem.
 
+Extended 2026-09-20 with the rules the Kubernetes eval cases raise: 23
+more mappings (90 -> 113) and one more control, **5.1.8** (bind, impersonate
+and escalate), which `CKV_K8S_157`/`158` need and the first pass did not
+carry. These cover the 5.2 family end to end -- privileged, hostPID, hostIPC,
+hostNetwork, added capabilities, hostPath, hostPort -- plus wildcard RBAC
+(5.1.3). Across those cases **44 of the 51 distinct rules raised now have a
+candidate control**.
+
 The 16 unmapped rules are unmapped on purpose, and again they cluster:
 
 - **Resource requests and limits** (`KSV-0011/0015/0016/0018`,

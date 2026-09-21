@@ -1,0 +1,19 @@
+{
+  "description": "Pod and container with no seccompProfile",
+  "category": "missing-encryption",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0030"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0104"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_31"
+    }
+  ],
+  "note": "CIS Kubernetes 5.6.2. Both the pod-level and container-level profile have to be absent: either one satisfies both tools, which is itself worth knowing -- a fix may add it at either level."
+}

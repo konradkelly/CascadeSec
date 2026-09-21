@@ -1,0 +1,23 @@
+{
+  "description": "Container that does not drop the default capability set",
+  "category": "iam-over-permissioning",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0003"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "KSV-0004"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_37"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_K8S_28"
+    }
+  ],
+  "note": "CIS Kubernetes 5.2.9, and 5.2.8 for NET_RAW specifically: dropping ALL is what removes NET_RAW, so checkov reports both. Trivy splits 'does not drop all' (KSV-0003) from 'does not drop any' (KSV-0004)."
+}
