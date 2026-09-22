@@ -39,6 +39,7 @@ import argparse
 import collections
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -50,7 +51,31 @@ CASES = HERE / "cases"
 
 # Must match iac-scanner's SNAPSHOT_SUFFIXES.
 SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json",
-                     ".yaml", ".yml")
+                     ".yaml", ".yml", ".bicep")
+
+# ARM templates are .json, which says nothing on its own, so they are admitted
+# by content: a top-level $schema naming a deploymentTemplate. An uploader
+# applies the cheap text test only and lets the scanner be the authority --
+# over-admitting costs one object the scanner re-sniffs and discards, where
+# under-admitting loses a file silently. Must match iac-scanner's
+# ARM_SCHEMA_RE; corpus/test_corpus.py asserts every copy agrees.
+ARM_SCHEMA_RE = re.compile(r'"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json')
+
+
+def is_snapshot_file(path):
+    """Whether the scanner would open this file.
+
+    Suffix for everything that declares itself by name, plus the ARM sniff for
+    a bare .json. Note .tf.json and .tofu.json match on suffix first and never
+    reach the sniff."""
+    if path.name.endswith(SNAPSHOT_SUFFIXES):
+        return True
+    if not path.name.endswith(".json"):
+        return False
+    try:
+        return bool(ARM_SCHEMA_RE.search(path.read_text(encoding="utf-8")))
+    except (OSError, UnicodeDecodeError):
+        return False
 RULE_MAPPINGS = HERE.parent / "rule_mappings.json"
 
 
@@ -94,11 +119,17 @@ def load_cases():
     for d in sorted(p for p in CASES.iterdir() if p.is_dir()):
         expected = json.loads((d / "expected.json").read_text(encoding="utf-8"))
         cases[d.name] = {
-            # Every Terraform file in the case, not just main.tf: a case can
-            # be a .tf.json, or a .tf plus the .tfvars that holds the secret.
+            # Every scannable file in the case, not just main.tf: a case can
+            # be a .tf.json, or a .tf plus the .tfvars that holds the secret,
+            # or a .bicep plus the module it deploys.
+            #
+            # is_snapshot_file rather than a suffix test, because an ARM case's
+            # sample is a .json -- and so is every case's own expected.json,
+            # which a bare ".json" in SNAPSHOT_SUFFIXES would upload as a
+            # sample. The $schema sniff tells them apart.
             "files": {
                 p.name: p.read_text(encoding="utf-8")
-                for p in sorted(d.iterdir()) if p.name.endswith(SNAPSHOT_SUFFIXES)
+                for p in sorted(d.iterdir()) if p.name != "expected.json" and is_snapshot_file(p)
             },
             "category": expected["category"],
             "description": expected["description"],

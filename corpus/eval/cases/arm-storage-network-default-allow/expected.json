@@ -1,0 +1,19 @@
+{
+  "description": "ARM storage account whose network rules default to Allow",
+  "category": "network-exposure",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "AZU-0012"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AZURE_35"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "AZU-0010"
+    }
+  ],
+  "note": "CIS Azure 4.7 and 4.8. defaultAction Allow makes every firewall rule on the account decoration. CORRECTED after the confirming run 2026-09-22: CKV_AZURE_36 was expected for the trusted-services half and does not fire -- checkov only asks about the bypass list once defaultAction is Deny, which is reasonable, since with Allow there is nothing to bypass. Trivy's AZU-0010 does raise it here and is labelled instead."
+}

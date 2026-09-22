@@ -1,0 +1,19 @@
+{
+  "description": "ARM Key Vault with soft delete and purge protection off",
+  "category": "data-protection",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "AZU-0016"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AZURE_110"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AZURE_42"
+    }
+  ],
+  "note": "CIS Azure 3.3.5. Without purge protection a vault deletion is immediate and irreversible, which destroys the secrets and any audit material with them."
+}

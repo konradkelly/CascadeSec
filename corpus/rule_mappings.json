@@ -828,12 +828,6 @@
         "control_id": "4.7"
       }
     ],
-    "trivy:AZU-0013": [
-      {
-        "framework": "CIS-Azure-3.0",
-        "control_id": "3.3.7"
-      }
-    ],
     "trivy:AZU-0014": [
       {
         "framework": "CIS-Azure-3.0",
@@ -868,18 +862,6 @@
       {
         "framework": "CIS-Azure-3.0",
         "control_id": "7.5"
-      }
-    ],
-    "trivy:AZU-0056": [
-      {
-        "framework": "CIS-Azure-3.0",
-        "control_id": "4.10"
-      }
-    ],
-    "trivy:AZU-0057": [
-      {
-        "framework": "CIS-Azure-3.0",
-        "control_id": "4.13"
       }
     ],
     "trivy:AZU-0059": [

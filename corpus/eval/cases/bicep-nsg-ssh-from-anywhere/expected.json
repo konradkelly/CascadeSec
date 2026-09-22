@@ -1,0 +1,11 @@
+{
+  "description": "Bicep network security group allowing SSH from any address",
+  "category": "network-exposure",
+  "expected": [
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AZURE_10"
+    }
+  ],
+  "note": "CIS Azure 7.2. SSH open to * from the internet. checkov-only: Trivy has no Bicep scanner (multi-iac-spec §2), so a Bicep finding's self-check has one source rather than two. The mirror of OpenTofu being Trivy-only. Labelled here and said in the UI by the \"checkov only\" badge (dashboard/src/review/coverage.ts), not left to be discovered."
+}

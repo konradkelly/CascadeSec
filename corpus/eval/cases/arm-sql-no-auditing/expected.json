@@ -1,0 +1,19 @@
+{
+  "description": "ARM SQL server with no auditing and public network access on",
+  "category": "logging-and-audit",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "AZU-0027"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AZURE_23"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AZURE_113"
+    }
+  ],
+  "note": "CIS Azure 5.1.1 and 5.1.7. A SQL server with no auditing and public network access left on: no record of who reached it, and the whole internet able to try."
+}

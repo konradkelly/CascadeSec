@@ -1,0 +1,6 @@
+{
+  "description": "A hardened ARM network security group and VNet that should raise nothing",
+  "category": "clean-control",
+  "expected": [],
+  "note": "The control for the ARM cases: it proves the expectations above come from the template's contents and not from the scanners firing on any ARM file at all. CHANGED after the confirming run 2026-09-22: this was a hardened storage account, which is not achievable. AZU-0056 (blob soft delete), AZU-0057 (logging) and AZU-0058 (geo-redundancy) fire on an ARM storage account whatever it says -- a template with Standard_LRS, the worst case for a geo-redundancy check, escapes AZU-0058 while one with Standard_GRS raises it, so the rule is not reading the sku. The same intent in Terraform clears all three. Trivy's azure-arm adapter does not map those storage properties; see corpus/README.md. An NSG and VNet are read correctly by both tools, so the control is built from those instead."
+}
