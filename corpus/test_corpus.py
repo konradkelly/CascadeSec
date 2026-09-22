@@ -36,7 +36,7 @@ KNOWN_SOURCES = {"trivy", "checkov"}
 # (multi-iac-spec §3.1); the ones not yet admitted to the scanner are listed
 # so a mapping can be written the day a language lands.
 KNOWN_TARGET_TYPES = {"terraform", "opentofu", "kubernetes", "helm",
-                      "cloudformation", "bicep", "npm", "dockerfile"}
+                      "cloudformation", "arm", "bicep", "npm", "dockerfile"}
 
 
 def _load(path):

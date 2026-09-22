@@ -1,0 +1,154 @@
+{
+  "framework": "CIS-Azure-3.0",
+  "framework_name": "CIS Microsoft Azure Foundations Benchmark v3.0.0",
+  "source": "https://www.cisecurity.org/benchmark/azure",
+  "verified_against": "https://github.com/prowler-cloud/prowler/blob/master/prowler/compliance/azure/cis_3.0_azure.json",
+  "_comment": "The sections a deployment template can satisfy or violate: 3.3 (Key Vault), 4 (Storage Accounts), 5.1 (SQL), 7 (Networking), 8 (Virtual Machines) and 9 (App Service). Sections 1-2 (Entra/IAM) and 3.1 (Defender plans) are deliberately absent -- they audit the directory and the subscription, not a template, so no template rule could ever cite them. This is the analogue of taking section 5 only from CIS Kubernetes. Control ids and titles verified 2026-09-22 against Prowler's cis_3.0_azure.json, which carries the benchmark's own numbering; it is the Azure analogue of the kube-bench config the Kubernetes file was verified against, since the benchmark PDF needs a CIS WorkBench login and is not redistributable. EDITION -- v3.0.0 rather than the current v4.0.0, and deliberately, which departs from the Kubernetes file's 'take the current edition'. v4.0 renumbers every storage control (4.1 'Secure transfer required' becomes 10.3.4) and drops the SQL auditing controls outright: 5.1.1 and 5.1.6 have no v4.0 equivalent, and its only SQL entries are Defender plans and Activity Log Alerts, both subscription-level and unreachable from a template. Auditing is one of the highest-volume rule families the pinned scanners raise on Azure templates, so citing v4.0 would mean leaving it unmapped and gaining nothing. A citation here therefore does NOT read the same against v4.0 -- unlike CIS Kubernetes section 5, this benchmark renumbers between majors, so the edition is part of the citation. Partial by design, as both other CIS files are: the controls the pinned Trivy 0.74.0 and checkov 3.3.16 were observed to raise rules against on Azure/azure-quickstart-templates (2026-09-22), plus the ones the eval cases exercise. `text` is an original summary, not benchmark wording.",
+  "controls": [
+    {
+      "control_id": "3.3.1",
+      "title": "Ensure that the Expiration Date is set for all Keys in RBAC Key Vaults",
+      "text": "Every key in a Key Vault should carry an expiration date, so a key that is never rotated stops working rather than staying valid indefinitely. A key with no expiry is one nobody has to think about again."
+    },
+    {
+      "control_id": "3.3.3",
+      "title": "Ensure that the Expiration Date is set for all Secrets in RBAC Key Vaults",
+      "text": "Every secret in a Key Vault should carry an expiration date. Without one a leaked secret stays valid until somebody notices and revokes it by hand, and nothing in the platform forces that moment to arrive."
+    },
+    {
+      "control_id": "3.3.5",
+      "title": "Ensure the Key Vault is Recoverable",
+      "text": "A Key Vault should have soft delete and purge protection enabled, so a deleted vault or secret can be recovered within the retention window. Without purge protection a deletion is immediate and irreversible, which is both an availability risk and a way to destroy audit material."
+    },
+    {
+      "control_id": "3.3.7",
+      "title": "Ensure that Private Endpoints are Used for Azure Key Vault",
+      "text": "Key Vault should be reached over a private endpoint rather than its public one, with network ACLs defaulting to deny. A vault open to the internet is protected only by its access policy, leaving no network boundary in front of the secrets it holds."
+    },
+    {
+      "control_id": "4.1",
+      "title": "Ensure that 'Secure transfer required' is set to 'Enabled'",
+      "text": "A storage account should accept only HTTPS connections. With secure transfer disabled the account also answers over plain HTTP, so credentials and payloads can be read or altered in transit."
+    },
+    {
+      "control_id": "4.2",
+      "title": "Ensure that infrastructure encryption is enabled for each storage account",
+      "text": "Infrastructure encryption adds a second layer of encryption beneath the service-level one, so a single failure in the platform's encryption does not expose the stored data. It can only be set when the account is created."
+    },
+    {
+      "control_id": "4.7",
+      "title": "Ensure Default Network Access Rule for Storage Accounts is Set to Deny",
+      "text": "The network rule set's default action should be Deny, so access is granted only to the networks and services explicitly allowed. Left at Allow, every firewall rule on the account is decoration: anything not matched is still permitted."
+    },
+    {
+      "control_id": "4.8",
+      "title": "Ensure trusted Azure services are allowed to access the storage account",
+      "text": "When the default network rule is Deny, the trusted-services bypass lets first-party services that cannot use a fixed address -- backup, monitoring and similar -- keep working. Without it, tightening the firewall silently breaks them, which is the usual reason the firewall gets turned off again."
+    },
+    {
+      "control_id": "4.10",
+      "title": "Ensure Soft Delete is Enabled for Azure Containers and Blob Storage",
+      "text": "Blob soft delete keeps deleted blobs and containers recoverable for a retention period. Without it a deletion, whether a mistake or an attack, is immediate and final."
+    },
+    {
+      "control_id": "4.11",
+      "title": "Ensure Storage for Critical Data are Encrypted with Customer Managed Keys (CMK)",
+      "text": "Storage holding critical data should be encrypted with a customer-managed key rather than the platform-managed default, so the key's lifecycle, rotation and revocation stay under the control of the data's owner."
+    },
+    {
+      "control_id": "4.13",
+      "title": "Ensure Storage logging is Enabled for Blob Service for 'Read', 'Write', and 'Delete' requests",
+      "text": "The blob service should log read, write and delete requests. Without those logs there is no record of who read or removed an object, so an incident cannot be reconstructed afterwards."
+    },
+    {
+      "control_id": "4.15",
+      "title": "Ensure the 'Minimum TLS version' for storage accounts is set to 'Version 1.2'",
+      "text": "A storage account should refuse TLS below 1.2. Leaving 1.0 or 1.1 enabled lets a client -- or an attacker downgrading the connection -- negotiate a version with known weaknesses, even though HTTPS is required."
+    },
+    {
+      "control_id": "5.1.1",
+      "title": "Ensure that 'Auditing' is set to 'On'",
+      "text": "Auditing should be enabled on SQL servers so database events are recorded. Without it there is no record of access or change, and a breach cannot be investigated or even confirmed."
+    },
+    {
+      "control_id": "5.1.2",
+      "title": "Ensure no Azure SQL Databases allow ingress from 0.0.0.0/0 (ANY IP)",
+      "text": "A SQL server firewall rule spanning 0.0.0.0 to 255.255.255.255 exposes the database to every address on the internet, leaving authentication as the only barrier in front of it."
+    },
+    {
+      "control_id": "5.1.4",
+      "title": "Ensure that Microsoft Entra authentication is Configured for SQL Servers",
+      "text": "SQL servers should have an Entra administrator configured, so access is governed centrally with conditional access and MFA rather than through SQL logins whose passwords live in connection strings."
+    },
+    {
+      "control_id": "5.1.5",
+      "title": "Ensure that 'Data encryption' is set to 'On' on a SQL Database",
+      "text": "Transparent Data Encryption should be on, so database files, backups and logs are encrypted at rest and a copy of the underlying storage is not readable on its own."
+    },
+    {
+      "control_id": "5.1.6",
+      "title": "Ensure that 'Auditing' Retention is 'greater than 90 days'",
+      "text": "Audit records should be retained for more than 90 days. A shorter window routinely expires before an intrusion is discovered, which leaves the investigation without the period that matters most."
+    },
+    {
+      "control_id": "5.1.7",
+      "title": "Ensure Public Network Access is Disabled",
+      "text": "A SQL server should not accept connections from the public internet; it should be reached over a private endpoint. Public access leaves the database exposed regardless of its firewall rules."
+    },
+    {
+      "control_id": "5.3.1",
+      "title": "Ensure server parameter 'require_secure_transport' is set to 'ON' for MySQL flexible server",
+      "text": "A MySQL flexible server should require encrypted connections. With require_secure_transport off the server still accepts unencrypted ones, so a client that does not ask for TLS silently sends credentials and query data in the clear."
+    },
+    {
+      "control_id": "5.3.2",
+      "title": "Ensure server parameter 'tls_version' is set to 'TLSv1.2' (or higher) for MySQL flexible server",
+      "text": "A MySQL flexible server should refuse TLS below 1.2, so requiring encryption cannot be satisfied by a version with known weaknesses."
+    },
+    {
+      "control_id": "7.1",
+      "title": "Ensure that RDP access from the Internet is evaluated and restricted",
+      "text": "No network security group rule should allow RDP (3389) from the internet or from any source. RDP exposed to every address is among the most reliably exploited paths into a network."
+    },
+    {
+      "control_id": "7.2",
+      "title": "Ensure that SSH access from the Internet is evaluated and restricted",
+      "text": "No network security group rule should allow SSH (22) from the internet or from any source. Administrative access should arrive over a bastion, a VPN or a named range, not from anywhere."
+    },
+    {
+      "control_id": "7.4",
+      "title": "Ensure that HTTP(S) access from the Internet is evaluated and restricted",
+      "text": "Web ports open to the internet should be deliberate. A rule allowing plain HTTP (80) from any source in particular should be justified, since the traffic it admits is unencrypted."
+    },
+    {
+      "control_id": "7.5",
+      "title": "Ensure that Network Security Group Flow Log retention period is 'greater than 90 days'",
+      "text": "Flow logs should be retained for more than 90 days, so the network record covering an intrusion still exists when the intrusion is found."
+    },
+    {
+      "control_id": "8.3",
+      "title": "Ensure that 'OS and Data' disks are encrypted with Customer Managed Key (CMK)",
+      "text": "Virtual machine OS and data disks should be encrypted with a customer-managed key, or with encryption at host where that is the mechanism in use, so disk contents are unreadable outside the machine and the key's lifecycle stays under the owner's control."
+    },
+    {
+      "control_id": "8.7",
+      "title": "Ensure that Only Approved Extensions Are Installed",
+      "text": "Virtual machine extensions run with high privilege inside the guest. Only reviewed extensions should be installed, since an unreviewed one is arbitrary code executing on the machine."
+    },
+    {
+      "control_id": "9.1",
+      "title": "Ensure 'HTTPS Only' is set to On",
+      "text": "An App Service or Function App should serve only over HTTPS, redirecting or refusing plain HTTP. Otherwise session cookies and credentials can be read in transit."
+    },
+    {
+      "control_id": "9.2",
+      "title": "Ensure App Service Authentication is set up for apps in Azure App Service",
+      "text": "App Service Authentication puts an identity check in front of the application, so an unauthenticated request is rejected by the platform rather than left to the application's own handling."
+    },
+    {
+      "control_id": "9.4",
+      "title": "Ensure Web App is using the latest version of TLS encryption",
+      "text": "A web app should require a current TLS version. Leaving older versions enabled lets a client, or an attacker forcing a downgrade, negotiate one with known weaknesses."
+    }
+  ]
+}
