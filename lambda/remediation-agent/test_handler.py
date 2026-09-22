@@ -223,11 +223,31 @@ def test_detects_the_real_suppression_diff_from_pugetscope():
     # Kubernetes: checkov's annotation, the one suppression that is not a
     # comment. Trivy's YAML form is the same trivy:ignore comment as HCL.
     "checkov.io/skip1: CKV_K8S_20=Runs as root by design",
+    # Bicep: a // comment reaches the same marker HCL does. Measured
+    # 2026-09-22: checkov honours it only inside the resource body, but the
+    # added line carries the substring either way, which is what matters here.
+    "//checkov:skip=CKV_AZURE_3:reviewed",
+    # ARM: strict JSON has no comments, so checkov's structured skip is the
+    # only dialect there is and it carries none of the comment markers.
+    '"checkov": { "skip": [ { "id": "CKV_AZURE_3", "comment": "accepted" } ] }',
 ])
 def test_every_suppression_dialect_is_caught(marker):
     diff = f"--- a/main.tf\n+++ b/main.tf\n@@ -1 +1,2 @@\n {marker.upper()}\n+  {marker}\n"
 
     assert handler._find_added_suppressions(diff)
+
+
+def test_an_arm_resource_id_is_not_mistaken_for_a_suppression():
+    """The ARM marker is the quoted token "checkov", not a check id. A
+    template that legitimately names a rule -- in a description, or a tag --
+    must not be held as a suppression attempt."""
+    diff = (
+        "--- a/azuredeploy.json\n+++ b/azuredeploy.json\n@@ -1 +1,2 @@\n"
+        '+        "description": "tightened for CKV_AZURE_3",\n'
+        '+        "id": "CKV_AZURE_3",\n'
+    )
+
+    assert handler._find_added_suppressions(diff) == []
 
 
 def test_preexisting_suppressions_are_not_the_agents_doing():
@@ -508,6 +528,198 @@ def test_unknown_target_type_is_refused_rather_than_passed():
     the only place a language can be enabled."""
     with pytest.raises(ValueError, match="cloudformation"):
         handler._find_dropped_resources("a", "b", "cloudformation")
+
+
+# ---------- deletion gate: ARM ----------
+
+# A storage account with a child blobServices, plus an NSG. The child is the
+# shape the reader has to recurse into: it carries its own `type` under the
+# parent's own `resources`.
+ARM_ORIGINAL = json.dumps({
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "resources": [
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2021-09-01",
+            "name": "[parameters('storageAccountName')]",
+            "properties": {"supportsHttpsTrafficOnly": False},
+            "resources": [
+                {"type": "blobServices", "apiVersion": "2021-09-01", "name": "default"},
+            ],
+        },
+        {
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "apiVersion": "2021-05-01",
+            "name": "nsg-open",
+        },
+    ],
+}, indent=2)
+
+
+def test_arm_resources_are_read_by_type_and_name_including_nested_children():
+    """A child resource is declared under its parent's own `resources` and
+    carries its own type. Deleting one is the same class of edit as deleting
+    a top-level resource, so it has to be counted."""
+    assert handler._arm_resources(ARM_ORIGINAL) == [
+        ("Microsoft.Storage/storageAccounts", "[parameters('storageAccountName')]"),
+        ("blobServices", "default"),
+        ("Microsoft.Network/networkSecurityGroups", "nsg-open"),
+    ]
+
+
+def test_arm_resources_reads_the_symbolic_name_object_form_as_well_as_the_list():
+    """`resources` is a list up to languageVersion 1.0 and an object keyed by
+    symbolic name from 2.0. A reader that knew only the list form would see
+    no resources at all in a 2.0 template -- and no resources means no
+    deletions, which is the gate failing open."""
+    v2 = json.dumps({
+        "languageVersion": "2.0",
+        "resources": {
+            "stg": {"type": "Microsoft.Storage/storageAccounts", "name": "stg1"},
+            "nsg": {"type": "Microsoft.Network/networkSecurityGroups", "name": "nsg1"},
+        },
+    })
+
+    assert sorted(handler._arm_resources(v2)) == [
+        ("Microsoft.Network/networkSecurityGroups", "nsg1"),
+        ("Microsoft.Storage/storageAccounts", "stg1"),
+    ]
+
+
+def test_an_arm_fix_that_deletes_a_resource_is_held():
+    corrected = json.dumps({
+        "resources": [
+            {"type": "Microsoft.Storage/storageAccounts", "name": "[parameters('storageAccountName')]",
+             "resources": [{"type": "blobServices", "name": "default"}]},
+        ],
+    })
+
+    dropped = handler._find_dropped_resources(ARM_ORIGINAL, corrected, "arm")
+
+    assert dropped == ["Microsoft.Network/networkSecurityGroups/nsg-open"]
+
+
+def test_an_arm_address_is_reported_with_slashes_not_dots():
+    """An ARM type already contains dots, so a dot join would read as part of
+    the type rather than as the separator before the name."""
+    corrected = json.dumps({"resources": []})
+
+    dropped = handler._find_dropped_resources(ARM_ORIGINAL, corrected, "arm")
+
+    assert "Microsoft.Storage/storageAccounts/[parameters('storageAccountName')]" in dropped
+
+
+def test_arm_tightening_a_property_in_place_is_not_a_deletion():
+    """The edit this gate must not block: the same resources, one property
+    corrected."""
+    corrected = ARM_ORIGINAL.replace('"supportsHttpsTrafficOnly": false',
+                                     '"supportsHttpsTrafficOnly": true')
+
+    assert handler._find_dropped_resources(ARM_ORIGINAL, corrected, "arm") == []
+
+
+def test_arm_renaming_a_resource_is_not_a_deletion():
+    """Compared per type, not per address, so a rename is a delete plus an
+    add of the same type and the count does not fall."""
+    corrected = ARM_ORIGINAL.replace('"nsg-open"', '"nsg-admin-only"')
+
+    assert handler._find_dropped_resources(ARM_ORIGINAL, corrected, "arm") == []
+
+
+def test_an_arm_template_that_does_not_parse_refuses_rather_than_reporting_no_deletions():
+    """Returning [] for a file nobody could read is the gate failing open:
+    "nothing was deleted" is exactly what a reviewer would be told. Raising
+    costs the one finding an error and never a scanner-verified badge."""
+    with pytest.raises(ValueError, match="did not parse"):
+        handler._find_dropped_resources(ARM_ORIGINAL, '{"resources": [', "arm")
+
+
+# ---------- deletion gate: Bicep ----------
+
+BICEP_ORIGINAL = """param location string = 'eastus'
+
+resource stg 'Microsoft.Storage/storageAccounts@2021-09-01' = {
+  name: 'stgmeasured'
+  location: location
+  properties: {
+    supportsHttpsTrafficOnly: false
+  }
+}
+
+resource nsg 'Microsoft.Network/networkSecurityGroups@2021-05-01' = {
+  name: 'nsg-open'
+  location: location
+}
+
+module networking 'modules/net.bicep' = {
+  name: 'networking'
+}
+"""
+
+
+def test_a_bicep_fix_that_deletes_a_resource_is_held():
+    corrected = BICEP_ORIGINAL.replace("""
+resource nsg 'Microsoft.Network/networkSecurityGroups@2021-05-01' = {
+  name: 'nsg-open'
+  location: location
+}
+""", "")
+
+    dropped = handler._find_dropped_resources(BICEP_ORIGINAL, corrected, "bicep")
+
+    assert dropped == ["Microsoft.Network/networkSecurityGroups/nsg"]
+
+
+def test_a_bicep_fix_that_deletes_a_module_is_held():
+    """A module deploys a whole sub-template, so dropping one is more of this
+    gate's business than dropping a single resource, not less."""
+    corrected = BICEP_ORIGINAL.replace("""
+module networking 'modules/net.bicep' = {
+  name: 'networking'
+}
+""", "")
+
+    assert handler._find_dropped_resources(BICEP_ORIGINAL, corrected, "bicep") == \
+        ["module/networking"]
+
+
+def test_bicep_reads_conditional_and_loop_and_existing_declarations():
+    """All three put something between the closing quote and the brace, or a
+    keyword before the quote. The regex stops at the quote so none of them
+    has to be enumerated -- but a declaration it failed to see would be a
+    resource that could be deleted for free."""
+    content = """resource conditional 'Microsoft.Storage/storageAccounts@2021-09-01' = if (deploy) {
+  name: 'a'
+}
+resource looped 'Microsoft.Storage/storageAccounts@2021-09-01' = [for i in range(0, 3): {
+  name: 'b${i}'
+}]
+resource existingKv 'Microsoft.KeyVault/vaults@2021-06-01' existing = {
+  name: 'kv'
+}
+"""
+
+    assert handler._bicep_resources(content) == [
+        ("Microsoft.Storage/storageAccounts", "conditional"),
+        ("Microsoft.Storage/storageAccounts", "looped"),
+        ("Microsoft.KeyVault/vaults", "existingKv"),
+    ]
+
+
+def test_bicep_tightening_a_property_in_place_is_not_a_deletion():
+    corrected = BICEP_ORIGINAL.replace("supportsHttpsTrafficOnly: false",
+                                       "supportsHttpsTrafficOnly: true")
+
+    assert handler._find_dropped_resources(BICEP_ORIGINAL, corrected, "bicep") == []
+
+
+def test_bicep_reader_holds_on_crlf_files():
+    """Same reason as the Kubernetes reader: a snapshot is the file as the
+    repository holds it, and a repository committed from Windows holds \\r\\n."""
+    crlf = BICEP_ORIGINAL.replace("\n", "\r\n")
+
+    assert handler._bicep_resources(crlf) == handler._bicep_resources(BICEP_ORIGINAL)
 
 
 def _run_one_finding(mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, payload,

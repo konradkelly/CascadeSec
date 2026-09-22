@@ -170,7 +170,7 @@ Terraform-shaped:
 |---|---|---|
 | `SUPPRESSION_MARKERS` | `tfsec:ignore`, `trivy:ignore`, `checkov:skip`, `nosec` — HCL comment syntax | Kubernetes suppresses by **annotation**, not comment; CloudFormation by `Metadata: cfn_nag`/`checkov`. A marker set that does not cover the language means the suppression gate **silently passes** — the failure §8.1 calls out by name |
 | `_find_dropped_resources` | `RESOURCE_BLOCK_RE`, an HCL `resource "type" "name" {` regex | Matches nothing in YAML or JSON, so the deletion gate silently passes too: an agent could delete a whole Deployment and the rescan would call it clean |
-| `scan_errors` | the scanner reports unparseable files | Unchanged, and the one guard that ports as-is |
+| `scan_errors` | the scanner reports unparseable files | ~~Unchanged, and the one guard that ports as-is~~ **Wrong, measured 2026-09-22.** It ports only where a tool reports the failure. Trivy's parse-error logging is Terraform-only, and checkov reports `parsing_errors` for `arm` and `bicep` but **not** for `kubernetes` — so a broken manifest was invisible to both and the guard had been failing open since Kubernetes was admitted. See below |
 
 **Rule: a language is not enabled until its suppression markers and its
 structural guard are implemented and tested.** Two of the three gates failing
@@ -206,6 +206,68 @@ above. Three things the build settled that the table did not predict:
   Anchors tolerate `\r`, because a snapshot from a Windows-committed repo
   folds every document into the first without it (tested). Reports
   `Kind/name` where Terraform reports `type.name`.
+
+**Built for ARM and Bicep 2026-09-22**, ahead of the language, per the rule
+above. Everything below was measured against the pinned tools in a locally
+built scanner image, not inferred:
+
+- *ARM needs one suppression marker; Bicep needs none.* Strict JSON has no
+  comment syntax, so every marker in the set was unreachable in an ARM
+  template by construction. checkov reads a resource-level `"metadata":
+  {"checkov": {"skip": [{"id": ..., "comment": ...}]}}` — confirmed: the
+  check moved from `failed_checks` to `skipped_checks`. Its added lines carry
+  the quoted token `"checkov"` and *not* the substring `checkov:skip`, so
+  that token is the entry an HCL- and YAML-shaped set misses. Bicep has `//`
+  comments and reaches `checkov:skip` as HCL does; the one surprise is that
+  checkov honours it only *inside* the resource body — above the declaration
+  it is ignored, as are `# checkov:skip` and `// checkov:skip` with a space.
+  That changes nothing here, because the marker is a substring of an added
+  line either way. Trivy's only ARM suppression is `.trivyignore`, a separate
+  file the agent cannot write: it returns one file's corrected content.
+- *ARM's reader is a real parser, unlike Kubernetes'.* Both of that reader's
+  reasons are absent — `json` is stdlib where PyYAML is in neither the
+  runtime nor the layer, and there is no ARM analogue of an unrendered chart.
+  It reads `resources` recursively so a child resource counts, and both the
+  list form and languageVersion 2.0's symbolic-name object form, since a
+  reader that knew only the list would see no resources at all in a 2.0
+  template — and no resources means no deletions, which is the gate failing
+  open. It *raises* rather than returning `[]` when the file does not parse,
+  for the same reason.
+- *Bicep's is a regex*, because `pycep-parser` lives in the scanner image and
+  not in remediation-agent. It stops at the type's closing quote, so `= if
+  (...)`, `= [for x in y: {` and a leading `existing` are all covered without
+  being enumerated, and it counts `module` declarations under a synthetic
+  type: a module deploys a whole sub-template, so dropping one is more of
+  this gate's business than dropping a resource, not less.
+- *Addresses join on `/` for both.* An ARM type already contains dots
+  (`Microsoft.Storage/storageAccounts`), so a dot would read as part of the
+  type rather than as the separator before the name.
+
+**The third guard was not fine, and had not been since 2026-09-20.** The
+table above said `scan_errors` was the one guard that ports as-is. Measured:
+a Kubernetes manifest that is not valid YAML is invisible to *both* tools.
+Trivy reports `Detected config files num=0` and logs nothing at all — its
+parse-error line is Terraform-only, so no widening of the stderr regex
+reaches it. checkov's `kubernetes` runner emits no report whatsoever, not
+even a `parsing_errors` entry, where its `arm` and `bicep` runners both do
+(a valid manifest in the same place gives 20 failed checks, so the runner
+does run). Zero findings with an empty `scan_errors` is exactly what the
+self-check reads as *the fix worked*, so a remediation that broke a
+manifest's YAML earned a scanner-verified badge.
+
+So the scanner now parses what it admitted, itself, and reports what it
+cannot read — PyYAML read off `/opt/python`, where checkov already ships it,
+imported only when the snapshot holds YAML and refusing the scan outright if
+it is missing, because a parse check that quietly does not run is the same
+fail-open again. A Go-template file is skipped rather than reported: a chart
+template is not a file this scanner failed to read, it is one this scanner
+does not handle, and §6 step 3 measured the cost of leaving Helm out as zero
+noise. Reporting them would put a scan error on every repository carrying a
+chart, and two of the external baselines carry one.
+
+ARM and Bicep do not need this — checkov reports `parsing_errors` for both —
+but ARM gets it anyway when it is admitted, since the `$schema` sniff has to
+parse the file to classify it at all.
 
 **And where only one tool covers the language** (Bicep), the self-check has
 one source rather than two. That is weaker but not broken — the comparison is

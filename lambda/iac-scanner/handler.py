@@ -47,7 +47,9 @@ nothing is silently decided (spec §8.1). See _write_findings.
 
 Returns {pr_id, finding_count, findings, scan_errors, preserved_count,
 no_longer_detected_count}. "scan_errors" lists files the scanner could not
-parse. It is not cosmetic: a file that fails to
+parse -- what each tool reported, plus what this scanner checked itself,
+because for some languages neither tool reports anything at all (see
+_unparseable_admitted_files). It is not cosmetic: a file that fails to
 parse produces no findings, and remediation-agent's self-check reads "no
 findings" as proof that a fix cleared its finding. A caller that ignores
 scan_errors will read an unparseable file as a clean one. A tool that fails
@@ -212,7 +214,29 @@ dynamodb = boto3.resource("dynamodb")
 # Captured from trivy 0.74.0 on 2026-09-12. file_path is relative to the
 # scanned directory. Trivy logs the same failure once per module that loads
 # the file, hence the set in _run_trivy.
-TRIVY_PARSE_ERROR_RE = re.compile(r'\[terraform parser\] Error parsing file.*?file_path="([^"]+)"')
+#
+# The parser tag is matched generically rather than as the literal
+# "terraform", so a second language's parse failure is not invisible here by
+# construction. --misconfig-scanners bounds which parsers can run at all, so
+# this cannot pick up noise from a language we do not scan.
+#
+# It is a widening and not a fix: measured 2026-09-22, Trivy emits no parse
+# error at all for a broken ARM template or a broken Kubernetes manifest --
+# stderr is silent and the file simply does not appear in "Detected config
+# files". Trivy's parse-error logging is Terraform-only in practice, which is
+# why _unparseable_admitted_files exists rather than a longer regex.
+TRIVY_PARSE_ERROR_RE = re.compile(
+    r'\[[a-z0-9_-]+ parser\] Error parsing file.*?file_path="([^"]+)"')
+
+# A Go template delimiter. A Helm chart template is not valid YAML until it
+# is rendered, and helm is deliberately not admitted (see
+# TRIVY_MISCONFIG_SCANNERS), so a template that does not parse is not a file
+# this scanner failed to read -- it is a file this scanner does not handle.
+# Measured on a mixed directory 2026-09-20: with helm off, both tools skip a
+# chart template silently and the cost of leaving it out is zero noise.
+# Reporting one here would turn that into noise on every repository that
+# carries a chart, and two of the external baselines carry one.
+GO_TEMPLATE_RE = re.compile(r"\{\{")
 
 
 class ScannerError(RuntimeError):
@@ -246,7 +270,13 @@ def handler(event, context):
 
         findings = _normalize_trivy(trivy_results, pr_id) + _normalize_checkov(checkov_report, pr_id)
 
-        scan_errors = sorted(set(trivy_parse_errors) | set(_checkov_parse_errors(checkov_report, work_dir)))
+        scan_errors = sorted(
+            set(trivy_parse_errors)
+            | set(_checkov_parse_errors(checkov_report, work_dir))
+            # The languages neither tool reports on. Not redundant with the
+            # two above: see _unparseable_admitted_files.
+            | set(_unparseable_admitted_files(downloaded, work_dir))
+        )
         if scan_errors:
             # Reported, not raised: the other files in the snapshot scanned
             # fine and their findings are real. Raising would throw those away
@@ -455,6 +485,75 @@ def _normalize_trivy(results, pr_id):
             description=r.get("Description") or "",
         ))
     return findings
+
+
+def _yaml_module():
+    """PyYAML, from the same /opt/python the checkov subprocess reads.
+
+    Not a new dependency: checkov ships PyYAML, and the image's strip removes
+    only numpy and boto3 (see the Dockerfile). Imported lazily and only when
+    there is a YAML file to check, so a Terraform-only scan never touches it.
+
+    Raises rather than returning None when it is missing. A parse check that
+    quietly does not run is precisely the fail-open this function exists to
+    close, and ScannerError is this module's word for "a scan that did not
+    happen" rather than "a scan that found nothing".
+    """
+    if LAYER_PYTHON_PATH not in sys.path:
+        sys.path.append(LAYER_PYTHON_PATH)
+    try:
+        import yaml
+    except ImportError as exc:
+        raise ScannerError(
+            "PyYAML is not importable, so the YAML files in this snapshot cannot be "
+            "checked for parseability; refusing to report a scan whose parse check "
+            "did not run"
+        ) from exc
+    return yaml
+
+
+def _unparseable_admitted_files(downloaded, work_dir):
+    """Admitted files this scanner cannot parse itself, relative to work_dir.
+
+    The tools are not enough. Measured 2026-09-22 against the pinned Trivy
+    0.74.0 and checkov 3.3.16: a Kubernetes manifest that is not valid YAML
+    is invisible to *both*. Trivy reports "Detected config files num=0" and
+    logs nothing; checkov's kubernetes runner emits no report at all -- not
+    even a parsing_errors entry, where its arm and bicep runners both do (a
+    valid manifest in the same place gives 20 failed checks, so the runner
+    itself runs). Zero findings with an empty scan_errors is exactly what
+    remediation-agent's self-check reads as "the fix worked", so a fix that
+    broke a manifest's YAML earned a scanner-verified badge. That is the
+    fail-open multi-iac-spec §4 exists to prevent, and neither tool closes
+    it.
+
+    So the scanner parses what it admitted, itself. Only YAML today: ARM is
+    covered when it is admitted (its $schema sniff has to parse the file
+    anyway), Bicep and Terraform are reported by the tools, and a Go template
+    is skipped because it is not a file this scanner claims to handle.
+    """
+    yaml_paths = [p for p in downloaded if p.endswith((".yaml", ".yml"))]
+    if not yaml_paths:
+        return []
+
+    yaml_mod = _yaml_module()
+    unparseable = []
+    for path in yaml_paths:
+        rel = os.path.relpath(path, work_dir).replace(os.sep, "/")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                content = fh.read()
+        except (OSError, UnicodeDecodeError):
+            unparseable.append(rel)
+            continue
+        if GO_TEMPLATE_RE.search(content):
+            continue
+        try:
+            for _ in yaml_mod.safe_load_all(content):
+                pass
+        except yaml_mod.YAMLError:
+            unparseable.append(rel)
+    return unparseable
 
 
 def _checkov_parse_errors(report, work_dir):
