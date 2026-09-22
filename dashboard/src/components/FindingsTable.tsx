@@ -115,7 +115,7 @@ export function FindingsTable({
                   <SeverityBadge severity={finding.severity} />
                 </td>
                 <td>
-                  <SelfCheckBadge proposedFix={finding.proposed_fix} />
+                  <SelfCheckBadge proposedFix={finding.proposed_fix} targetType={finding.target_type} />
                   {finding.no_longer_detected && (
                     <span
                       className="badge badge--muted"
