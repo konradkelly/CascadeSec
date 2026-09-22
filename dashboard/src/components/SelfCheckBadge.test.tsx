@@ -135,3 +135,55 @@ describe('SelfCheckBadge', () => {
     })
   })
 })
+
+describe('coverage caveat', () => {
+  // multi-iac-spec §4: where only one of the two scanners parses a language,
+  // the self-check has one source rather than two. That is weaker, not
+  // absent, and §4 says it should be said in the UI rather than discovered.
+
+  function badges(targetType?: string) {
+    cleanup()
+    render(<SelfCheckBadge proposedFix={{ self_check_passed: true }} targetType={targetType} />)
+    return screen.queryByText(/only$/)
+  }
+
+  it('says which scanner ran when only one covers the language', () => {
+    // Trivy has no Bicep scanner; checkov will not open a .tofu file.
+    expect(badges('bicep')).toHaveTextContent('checkov only')
+    expect(badges('opentofu')).toHaveTextContent('Trivy only')
+  })
+
+  it('says nothing extra for a language both scanners parse', () => {
+    expect(badges('terraform')).toBeNull()
+    expect(badges('arm')).toBeNull()
+    expect(badges('kubernetes')).toBeNull()
+    expect(badges(undefined)).toBeNull()
+  })
+
+  it('adds to the verdict and never replaces it', () => {
+    // The caveat explains how the check was made. It must not soften what
+    // the check decided, or a failed fix on a single-source language would
+    // read as merely unverified.
+    cleanup()
+    render(
+      <SelfCheckBadge
+        proposedFix={{ self_check_passed: false, cleared: false, self_check_new_findings: [] }}
+        targetType="bicep"
+      />,
+    )
+
+    expect(screen.getByText('Self-check failed')).toBeInTheDocument()
+    expect(screen.getByText('checkov only')).toBeInTheDocument()
+  })
+
+  it('explains the caveat on hover rather than only labelling it', () => {
+    cleanup()
+    render(<SelfCheckBadge proposedFix={{ self_check_passed: true }} targetType="bicep" />)
+
+    expect(screen.getByText('checkov only')).toHaveAttribute(
+      'title',
+      "Trivy and checkov do not both parse bicep, so the rescan compared checkov's findings alone. " +
+        'Weaker than a two-tool check, not absent.',
+    )
+  })
+})

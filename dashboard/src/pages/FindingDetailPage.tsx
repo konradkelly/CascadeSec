@@ -191,7 +191,7 @@ export function FindingDetailPage() {
         <div className="finding-header__badges">
           <SeverityBadge severity={finding.severity} />
           <StatusBadge status={finding.status} />
-          <SelfCheckBadge proposedFix={finding.proposed_fix} />
+          <SelfCheckBadge proposedFix={finding.proposed_fix} targetType={finding.target_type} />
         </div>
       </div>
 

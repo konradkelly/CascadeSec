@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { postReview } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
+import { singleSourceTitle, singleSourceTool } from '../review/coverage'
 import { groupFixes, isBulkApprovable, type FixGroup } from '../review/fixGroups'
 import { findUnmetPrerequisites } from '../review/prerequisites'
 import type { Finding } from '../types/finding'
@@ -113,13 +114,24 @@ function FixGroupCard({ prId, group, blocked, onReviewed }: FixGroupCardProps) {
     await onReviewed()
   }
 
+  // A group is the cheapest decision on the page -- one approval covers every
+  // fix in it -- so a language only one scanner verified has to say so here,
+  // not only on the individual fixes inside (multi-iac-spec §4).
+  const groupTool = singleSourceTool(group.target_type)
+
   return (
     <section className="fix-group" aria-label={`${group.framework} ${group.control_id} on ${group.target_type}`}>
       <header className="fix-group__header">
         <div>
           <span className="control-item__framework">{group.framework}</span>{' '}
           <code className="control-item__id">{group.control_id}</code>
-          <span className="badge badge--muted fix-group__target">{group.target_type}</span>
+          <span
+            className="badge badge--muted fix-group__target"
+            title={groupTool ? singleSourceTitle(group.target_type, groupTool) : undefined}
+          >
+            {group.target_type}
+            {groupTool && <> · {groupTool} only</>}
+          </span>
         </div>
         <p className="muted">
           {group.findings.length} fix{group.findings.length === 1 ? '' : 'es'} across {group.file_count} file
@@ -156,7 +168,7 @@ function FixGroupCard({ prId, group, blocked, onReviewed }: FixGroupCardProps) {
                 <code>{finding.file}</code>
               </td>
               <td>
-                <SelfCheckBadge proposedFix={finding.proposed_fix} />
+                <SelfCheckBadge proposedFix={finding.proposed_fix} targetType={finding.target_type} />
                 {blocked?.has(finding.finding_id) && (
                   <span className="badge badge--muted" title="Drafted on a fix that has not been accepted yet">
                     Waits on an earlier fix

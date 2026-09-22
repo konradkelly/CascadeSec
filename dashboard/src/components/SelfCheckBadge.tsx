@@ -1,7 +1,13 @@
+import { singleSourceTitle, singleSourceTool } from '../review/coverage'
 import type { ProposedFix } from '../types/finding'
 
 interface SelfCheckBadgeProps {
   proposedFix?: ProposedFix | null
+  /** The finding's target_type, so a language only one scanner parses says
+   *  so here rather than leaving the reviewer to discover it
+   *  (docs/multi-iac-spec.md §4). Optional: a caller that does not pass it
+   *  gets the verdict alone, exactly as before. */
+  targetType?: string | null
 }
 
 /** Why a fix whose rescan came back clean is still not `fix-proposed`.
@@ -32,7 +38,24 @@ export function humanGates(proposedFix?: ProposedFix | null): string[] {
   return gates
 }
 
-export function SelfCheckBadge({ proposedFix }: SelfCheckBadgeProps) {
+export function SelfCheckBadge({ proposedFix, targetType }: SelfCheckBadgeProps) {
+  const tool = singleSourceTool(targetType)
+  return (
+    <>
+      <SelfCheckVerdict proposedFix={proposedFix} />
+      {tool && targetType && (
+        <span className="badge badge--muted" title={singleSourceTitle(targetType, tool)}>
+          {tool} only
+        </span>
+      )}
+    </>
+  )
+}
+
+/** The verdict itself. Split out so the coverage caveat can sit beside it
+ *  rather than replacing it: it adds information about how the check was
+ *  made, and must never soften what the check decided. */
+function SelfCheckVerdict({ proposedFix }: { proposedFix?: ProposedFix | null }) {
   if (!proposedFix || proposedFix.self_check_passed === undefined) {
     return <span className="badge badge--muted">No self-check</span>
   }

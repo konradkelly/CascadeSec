@@ -42,8 +42,8 @@ Measured, not inferred:
 | **Kubernetes** | ✅ `KSV-*` ids | ✅ `CKV_K8S_*` | PugetScope's `k8s/`: **239 findings, 19 distinct rules, 14 files** |
 | **Helm** | ✅ renders charts natively | ✅ | not yet measured |
 | **CloudFormation** | ✅ 8 rules on a bare bucket | ✅ 6 failed checks | same template, both tools |
-| **ARM** | ✅ `azure-arm` | ✅ `arm` | not yet measured |
-| **Bicep** | ❌ not a Trivy scanner | ✅ `bicep` | 4 Azure findings (`CKV_AZURE_3/35/44/206`) on a storage account with `supportsHttpsTrafficOnly: false` |
+| **ARM** | ✅ `azure-arm`, ids `AZU-nnnn` | ✅ `arm` | Measured 2026-09-22 on `azure-quickstart-templates` (175 templates): Trivy **264 findings, 30 rules**; checkov **640**. Trivy claimed only 92 of the 175 and said nothing about the rest |
+| **Bicep** | ❌ not a Trivy scanner | ✅ `bicep` | 4 Azure findings (`CKV_AZURE_3/35/44/206`) on a storage account with `supportsHttpsTrafficOnly: false`. At scale (107 files): **366 findings**. The runner loads in the stripped image -- `pycep-parser` survives the numpy strip, verified 2026-09-22 |
 | **Pulumi** | ❌ | ❌ | no runner in either; see §7 |
 | **CDK** | ❌ | ~ `cdk` runner, but SAST over TypeScript/Python, not a resource graph | out of scope with Pulumi |
 
@@ -119,7 +119,7 @@ Class=lang-pkgs   Type=npm           package-lock.json
 
 | Question | Field | Values |
 |---|---|---|
-| What do I re-run? | `target_type` | `terraform`, `opentofu`, `kubernetes`, `cloudformation`, `bicep`, `npm`, `dockerfile` |
+| What do I re-run? | `target_type` | `terraform`, `opentofu`, `kubernetes`, `cloudformation`, `arm`, `bicep`, `npm`, `dockerfile` |
 | What kind of problem, and so which remediation path? | `finding_class` | `misconfiguration`, `vulnerability`, `secret` |
 
 **They are not derivable from each other, and the live table already proves
@@ -480,6 +480,37 @@ By cost, and each step earns the next:
    single-source self-check caveat.
 6. **Pulumi/CDK.** §7.
 
+### 6.1 Azure volume, measured 2026-09-22
+
+§5 asks what a new language does to remediation volume before it is enabled.
+Measured on `Azure/azure-quickstart-templates` (175 ARM templates, 107 Bicep
+files): **1270 findings, 98 distinct rules, 219 files with at least one
+finding.** Findings per file: mean 5.8, median 5, max 26. Files per rule:
+mean 11.3, **median 3**, max 57.
+
+The mean is Kubernetes' number (11.8) and the median is not, which is the
+whole story. Kubernetes' repetition came from one workload copied per
+service, so the typical rule really did hit twelve near-identical
+Deployments. Here the mean is dragged up by a handful of VM rules across 175
+*unrelated sample projects* that happen to share a tree; the typical rule
+hits three files. A repository of independent quickstarts is not the shape of
+a pull request, and reading this as the Kubernetes problem would be reading
+an artefact of the corpus target.
+
+So: **nothing new is needed.** `MAX_DRAFTS_PER_FILE` (default 8) is already
+the backstop, the per-file chain and the `cleared_by`/`resolved_by` supersede
+already collapse the within-file case, and the dashboard's group-by-control
+forms `arm` and `bicep` groups with no change, since it keys on
+`(target_type, framework, control_id)` and those values simply appear. If a
+real Azure pull request ever shows files-per-rule above ~5, reopen §5 then,
+with that measurement rather than this one.
+
+One finding that does carry over unchanged: **checkov reports no severity on
+Azure either.** All 1006 of its findings here are `severity: None`, as all
+250 Kubernetes ones were. §5.1's fact 1 -- that a severity floor would be
+Trivy-only in practice -- now holds across three target types, which is
+enough to stop treating it as a per-language question.
+
 ## 7. Pulumi, honestly
 
 Neither scanner has a Pulumi runner, and that is not an oversight. A Pulumi
@@ -551,8 +582,21 @@ to find out whether the schema mapping holds.**
       verified fix. Reopen it with a design for a chart-aware self-check
       (rescan the chart directory, not the file), which is also what
       `applies_after` would need to chain across a chart. See §6 step 3.
-- [ ] Whether a language with single-tool coverage (Bicep) is enabled at all,
+- [x] Whether a language with single-tool coverage (Bicep) is enabled at all,
       given the weaker self-check, or held until Trivy adds a Bicep scanner.
+      **Decided 2026-09-22: enabled, and said in the UI.** The question
+      answered itself the moment §6 step 1 shipped -- OpenTofu is Trivy-only
+      because checkov will not open a `.tofu`, so a single-source self-check
+      has been in production since 2026-09-16 and nobody proposed holding
+      that. Bicep is the same situation with the tools reversed, and it is
+      where most new Azure IaC is written, so holding it would forgo the bulk
+      of the coverage this step exists for. What was actually wrong was not
+      the weaker check but that it was invisible: OpenTofu's caveat lived
+      only in `corpus/eval/README.md`, which no reviewer reads. Both now
+      carry a "<tool> only" badge beside the verdict -- on the finding, in
+      the findings table, and on the fix group, which is where a bulk
+      approval is decided (`dashboard/src/review/coverage.ts`). The badge
+      adds to the verdict and never softens it.
 - [x] Which CIS benchmark editions to vendor, and their licensing. Decided
       2026-09-19 for Kubernetes: v2.0.0, the current edition (Kubernetes
       1.34-1.35), section 5 only. Ids and titles are verified against
