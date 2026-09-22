@@ -484,6 +484,116 @@ def test_checkovs_bare_summary_shape_is_not_read_as_unknown():
     assert handler._checkov_parse_errors(bare_summary, WORK_DIR) == []
 
 
+# ---------- the parse check neither tool performs ----------
+
+BROKEN_MANIFEST = """apiVersion: v1
+kind: Pod
+metadata:
+  name: broken
+spec:
+  containers:
+  - name: c
+    image: nginx
+   badly: [indented
+"""
+
+VALID_MANIFEST = """apiVersion: v1
+kind: Pod
+metadata:
+  name: fine
+spec:
+  containers:
+  - name: c
+    image: nginx:1.27
+"""
+
+
+def test_a_manifest_that_does_not_parse_is_a_scan_error_though_neither_tool_reports_it(tmp_path):
+    """The hole this function exists for, measured 2026-09-22 against the
+    pinned tools: Trivy says "Detected config files num=0" and logs nothing,
+    and checkov's kubernetes runner emits no report at all -- not even a
+    parsing_errors entry. So a fix that broke a manifest's YAML came back
+    with zero findings and an empty scan_errors, which is exactly what
+    remediation-agent's self-check reads as "the fix worked"."""
+    (tmp_path / "manifest.yaml").write_text(BROKEN_MANIFEST, encoding="utf-8")
+    downloaded = [str(tmp_path / "manifest.yaml")]
+
+    assert handler._unparseable_admitted_files(downloaded, str(tmp_path)) == ["manifest.yaml"]
+
+
+def test_a_valid_manifest_is_not_a_scan_error(tmp_path):
+    (tmp_path / "manifest.yaml").write_text(VALID_MANIFEST, encoding="utf-8")
+    downloaded = [str(tmp_path / "manifest.yaml")]
+
+    assert handler._unparseable_admitted_files(downloaded, str(tmp_path)) == []
+
+
+def test_a_helm_template_is_not_reported_as_unparseable(tmp_path):
+    """A chart template is not valid YAML until it is rendered, and helm is
+    deliberately not admitted -- so this is a file the scanner does not
+    handle, not one it failed to read. Reporting it would put a scan error on
+    every repository carrying a chart, and two of the external baselines
+    carry one; multi-iac-spec §6 step 3 measured that cost as zero noise and
+    this keeps it there."""
+    template = (
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n"
+        '  name: {{ include "web.fullname" . }}\n'
+        "spec:\n  replicas: {{ .Values.replicaCount }}\n"
+    )
+    (tmp_path / "deployment.yaml").write_text(template, encoding="utf-8")
+
+    assert handler._unparseable_admitted_files([str(tmp_path / "deployment.yaml")],
+                                               str(tmp_path)) == []
+
+
+def test_the_parse_check_reports_paths_relative_to_the_work_dir(tmp_path):
+    """Every other entry in scan_errors is work_dir-relative, and
+    remediation-agent matches them against a finding's file path."""
+    nested = tmp_path / "k8s" / "base"
+    nested.mkdir(parents=True)
+    (nested / "deploy.yml").write_text(BROKEN_MANIFEST, encoding="utf-8")
+
+    assert handler._unparseable_admitted_files([str(nested / "deploy.yml")],
+                                               str(tmp_path)) == ["k8s/base/deploy.yml"]
+
+
+def test_a_snapshot_with_no_yaml_never_reaches_pyyaml(tmp_path):
+    """A Terraform-only scan must not depend on the import at all -- that is
+    what makes reading PyYAML off /opt/python safe rather than a new runtime
+    dependency."""
+    with patch.object(handler, "_yaml_module", side_effect=AssertionError("must not import")):
+        assert handler._unparseable_admitted_files([str(tmp_path / "main.tf")], str(tmp_path)) == []
+
+
+def test_a_missing_pyyaml_is_a_failed_scan_not_an_unchecked_one(tmp_path):
+    """A parse check that quietly does not run is the same fail-open it was
+    written to close, so the scan is refused rather than reported."""
+    (tmp_path / "manifest.yaml").write_text(VALID_MANIFEST, encoding="utf-8")
+
+    with patch.dict("sys.modules", {"yaml": None}):
+        with pytest.raises(handler.ScannerError, match="PyYAML"):
+            handler._unparseable_admitted_files([str(tmp_path / "manifest.yaml")], str(tmp_path))
+
+
+def test_a_parse_error_from_a_non_terraform_parser_is_still_a_scan_error():
+    """The regex names the parser generically. Trivy does not in fact log one
+    for ARM or Kubernetes (measured 2026-09-22, which is why the check above
+    exists), but a hardcoded "terraform" would make any it ever does log
+    invisible -- and invisible is the direction that hands out a verified
+    badge for a scan that did not happen."""
+    stderr = (
+        '2026-09-22T23:15:28Z\tERROR\t[azure-arm parser] Error parsing file\t'
+        'module="root" file_path="azuredeploy.json" cause="..." err="unexpected end of JSON input"\n'
+    )
+
+    assert handler.TRIVY_PARSE_ERROR_RE.findall(stderr) == ["azuredeploy.json"]
+
+
+def test_the_terraform_parse_error_line_still_matches_verbatim():
+    """The widening must not lose the form it was built from."""
+    assert handler.TRIVY_PARSE_ERROR_RE.findall(TRIVY_PARSE_FAILURE_STDERR) == ["bad.tf", "bad.tf"]
+
+
 def _emf_lines(captured_out):
     """Every EMF record in stdout, parsed, with the shape CloudWatch requires
     checked: an _aws block whose metric names and dimension keys all exist as

@@ -186,6 +186,24 @@ K8S_DOC_SEPARATOR_RE = re.compile(r"^---[ \t]*\r?$", re.MULTILINE)
 K8S_KIND_RE = re.compile(r"^kind:[ \t]*(\S+)", re.MULTILINE)
 K8S_METADATA_RE = re.compile(r"^metadata:[ \t]*\r?$", re.MULTILINE)
 
+# Bicep. A guard, not a parser, for the same reason the Kubernetes one is:
+# pycep-parser lives in the scanner image next to checkov, not in this
+# function's runtime or layer.
+#
+# `resource <symbolicName> '<type>@<apiVersion>' = {`, with `= if (...)` and
+# `= [for x in y: {` variants after the closing quote and an `existing`
+# keyword before it -- none of which the match has to reach, so it stops at
+# the quote and all three forms are covered without enumerating them.
+# `^[ \t]*` rather than `^` so a nested child resource counts: deleting one
+# is the same class of edit as deleting a top-level one. `[ \t]` rather than
+# `\s` so a `\r` can never be eaten as the next line's indent.
+BICEP_RESOURCE_RE = re.compile(
+    r"^[ \t]*resource[ \t]+([A-Za-z_]\w*)[ \t]+'([^'@]+)@[^']*'", re.MULTILINE)
+# A module deploys a whole sub-template, so deleting one is more of this
+# gate's business than deleting a single resource, not less.
+BICEP_MODULE_RE = re.compile(
+    r"^[ \t]*module[ \t]+([A-Za-z_]\w*)[ \t]+'([^']+)'", re.MULTILINE)
+
 
 def handler(event, context):
     pr_id = event["pr_id"]
@@ -904,7 +922,31 @@ def _call_remediation_agent(finding, original_content, answers=None, flagged="")
 #                          under metadata.annotations. The annotation is the
 #                          one that is not a comment, so it is the one an
 #                          HCL-shaped set misses.
-SUPPRESSION_MARKERS = ("tfsec:ignore", "trivy:ignore", "checkov:skip", "checkov.io/skip", "nosec")
+#   ARM                 -- strict JSON has no comment syntax at all, so every
+#                          marker above is unreachable by construction.
+#                          checkov reads a resource-level
+#                            "metadata": {"checkov": {"skip": [
+#                                {"id": "CKV_AZURE_3", "comment": "..."}]}}
+#                          -- measured 2026-09-22 against the pinned checkov
+#                          3.3.16: CKV_AZURE_3 moved from failed_checks to
+#                          skipped_checks. Its added lines carry the quoted
+#                          token "checkov" and NOT the substring
+#                          checkov:skip, so `"checkov"` is the entry that an
+#                          HCL- and YAML-shaped set misses. Trivy's only ARM
+#                          suppression is .trivyignore, a separate file the
+#                          agent cannot write: it returns one file's
+#                          corrected content and nothing else.
+#   Bicep               -- // comments, so checkov:skip is reached as it is
+#                          in HCL and no entry is needed. Measured the same
+#                          day: the comment must sit INSIDE the resource
+#                          body to be honoured (above the declaration it is
+#                          ignored, as are `# checkov:skip` and a `//` with a
+#                          space). Either way the added line contains
+#                          checkov:skip, which is what this set matches on.
+#                          checkov-only language -- Trivy has no Bicep
+#                          scanner -- so there is no trivy:ignore to cover.
+SUPPRESSION_MARKERS = ("tfsec:ignore", "trivy:ignore", "checkov:skip", "checkov.io/skip",
+                       '"checkov"', "nosec")
 
 
 def _find_added_suppressions(diff_text):
@@ -959,8 +1001,9 @@ def _find_dropped_resources(original_content, corrected_content, target_type):
     (a delete plus an add, as in a legitimate
     nodeport_from_internet -> nodeport_from_admin rescope) isn't mistaken for
     a deletion. Returns the addresses that vanished ("<type>.<name>" for
-    Terraform, "<Kind>/<name>" for Kubernetes), so a reviewer sees which
-    ones, but only reports when the type's count actually falls.
+    Terraform, "<Kind>/<name>" for Kubernetes, "<type>/<name>" for ARM and
+    Bicep -- see TARGET_TYPE_ADDRESS_JOIN), so a reviewer sees which ones,
+    but only reports when the type's count actually falls.
 
     Dispatches on target_type, and refuses one it has no reader for. The
     HCL regex matches nothing in YAML, so without the dispatch an agent could
@@ -984,7 +1027,7 @@ def _find_dropped_resources(original_content, corrected_content, target_type):
 
     vanished = set(before) - set(after)
     shrunk = {t for t, n in before_types.items() if after_types[t] < n}
-    join = "/" if target_type in K8S_TARGET_TYPES else "."
+    join = TARGET_TYPE_ADDRESS_JOIN.get(target_type, ".")
     return sorted(f"{t}{join}{n}" for t, n in vanished if t in shrunk)
 
 
@@ -1032,6 +1075,86 @@ def _k8s_metadata_name(doc):
     return ""
 
 
+def _arm_resources(content):
+    """(type, name) per ARM resource declaration, including nested children.
+
+    A real parser rather than the line-based reader Kubernetes uses, because
+    both of that reader's reasons are absent here: json is in the standard
+    library where PyYAML is in neither this runtime nor its layer, and there
+    is no ARM equivalent of an unrendered Helm template -- a file that is not
+    valid JSON is not an ARM template at all.
+
+    Raises rather than returning [] when it does not parse. An empty list
+    here means "this fix deletes nothing", and handing that verdict to a file
+    nobody could read is the gate failing open -- the thing the dispatch in
+    _find_dropped_resources exists to make impossible. A raise costs the one
+    finding an error_count and never a scanner-verified badge. In practice
+    the self-check returns on scan_errors before reaching this, because
+    iac-scanner reports an admitted .json that will not parse; this is the
+    backstop for when it does not.
+
+    `resources` is a list in every ARM schema up to languageVersion 1.0 and a
+    symbolic-name object from 2.0, so both are read. Child resources nest
+    under their parent's own `resources` and are reported under their own
+    declared type, uncomposed, which is enough for a count. A `copy` loop is
+    one declaration however many resources it deploys, which is what this
+    wants -- the gate counts what the file says, not what Azure would create.
+    """
+    try:
+        doc = json.loads(content)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ValueError(
+            f"ARM template did not parse, so nothing can be proven about it: {exc}"
+        ) from exc
+    if not isinstance(doc, dict):
+        raise ValueError("ARM template is not a JSON object")
+    return _arm_resource_entries(doc.get("resources"))
+
+
+def _arm_resource_entries(resources):
+    """The `resources` of one template or one resource, recursively.
+
+    A name like "[parameters('storageAccountName')]" is kept verbatim, as the
+    Kubernetes reader keeps `{{ include "web.fullname" . }}`: it only has to
+    be stable between the two versions of the file.
+    """
+    found = []
+    if isinstance(resources, dict):
+        resources = list(resources.values())
+    if not isinstance(resources, list):
+        return found
+    for entry in resources:
+        if not isinstance(entry, dict):
+            continue
+        rtype = entry.get("type")
+        if not isinstance(rtype, str):
+            continue
+        name = entry.get("name")
+        found.append((rtype, name if isinstance(name, str) else ""))
+        found += _arm_resource_entries(entry.get("resources"))
+    return found
+
+
+def _bicep_resources(content):
+    """(type, symbolicName) per resource, plus ("module", name) per module.
+
+    The symbolic name rather than the deployed `name:` property, because it
+    is what the rest of the file refers to, it is on the declaration line,
+    and the deployed name is usually an interpolation anyway.
+
+    An `existing` reference counts: it is a declaration, and over-reporting
+    only ever holds a fix for review where under-reporting is the failure
+    this gate exists to prevent. Modules count under a synthetic "module"
+    type rather than under their path -- the comparison in
+    _find_dropped_resources is per type, and keying on the path would report
+    a legitimate re-point at a different module as a deletion, the same false
+    positive the rename case exists to avoid.
+    """
+    found = [(rtype, name) for name, rtype in BICEP_RESOURCE_RE.findall(content)]
+    found += [("module", name) for name, _path in BICEP_MODULE_RE.findall(content)]
+    return found
+
+
 K8S_TARGET_TYPES = ("kubernetes", "helm")
 # target_type -> reader. Adding a language to the scanner's admission list
 # means adding it here, or _find_dropped_resources refuses it.
@@ -1039,6 +1162,18 @@ STRUCTURAL_READERS = {
     "terraform": _hcl_resources,
     "opentofu": _hcl_resources,
     **{t: _k8s_resources for t in K8S_TARGET_TYPES},
+    "arm": _arm_resources,
+    "bicep": _bicep_resources,
+}
+# How an address is written back to a reviewer, per language. Terraform's own
+# form is type.name and Kubernetes' is Kind/name. ARM and Bicep both take the
+# slash: an ARM type already contains dots (Microsoft.Storage/storageAccounts),
+# so a dot join would read as part of the type, where a slash makes the
+# address look like the resource id the reviewer already knows.
+TARGET_TYPE_ADDRESS_JOIN = {
+    **{t: "/" for t in K8S_TARGET_TYPES},
+    "arm": "/",
+    "bicep": "/",
 }
 
 

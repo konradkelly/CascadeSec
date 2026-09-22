@@ -24,3 +24,9 @@
 anthropic==1.5.0
 boto3==1.43.92
 pytest==9.1.1
+# PyYAML is NOT a runtime dependency added here -- the scanner reads it from
+# /opt/python, where checkov already ships it (the image's strip removes only
+# numpy and boto3). It is listed so iac-scanner's own parse check, which
+# closes the fail-open neither tool reports, can be exercised outside AWS.
+# Pinned to what the image carries: checkov 3.3.16 resolves PyYAML 6.0.3.
+PyYAML==6.0.3
