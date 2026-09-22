@@ -1,0 +1,27 @@
+{
+  "description": "ARM storage account allowing plain HTTP and TLS 1.0",
+  "category": "encryption-at-rest-and-in-transit",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "AZU-0008"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "AZU-0011"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "AZU-0059"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AZURE_3"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AZURE_44"
+    }
+  ],
+  "note": "CIS Azure 4.1 and 4.15. A storage account that answers over plain HTTP and accepts TLS 1.0 -- the two halves of the same mistake, which is why AZU-0059 raises for both."
+}

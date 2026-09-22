@@ -145,6 +145,67 @@ value in a local-development overlay looks exactly like this finding. Whether
 that matters is a reviewer's call recorded in the dashboard, not something
 the scanner decides (spec §8.1).
 
+## The Azure cases (added 2026-09-22)
+
+14 cases: six ARM, six Bicep, and a clean control for each. They were labelled
+a priori from what each rule is for, then confirmed by running the pinned
+Trivy 0.74.0 and checkov 3.3.16 from the built scanner image over each case
+directory on its own. **26 of 26 labelled pairs fire.** Three labels were
+corrected by that run and one case was rebuilt; both are below, because the
+corrections are the part worth reading.
+
+The ARM cases are `azuredeploy.json`, the Bicep ones `main.bicep`. They cover
+the same ground from both sides on purpose -- insecure transfer, a network
+rule defaulting to Allow, an open management port, a Key Vault without purge
+protection, a SQL server with no auditing -- so the two languages can be
+compared directly rather than each being tested on whatever was convenient.
+`bicep-module-and-resource` is the exception: it exists for the structural
+guard rather than for detection, since a Bicep `module` deploys a whole
+sub-template and deleting one has to be caught.
+
+### Bicep is covered, and is checkov-only
+
+The mirror of OpenTofu above, with the tools reversed: Trivy has no Bicep
+scanner at all (`multi-iac-spec` §2), so every Bicep case is labelled with
+checkov expectations only, and a Bicep finding's self-check compares one
+source rather than two. That is weaker, not broken -- the comparison is per
+`(source, rule_id)`, so it degrades to checkov alone.
+
+Unlike OpenTofu, this is now **said in the UI rather than left in this file**:
+a finding, a row in the findings table and a fix group on a single-source
+target all carry a "checkov only" badge beside the verdict
+(`dashboard/src/review/coverage.ts`). OpenTofu gained the same badge in the
+same change, since its caveat had been recorded only here since September.
+
+The cost is visible in one case. `bicep-storage-network-default-allow` expects
+one rule where its ARM twin expects three: CIS Azure 4.8 (trusted services) is
+reached only through Trivy's `AZU-0010`, so on Bicep that control is simply
+not reachable. That is the single-source cost made concrete, not a gap in the
+case.
+
+### The corrections the confirming run produced
+
+**`CKV_AZURE_36` does not fire when `defaultAction` is `Allow`.** Both
+`default-allow` cases expected it for the trusted-services half of the
+finding. checkov only asks about the bypass list once the default action is
+Deny, which is right: with Allow there is nothing to bypass. The ARM case is
+labelled with Trivy's `AZU-0010` instead; the Bicep case loses the
+expectation entirely, per the paragraph above.
+
+**`clean-arm-hardened` was a hardened storage account, and could not be
+one.** `AZU-0056` (blob soft delete), `AZU-0057` (logging) and `AZU-0058`
+(geo-redundancy) fire on an ARM storage account whatever it declares. The
+template that exposed it used `Standard_GRS` and still raised `AZU-0058`,
+while a real quickstart using `Standard_LRS` -- the worst case for a
+geo-redundancy check -- escaped it. The same intent in Terraform clears all
+three, so the checks are fine and Trivy's `azure-arm` adapter is not reading
+the properties. A clean control that cannot be clean is not a control, so it
+was rebuilt from a hardened NSG and VNet, which both tools read correctly.
+Both clean controls now return zero findings from both tools.
+
+Three of those rules were **unmapped in the corpus** as a result, so they are
+reported but never drafted; `corpus/README.md` has the reasoning.
+
 ## Mapping coverage
 
 The same run also reports what fraction of findings have a candidate control
@@ -310,6 +371,23 @@ its own small lesson about what "clean" means to these tools.
 
 Not measured: mapping recall (§7.1's second half, needs labelled control
 mappings), remediation safety (§7.2), fix acceptance (§7.3).
+
+### Adding an ARM or Bicep case
+
+`terraform fmt -check -recursive cases/` does not reach them -- it handles
+`.tf` and `.tfvars` only -- so the validity check is the run itself. A case
+whose sample does not parse shows up as a `scan_errors` entry rather than as
+a quiet zero, for ARM because the scanner parses the JSON itself and for
+Bicep because checkov reports `parsing_errors`. Both were confirmed on real
+templates: checkov reported 8 genuine parse failures across
+`azure-quickstart-templates`, 4 ARM and 4 Bicep. So "the case is valid"
+means the run reported `scan_errors: 0`, and that is checked rather than
+assumed.
+
+An ARM case's sample must carry a top-level `$schema` naming a
+`deploymentTemplate`, or nothing will upload it: `.json` is admitted by
+content, not by name. This is also what keeps each case's own
+`expected.json` out of its snapshot.
 
 ## Adding a case
 

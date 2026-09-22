@@ -1,0 +1,15 @@
+{
+  "description": "ARM storage account without infrastructure encryption or blob soft delete",
+  "category": "encryption-at-rest-and-in-transit",
+  "expected": [
+    {
+      "source": "trivy",
+      "rule_id": "AZU-0061"
+    },
+    {
+      "source": "trivy",
+      "rule_id": "AZU-0056"
+    }
+  ],
+  "note": "CIS Azure 4.2. AZU-0061 responds correctly to requireInfrastructureEncryption -- setting it clears the finding, which is what makes this case worth having. AZU-0056 is labelled because it does fire here, but it is NOT mapped to a control: it raises on an ARM storage account whatever the template says (see corpus/README.md), so it is reported and never drafted. A detection label and a remediation candidate are different claims, and this case makes only the first."
+}

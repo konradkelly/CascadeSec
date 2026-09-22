@@ -1,0 +1,11 @@
+{
+  "description": "Bicep storage account whose network rules default to Allow",
+  "category": "network-exposure",
+  "expected": [
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AZURE_35"
+    }
+  ],
+  "note": "CIS Azure 4.7. CORRECTED after the confirming run 2026-09-22, for the same reason as the ARM case: CKV_AZURE_36 only fires once defaultAction is Deny. Unlike the ARM case there is no Trivy AZU-0010 to label instead, so 4.8 is simply not reachable on Bicep -- an instance of the single-source cost, not a gap in the case. checkov-only: Trivy has no Bicep scanner (multi-iac-spec §2), so a Bicep finding's self-check has one source rather than two. The mirror of OpenTofu being Trivy-only. Labelled here and said in the UI by the \"checkov only\" badge (dashboard/src/review/coverage.ts), not left to be discovered."
+}

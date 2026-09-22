@@ -38,6 +38,7 @@ import argparse
 import collections
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -60,7 +61,31 @@ from run_eval import (  # noqa: E402
 # Must match iac-scanner's SNAPSHOT_SUFFIXES and scripts/scan.py's SKIP_DIRS:
 # what scan.py would upload is what a real run would scan.
 SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json",
-                     ".yaml", ".yml")
+                     ".yaml", ".yml", ".bicep")
+
+# ARM templates are .json, which says nothing on its own, so they are admitted
+# by content: a top-level $schema naming a deploymentTemplate. An uploader
+# applies the cheap text test only and lets the scanner be the authority --
+# over-admitting costs one object the scanner re-sniffs and discards, where
+# under-admitting loses a file silently. Must match iac-scanner's
+# ARM_SCHEMA_RE; corpus/test_corpus.py asserts every copy agrees.
+ARM_SCHEMA_RE = re.compile(r'"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json')
+
+
+def is_snapshot_file(path):
+    """Whether the scanner would open this file.
+
+    Suffix for everything that declares itself by name, plus the ARM sniff for
+    a bare .json. Note .tf.json and .tofu.json match on suffix first and never
+    reach the sniff."""
+    if path.name.endswith(SNAPSHOT_SUFFIXES):
+        return True
+    if not path.name.endswith(".json"):
+        return False
+    try:
+        return bool(ARM_SCHEMA_RE.search(path.read_text(encoding="utf-8")))
+    except (OSError, UnicodeDecodeError):
+        return False
 SKIP_DIRS = {".terraform", ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"}
 
 # The scanner's own timeout is 300s (terraform/lambda_iac_scanner.tf). boto3's
@@ -108,7 +133,7 @@ def checkout(repo):
 def collect(root):
     return sorted(
         p for p in root.rglob("*")
-        if p.is_file() and p.name.endswith(SNAPSHOT_SUFFIXES) and not (SKIP_DIRS & set(p.parts))
+        if p.is_file() and not (SKIP_DIRS & set(p.parts)) and is_snapshot_file(p)
     )
 
 

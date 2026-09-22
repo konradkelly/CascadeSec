@@ -207,6 +207,36 @@ multi-iac-spec §4). checkov reported 8 real `parsing_errors` on the same tree,
 `severity: None`, as all 250 Kubernetes ones did. The §5.1 conclusion that a
 severity floor is Trivy-only in practice holds unchanged for a second cloud.
 
+#### Four Trivy rules that an ARM template cannot satisfy
+
+Found while building the eval cases, and the reason three of them are
+deliberately *not* mapped even though they fire constantly.
+
+`AZU-0056` (blob soft delete), `AZU-0057` (storage logging), `AZU-0058`
+(geo-redundant replication) and `AZU-0013` (Key Vault network ACLs) raise on
+an ARM template regardless of what the template says. A storage account with
+`deleteRetentionPolicy.enabled: true` still raises `AZU-0056`; one with
+`Standard_GRS` still raises `AZU-0058`, while a template using
+`Standard_LRS` -- the worst possible case for a geo-redundancy check --
+escapes it. A Key Vault declaring `networkAcls` still raises `AZU-0013`. The
+same intent written in Terraform clears all of them, so the checks work; it
+is Trivy's `azure-arm` adapter that does not map these properties onto the
+schema the checks read. This is of a piece with Trivy claiming only 92 of the
+175 templates it was given.
+
+`AZU-0058` was never mapped (geo-redundancy is availability, not a CIS
+control). The other three were, and were **unmapped again on 2026-09-22**.
+The reason is remediation, not tidiness: a mapped finding is drafted, and a
+finding that cannot be cleared by any edit to the file would be drafted,
+self-checked, failed and redrafted on every run -- spending model calls and
+reviewer attention on a fix that cannot exist. Unmapped, they still appear in
+the findings list at status `raw`, which is the honest outcome: the scanner
+reported something, we are not hiding it, and we are not pretending we can
+fix it. §8.1 is untouched.
+
+Revisit on the next Trivy bump. If the adapter starts reading these
+properties, the mappings are four lines.
+
 #### What is not mapped, and why
 
 52 rules, 461 findings. Clustered, they are:
