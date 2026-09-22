@@ -161,6 +161,86 @@ only thing keeping 239 Kubernetes findings out of remediation was the
 repository would each be drafted at full price, so the deliberate volume
 filter in that section is now due, not deferred.
 
+### Azure: ARM and Bicep (added 2026-09-22)
+
+`cis-azure-3.0.json` is the part of the CIS Microsoft Azure Foundations
+Benchmark v3.0.0 that a deployment template can satisfy or violate: 3.3 (Key
+Vault), 4 (Storage), 5.1 and 5.3 (SQL and MySQL), 7 (Networking), 8 (Virtual
+Machines) and 9 (App Service). 29 controls. Sections 1-2 audit Entra and the
+directory, and 3.1 audits the subscription's Defender plans; no template rule
+could ever cite either, so they are absent for the same reason sections 1-4 of
+CIS Kubernetes are. Ids and titles were verified against Prowler's
+`compliance/azure/cis_3.0_azure.json`, which carries the benchmark's own
+numbering and plays the role kube-bench's config plays for Kubernetes.
+
+**The edition is part of the citation here, which it was not for Kubernetes.**
+CIS Kubernetes section 5 is numbered identically from v1.10 to v2.0, so that
+file could take the current edition and the choice did not change a citation.
+Azure is not like that. v4.0.0 is current, and we deliberately did not take it:
+it renumbers every storage control -- 4.1 "Secure transfer required" becomes
+10.3.4 -- and it drops the SQL auditing controls outright. 5.1.1 and 5.1.6 have
+no v4.0 equivalent; its only SQL entries are Defender plans and Activity Log
+Alerts, both subscription-level and invisible to a template. Auditing is among
+the highest-volume families the pinned scanners raise on Azure templates, so
+citing v4.0 would have meant leaving it unmapped in exchange for nothing. A
+citation in this file should not be read against v4.0.
+
+The 50 new candidates are grounded the same way as the AWS and Kubernetes ones:
+every rule was observed firing from the pinned Trivy 0.74.0 and checkov 3.3.16,
+run from the deployed scanner image over `Azure/azure-quickstart-templates`
+(sha `17d3abd`, the storage, keyvault, sql and network quickstarts -- 175 ARM
+templates and 107 Bicep files). That scan raised **1270 findings across 98
+distinct rules**: Trivy 264 across 30, checkov 1006 across 68 (640 `arm`, 366
+`bicep`). Measured against it, **809 of 1270 findings (46 of 98 rules) now have
+a candidate control.**
+
+Two measurements from that run worth keeping.
+
+**Trivy detected 92 of the 175 ARM templates**, and said nothing about the other
+83 -- no parse error, no mention. They are valid JSON carrying the ARM
+`$schema`, so the scanner's own parse check clears them; Trivy simply did not
+claim them. This is why that check exists rather than a wider stderr regex (see
+multi-iac-spec §4). checkov reported 8 real `parsing_errors` on the same tree,
+4 ARM and 4 Bicep, which is the path working as intended.
+
+**checkov reports no severity on Azure either.** All 1006 checkov findings carry
+`severity: None`, as all 250 Kubernetes ones did. The §5.1 conclusion that a
+severity floor is Trivy-only in practice holds unchanged for a second cloud.
+
+#### What is not mapped, and why
+
+52 rules, 461 findings. Clustered, they are:
+
+- **No CIS control exists for it.** The largest group. `CKV_AZURE_178`/`1`/`149`
+  and `AZU-0039` (123 findings) all want SSH keys rather than password
+  authentication on a VM -- v3.0 section 8 has no such control, which is a gap
+  in the benchmark rather than a missing mapping. Same for
+  `CKV_AZURE_43` (storage account naming, 53) and `CKV_AZURE_216` (Azure
+  Firewall DenyIntelMode, 25).
+- **Availability, not security.** `CKV_AZURE_206` and `AZU-0058` (74 findings)
+  want geo-redundant replication, and `CKV_AZURE_229`/`225` want zone
+  redundancy. Real advice, no CIS control, and mapping them to one would be
+  force-mapping.
+- **A control exists but for a different resource.** `CKV_AZURE_52` (MSSQL TLS,
+  16) and `AZU-0026` (generic database minimum TLS, 13) have no MSSQL
+  equivalent of 5.3.2, which is MySQL-specific by its own wording. Mapping
+  either to 5.3.2 would cite a control about a different service. The two rules
+  that *are* explicitly MySQL, `CKV_AZURE_28` and `CKV_AZURE_54`, are mapped to
+  5.3.1 and 5.3.2 and were the reason those two controls were vendored.
+- **Threat-detection and alerting** (`CKV_AZURE_25`/`26`/`27`, `AZU-0018`/`0023`;
+  24 findings) are Defender and notification settings. v3.0 has them in 3.1,
+  which is deliberately not vendored: those controls audit the subscription,
+  and these rules audit a template's `securityAlertPolicies`. Adjacent, not the
+  same claim.
+- **AKS, App Gateway, Front Door, ACR and API Management** (~40 findings across
+  20 rules) -- services v3.0 does not cover at all.
+- **Hygiene** -- Key Vault secret content types (`AZU-0015`, `CKV_AZURE_114`),
+  HSM-backed keys (`CKV_AZURE_112`), health checks, DNS endpoint counts.
+
+Closing the first three needs new framework content rather than new mappings,
+and that is the judgement call the top of this file describes: a control's
+`text` is quoted as ground truth, so writing one is not a mechanical step.
+
 ## Not the corpus: `eval/`
 
 `eval/` is the detection-recall harness for `iac-scanner` (spec §7.1),

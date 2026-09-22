@@ -29,6 +29,12 @@
         "control_id": "2.1.5"
       }
     ],
+    "checkov:CKV2_AZURE_27": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.1.4"
+      }
+    ],
     "checkov:CKV2_K8S_6": [
       {
         "framework": "CIS-Kubernetes-2.0",
@@ -233,6 +239,174 @@
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.3.1"
+      }
+    ],
+    "checkov:CKV_AZURE_10": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "7.2"
+      }
+    ],
+    "checkov:CKV_AZURE_109": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.7"
+      }
+    ],
+    "checkov:CKV_AZURE_110": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.5"
+      }
+    ],
+    "checkov:CKV_AZURE_111": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.5"
+      }
+    ],
+    "checkov:CKV_AZURE_113": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.1.7"
+      }
+    ],
+    "checkov:CKV_AZURE_12": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "7.5"
+      }
+    ],
+    "checkov:CKV_AZURE_14": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.1"
+      }
+    ],
+    "checkov:CKV_AZURE_15": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.4"
+      }
+    ],
+    "checkov:CKV_AZURE_151": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "8.3"
+      }
+    ],
+    "checkov:CKV_AZURE_153": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.1"
+      }
+    ],
+    "checkov:CKV_AZURE_16": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.2"
+      }
+    ],
+    "checkov:CKV_AZURE_160": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "7.4"
+      }
+    ],
+    "checkov:CKV_AZURE_189": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.7"
+      }
+    ],
+    "checkov:CKV_AZURE_23": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.1.1"
+      }
+    ],
+    "checkov:CKV_AZURE_24": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.1.6"
+      }
+    ],
+    "checkov:CKV_AZURE_28": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.3.1"
+      }
+    ],
+    "checkov:CKV_AZURE_3": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.1"
+      }
+    ],
+    "checkov:CKV_AZURE_35": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.7"
+      }
+    ],
+    "checkov:CKV_AZURE_36": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.8"
+      }
+    ],
+    "checkov:CKV_AZURE_40": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.1"
+      }
+    ],
+    "checkov:CKV_AZURE_41": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.3"
+      }
+    ],
+    "checkov:CKV_AZURE_42": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.5"
+      }
+    ],
+    "checkov:CKV_AZURE_44": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.15"
+      }
+    ],
+    "checkov:CKV_AZURE_50": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "8.7"
+      }
+    ],
+    "checkov:CKV_AZURE_54": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.3.2"
+      }
+    ],
+    "checkov:CKV_AZURE_70": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.1"
+      }
+    ],
+    "checkov:CKV_AZURE_9": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "7.1"
+      }
+    ],
+    "checkov:CKV_AZURE_97": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "8.3"
       }
     ],
     "checkov:CKV_K8S_14": [
@@ -604,6 +778,130 @@
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
+      }
+    ],
+    "trivy:AZU-0002": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.2"
+      }
+    ],
+    "trivy:AZU-0003": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.2"
+      }
+    ],
+    "trivy:AZU-0004": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.1"
+      }
+    ],
+    "trivy:AZU-0006": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.4"
+      }
+    ],
+    "trivy:AZU-0008": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.1"
+      }
+    ],
+    "trivy:AZU-0010": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.8"
+      }
+    ],
+    "trivy:AZU-0011": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.15"
+      }
+    ],
+    "trivy:AZU-0012": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.7"
+      }
+    ],
+    "trivy:AZU-0013": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.7"
+      }
+    ],
+    "trivy:AZU-0014": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.1"
+      }
+    ],
+    "trivy:AZU-0016": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.5"
+      }
+    ],
+    "trivy:AZU-0017": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.3"
+      }
+    ],
+    "trivy:AZU-0022": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.1.7"
+      }
+    ],
+    "trivy:AZU-0027": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.1.1"
+      }
+    ],
+    "trivy:AZU-0049": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "7.5"
+      }
+    ],
+    "trivy:AZU-0056": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.10"
+      }
+    ],
+    "trivy:AZU-0057": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.13"
+      }
+    ],
+    "trivy:AZU-0059": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.1"
+      },
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.15"
+      }
+    ],
+    "trivy:AZU-0061": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.2"
+      }
+    ],
+    "trivy:AZU-0072": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.1"
       }
     ],
     "trivy:IACP-0001": [
