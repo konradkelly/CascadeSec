@@ -123,7 +123,17 @@ def tf_output(name):
 # Directories that are never the repository's own configuration. A real repo
 # carries hundreds of YAML files under node_modules alone, and every one
 # would be listed to context-agent as somewhere it might look.
-SKIP_DIRS = {".terraform", ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"}
+#
+# cdk.out is CDK's synth output, and CascadeSec leaves CDK out on purpose
+# (docs/multi-iac-spec.md §7.1). Its templates are CloudFormation, which the
+# scanner admits by content, so without this a repository synthesized locally
+# would have them scanned and remediated as if someone wrote them -- and a fix
+# written into a generated template is overwritten by the next synth. Its
+# asset.* folders hold bundled Lambda code, whose .yaml and .json would be
+# uploaded too. Walking the filesystem ignores .gitignore, so this is the only
+# thing keeping it out.
+SKIP_DIRS = {".terraform", ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
+             "cdk.out"}
 
 
 def collect_tf_files(root):
