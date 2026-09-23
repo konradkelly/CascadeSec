@@ -271,3 +271,26 @@ def test_a_case_expecting_nothing_says_why():
     ]
 
     assert not silent, f"cases expecting nothing with no note explaining why: {silent}"
+
+
+def test_every_case_file_declares_the_target_type_it_should_scan_as():
+    """run_eval.py checks each finding's target_type against the language its
+    file's name declares, and refuses to run on a file name it has no entry
+    for. That refusal only happens against AWS; this makes the same check in
+    CI, so a new case cannot reach the eval with its target unchecked.
+
+    Parsed out of the source rather than imported, like the snapshot
+    predicate above, so this data check does not pull in boto3.
+    """
+    source = (CORPUS / "eval" / "run_eval.py").read_text(encoding="utf-8")
+    table = re.search(r"^CASE_FILE_TARGET_TYPES = (\{.*?\n\})$", source, re.S | re.M)
+    assert table, "run_eval.py: no CASE_FILE_TARGET_TYPES"
+    declared = ast.literal_eval(table.group(1))
+
+    assert set(declared.values()) <= KNOWN_TARGET_TYPES
+    for case in EVAL_CASES:
+        for path in case.iterdir():
+            if path.name == "expected.json":
+                continue
+            assert path.name in declared, (
+                f"{case.name}/{path.name}: add it to CASE_FILE_TARGET_TYPES in run_eval.py")

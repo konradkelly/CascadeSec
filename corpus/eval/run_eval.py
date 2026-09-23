@@ -102,6 +102,33 @@ def is_snapshot_file(path):
 # did not, and got away with it only while scans were short.
 LAMBDA_CONFIG = Config(read_timeout=330, connect_timeout=10, retries={"max_attempts": 0})
 
+# The target_type every finding on a case file must carry, by the file's name.
+# Recall compares (source, rule_id) and never looked at this, which is how the
+# first deployed CloudFormation run scored every labelled pair while all ten
+# KICS findings on a YAML template came back "unknown" -- detected, and
+# refused by remediation-agent's structural guard. A hit under the wrong
+# target is a hit the rest of the pipeline cannot use.
+#
+# Keyed by filename, and the names are a convention the cases already follow
+# (see README, "Adding a case"). For most suffixes that makes this a check of
+# the scanner's suffix table against itself, which costs nothing. It earns its
+# place on the ambiguous ones: manifest.yaml and template.yaml share a suffix,
+# as do azuredeploy.json and template.json, and there the name is a label the
+# case author chose, independent of the classification under test. A file not
+# listed here stops load_cases rather than going unchecked.
+CASE_FILE_TARGET_TYPES = {
+    "main.tf": "terraform",
+    "main.tf.json": "terraform",
+    "terraform.tfvars": "terraform",
+    "main.tofu": "opentofu",
+    "manifest.yaml": "kubernetes",
+    "main.bicep": "bicep",
+    "net.bicep": "bicep",
+    "azuredeploy.json": "arm",
+    "template.yaml": "cloudformation",
+    "template.json": "cloudformation",
+}
+
 RULE_MAPPINGS = HERE.parent / "rule_mappings.json"
 
 
@@ -144,6 +171,11 @@ def load_cases():
     cases = {}
     for d in sorted(p for p in CASES.iterdir() if p.is_dir()):
         expected = json.loads((d / "expected.json").read_text(encoding="utf-8"))
+        unlabelled = [p.name for p in d.iterdir() if p.name != "expected.json"
+                      and is_snapshot_file(p) and p.name not in CASE_FILE_TARGET_TYPES]
+        if unlabelled:
+            sys.exit(f"{d.name}: no expected target_type for {unlabelled}; "
+                     "add the file name to CASE_FILE_TARGET_TYPES")
         cases[d.name] = {
             # Every scannable file in the case, not just main.tf: a case can
             # be a .tf.json, or a .tf plus the .tfvars that holds the secret,
@@ -190,9 +222,16 @@ def delete_prefix(s3, bucket, prefix):
 
 def evaluate(cases, scan_body, mapped):
     fired = collections.defaultdict(set)
+    # Every finding, labelled or not: a stray rule filed under the wrong
+    # language is as unremediable as a labelled one.
+    mislabelled = collections.defaultdict(list)
     for f in scan_body["findings"]:
         case_name = f["file"].split("/", 1)[0]
         fired[case_name].add((f["source"], f["rule_id"]))
+        want = CASE_FILE_TARGET_TYPES.get(f["file"].rsplit("/", 1)[-1])
+        if f.get("target_type") != want:
+            mislabelled[case_name].append(
+                (f["source"], f["rule_id"], f["file"], f.get("target_type"), want))
 
     unparsed = {e.split("/", 1)[0] for e in scan_body.get("scan_errors", [])}
 
@@ -213,6 +252,7 @@ def evaluate(cases, scan_body, mapped):
             # counting it twice would blame the corpus for a scanner gap.
             "mapped": sorted(hits & mapped),
             "unmapped": sorted(hits - mapped),
+            "mislabelled": sorted(set(mislabelled.get(name, []))),
         }
     return results
 
@@ -266,6 +306,10 @@ def summarise(results, scan_body, mapped):
         "clean_controls": {r_name: r["unexpected"] for r_name, r in results.items()
                            if r["category"] == "clean-control" and r["unexpected"]},
         "parse_errors": [n for n, r in results.items() if r["parse_error"]],
+        "target_type": {
+            "findings": len(scan_body["findings"]),
+            "mislabelled": sum(len(r["mislabelled"]) for r in results.values()),
+        },
         "cases": len(results),
         "positives": len(positives),
         "controls": len(controls),
@@ -316,6 +360,16 @@ def print_report(results, summary):
                 print(f"  {name:34s} {src:8s} {rid}")
     else:
         print("\nclean controls: nothing raised")
+
+    t = summary["target_type"]
+    if t["mislabelled"]:
+        print(f"\nTARGET_TYPE WRONG on {t['mislabelled']} distinct (source, rule, file) "
+              f"-- detected, but filed under a language remediation cannot guard")
+        for name, r in results.items():
+            for src, rid, path, got, want in r["mislabelled"]:
+                print(f"  {path:40s} {src:8s} {rid:40s} {got} (want {want})")
+    else:
+        print(f"\ntarget_type: all {t['findings']} findings on the language their file declares")
 
     if summary["parse_errors"]:
         print(f"\nCASES THAT DID NOT PARSE: {summary['parse_errors']}")
