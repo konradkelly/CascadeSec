@@ -1,7 +1,10 @@
 """iac-scanner Lambda (spec §4.1, §4.4 step 3; docs/multi-iac-spec.md).
 
-Runs Trivy + Checkov against an IaC snapshot stored in S3 and writes raw
-findings (status: "raw") to the DynamoDB findings table.
+Runs Trivy + Checkov + KICS against an IaC snapshot stored in S3 and writes
+raw findings (status: "raw") to the DynamoDB findings table. Which tool covers
+what is not uniform and is not meant to be: Trivy takes Terraform and
+Kubernetes, checkov takes all four, and KICS takes ARM and Bicep, where it is
+the only one of the three that reads both correctly.
 
 Terraform, OpenTofu, Kubernetes, ARM and Bicep today. One scanner rather than
 one per language (multi-iac-spec §3): the split in §4.3 existed for Lambda's
@@ -66,6 +69,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 import uuid
@@ -87,6 +91,11 @@ TRIVY_CACHE_DIR = "/tmp/trivy-cache"
 # metadata. They are admitted findings like any other rule (spec §8.1) and
 # versioned with the image, so a scan stays reproducible.
 TRIVY_CHECKS_DIR = "/opt/checks"
+KICS_BIN = "/opt/bin/kics"
+# KICS's query bundle and its Rego libraries, copied out of the published
+# image (Dockerfile). Passed explicitly because the binary's defaults are
+# relative to its own working directory, which is not where it lives here.
+KICS_ASSETS_DIR = "/opt/kics-assets"
 LAYER_PYTHON_PATH = "/opt/python"
 DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ARTIFACTS_BUCKET = os.environ.get("ARTIFACTS_BUCKET")
@@ -173,12 +182,22 @@ CHECKOV_FRAMEWORKS = "terraform,kubernetes,arm,bicep,secrets"
 # self-check fail open on every chart. Measured on a chart in the same mixed
 # directory: with helm off, Trivy skips the template silently rather than
 # reporting a parse error.
-# azure-arm added 2026-09-22, gates first as always: the ARM and Bicep
-# structural guards and the ARM suppression marker landed in
-# remediation-agent on the same day, the CIS Azure corpus before them, and the
-# eval cases with this change. There is no `bicep` entry because Trivy has no
-# Bicep scanner -- checkov carries that language alone.
-TRIVY_MISCONFIG_SCANNERS = "terraform,kubernetes,azure-arm"
+# azure-arm was here from 2026-09-22 and was removed again on 2026-09-23,
+# which is the only time a language has been taken back off this list. Trivy's
+# ARM adapter does not populate the fields several of its own checks read --
+# `accountreplicationtype` comes back empty on a template declaring
+# `Standard_GRS`, because it reads `properties` and not its sibling `sku` --
+# so four rules could never pass on a template however it was written, and
+# they were a third of its ARM output. The full measurement and the upstream
+# report are in docs/trivy-azure-arm-adapter-gap.md. KICS reads ARM correctly
+# and is what scans it now; Trivy keeps Terraform and Kubernetes, where it is
+# the better of the two tools. Revisit if the adapter is fixed.
+TRIVY_MISCONFIG_SCANNERS = "terraform,kubernetes"
+
+# KICS's platform name for both ARM templates and Bicep. One flag covers both:
+# unlike Trivy, KICS parses .bicep natively, which is what gives Bicep a second
+# source and retires the single-source caveat multi-iac-spec §4 carried for it.
+KICS_PLATFORM = "AzureResourceManager"
 # The secrets runner only opens files on checkov's SUPPORTED_FILE_EXTENSIONS
 # (.tf, .yml, .yaml, .json, .template, .bicep, .hcl) unless told to scan
 # everything. .tfvars is not on that list, which is the one file a hardcoded
@@ -188,51 +207,6 @@ TRIVY_MISCONFIG_SCANNERS = "terraform,kubernetes,azure-arm"
 # rather than merely left off the returned list: this runner reads the
 # directory, not our list.
 CHECKOV_SECRETS_ALL_FILES = "--enable-secret-scan-all-files"
-
-# Rules the pinned Trivy cannot satisfy on ARM, whatever the template says.
-#
-# This is a deliberate exception to the rule that the scanner reports
-# everything a deterministic check raises (spec §8.1), and the only one. It is
-# scoped to a single target type and a single tool because the same rules are
-# correct on Terraform, where they are left alone.
-#
-# Measured 2026-09-23 against Trivy 0.74.0, which is the current release, so
-# there is no version to move to. Two instruments agree:
-#
-#   - `--include-non-failures` over 175 real templates from
-#     Azure/azure-quickstart-templates: AZU-0057 0 PASS / 25 FAIL, AZU-0058
-#     0 PASS / 25 FAIL, AZU-0013 0 PASS / 13 FAIL. Not one template satisfies
-#     any of them. AZU-0056 passes 7 times, but only on accounts that declare
-#     nothing about blobs at all -- every template that actually configures
-#     deleteRetentionPolicy next to a realistic `properties` block fails it,
-#     at 30 days and at 365, so the pass is the say-nothing default rather
-#     than somewhere a fix could get to.
-#   - Dumping the adapted state a Rego check is handed: the adapter fills the
-#     fields it reads out of `properties` (minimumtlsversion comes back
-#     TLS1_2, enforcehttps true) and leaves the rest. On a fully hardened
-#     template accountreplicationtype is "" despite `"sku": {"name":
-#     "Standard_GRS"}`, and queueproperties.enablelogging is false despite a
-#     queueServices child configuring it. It does not read `sku`, a sibling of
-#     `properties`, nor the child resources.
-#
-# The same intent in Terraform clears all four, so the checks are right and
-# the adapter is not. docs/trivy-azure-arm-adapter-gap.md is the writeup.
-#
-# Why drop rather than report: these were already unmapped, so nothing was
-# ever drafted from them, but they were still 87 of the 264 Trivy findings on
-# that corpus -- a third of the output, permanently unresolvable, returning on
-# every scan. A findings list where a third of the entries can never be
-# actioned is one a reviewer learns to skim, and reviewer attention is the
-# scarce resource this project is built around. Dropping them is a filter, so
-# it is stated here, tested, and pinned to a Trivy version: a bump must
-# re-run the check above before keeping this list, exactly as it must re-run
-# the eval.
-ARM_UNSATISFIABLE_TRIVY_RULES = frozenset({
-    "AZU-0013",  # key vault network acls -- networkAcls declared, still fails
-    "AZU-0056",  # blob soft delete -- child resource not read
-    "AZU-0057",  # storage logging -- queueproperties.enablelogging always false
-    "AZU-0058",  # geo-redundant replication -- accountreplicationtype always ""
-})
 
 # Trivy's Result.Class -> finding_class. Trivy already separates the two axes
 # this project needs, which is where §3.1's design came from: Class says what
@@ -361,8 +335,20 @@ def handler(event, context):
 
         trivy_results, trivy_parse_errors = _run_trivy(work_dir)
         checkov_report = _run_checkov(work_dir)
+        kics_report = _run_kics(work_dir)
 
-        findings = _normalize_trivy(trivy_results, pr_id) + _normalize_checkov(checkov_report, pr_id)
+        findings = (
+            _normalize_trivy(trivy_results, pr_id)
+            + _normalize_checkov(checkov_report, pr_id)
+            + _normalize_kics(kics_report, work_dir, pr_id)
+        )
+
+        kics_unparsed = _kics_unparsed_count(kics_report)
+        if kics_unparsed:
+            # A count without names, so it cannot join scan_errors. ARM and
+            # Bicep are covered there by _arm_verdict and checkov anyway; this
+            # is here so the gap is visible in the log.
+            logger.warning("kics opened %d file(s) it could not parse", kics_unparsed)
 
         scan_errors = sorted(
             set(trivy_parse_errors)
@@ -569,6 +555,77 @@ def _run_trivy(work_dir):
     return results, parse_errors
 
 
+def _run_kics(work_dir):
+    """Returns KICS's parsed report for the ARM and Bicep files in work_dir.
+
+    KICS writes its report to a directory rather than stdout, so one is made
+    alongside the scan and read back.
+
+    No egress, like the other two: --disable-full-descriptions stops the one
+    call KICS would otherwise make to fetch rule descriptions, and the queries
+    come from the bundle copied into the image. Verified under `--network
+    none` on 2026-09-23.
+
+    A scan that finds nothing still writes a report, so a missing file means
+    the binary itself failed -- the same reasoning as Trivy's empty stdout.
+    """
+    # Its own directory rather than one inside work_dir: the report is a
+    # .json, and a .json inside the scanned tree is a file the next scan --
+    # or this one -- would try to read as an ARM template. mkdtemp honours
+    # TMPDIR, which is /tmp in Lambda, the only writable path there.
+    report_dir = tempfile.mkdtemp(prefix="kics-")
+    try:
+        proc = subprocess.run(
+            [
+                KICS_BIN, "scan",
+                "-p", work_dir,
+                "-t", KICS_PLATFORM,
+                "-q", os.path.join(KICS_ASSETS_DIR, "queries"),
+                "-b", os.path.join(KICS_ASSETS_DIR, "libraries"),
+                "--disable-full-descriptions",
+                "--no-progress",
+                "--report-formats", "json",
+                "-o", report_dir,
+                "--output-name", "kics",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=SCAN_TIMEOUT_SECONDS,
+        )
+        report_path = os.path.join(report_dir, "kics.json")
+        # KICS exits non-zero when it finds results, by severity -- that is
+        # expected, not a failure, so the report's presence is the signal.
+        if not os.path.exists(report_path):
+            raise ScannerError(
+                f"kics wrote no report (exit {proc.returncode}): {proc.stderr.strip()[:500]}"
+            )
+        try:
+            with open(report_path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ScannerError(f"kics produced unparseable output: {exc}") from exc
+    finally:
+        shutil.rmtree(report_dir, ignore_errors=True)
+
+
+def _kics_unparsed_count(report):
+    """How many files KICS opened and could not read.
+
+    KICS does not say *which*, and reports `files_failed_to_scan: 0` even when
+    it has silently dropped a file -- measured 2026-09-23 on a deliberately
+    broken template. The only honest signal it gives is the gap between
+    `files_scanned` and `files_parsed`, and that is a count without names.
+
+    So this is deliberately not wired into scan_errors, which is a list of
+    files: the scanner's own ARM parse check (_arm_verdict) and checkov's
+    parsing_errors both name the file, and between them ARM and Bicep are
+    covered. This exists so the gap is logged rather than invisible.
+    """
+    scanned = report.get("files_scanned") or 0
+    parsed = report.get("files_parsed") or 0
+    return max(scanned - parsed, 0)
+
+
 def _run_checkov(work_dir):
     env = dict(os.environ)
     existing = env.get("PYTHONPATH", "")
@@ -596,6 +653,66 @@ def _run_checkov(work_dir):
         raise ScannerError(f"checkov produced unparseable output: {proc.stdout[:500]}") from exc
 
 
+# KICS's category -> finding_class. Everything else is a misconfiguration,
+# which is what its queries overwhelmingly are.
+KICS_CATEGORY_TO_FINDING_CLASS = {
+    "Secret Management": "secret",
+}
+
+
+def _relativize_kics_path(file_path, work_dir):
+    """Strip the scratch directory off a path KICS reported.
+
+    KICS reports each file relative to its own working directory, which it
+    inherits from this process -- so `/tmp/scan-abc/main.bicep` comes back as
+    `../../tmp/scan-abc/main.bicep` from /var/task. Resolving it against the
+    same cwd and then relativising against work_dir is exact rather than a
+    prefix-strip, which is what the other two tools need.
+    """
+    try:
+        rel = os.path.relpath(os.path.abspath(file_path), work_dir)
+    except ValueError:
+        # Different drives on Windows, which only happens in tests.
+        return file_path.replace("\\", "/").lstrip("./")
+    return rel.replace(os.sep, "/")
+
+
+def _normalize_kics(report, work_dir, pr_id):
+    """KICS's report -> findings.
+
+    The rule id is the query's UUID rather than its name: the name is prose
+    and has been reworded upstream before, where the id is what KICS treats
+    as the rule's identity. corpus/rule_mappings.json is keyed on it, and the
+    name rides along as the title so a reviewer and the remediation prompt
+    still get something readable.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    findings = []
+    for query in report.get("queries") or []:
+        finding_class = KICS_CATEGORY_TO_FINDING_CLASS.get(
+            query.get("category"), "misconfiguration")
+        for hit in query.get("files") or []:
+            file_path = _relativize_kics_path(hit.get("file_name", ""), work_dir)
+            line = hit.get("line")
+            findings.append(_build_finding(
+                pr_id=pr_id,
+                source="kics",
+                rule_id=query.get("query_id", "unknown"),
+                file_path=file_path,
+                line_range=[line, line],
+                severity=(query.get("severity") or "UNKNOWN").upper(),
+                target_type=_target_type_for(file_path, ""),
+                finding_class=finding_class,
+                now=now,
+                # KICS names the resource and its type separately; the pair is
+                # what remediation-agent's supersede matches on.
+                resource=hit.get("resource_name") or hit.get("search_key") or "",
+                title=query.get("query_name") or "",
+                description=query.get("description") or "",
+            ))
+    return findings
+
+
 def _relativize_path(file_path, work_dir):
     """Strip the scratch directory back off a path a tool reported.
 
@@ -617,11 +734,6 @@ def _normalize_trivy(results, pr_id):
     findings = []
     for r in results:
         target_type = _target_type_for(r.get("Target", ""), r.get("Type"))
-        if target_type == "arm" and r.get("ID") in ARM_UNSATISFIABLE_TRIVY_RULES:
-            # See ARM_UNSATISFIABLE_TRIVY_RULES. Not a severity or noise
-            # judgement: these cannot pass on this target type, so they
-            # separate nothing.
-            continue
         cause = r.get("CauseMetadata") or {}
         findings.append(_build_finding(
             pr_id=pr_id,

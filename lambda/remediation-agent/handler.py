@@ -936,6 +936,16 @@ def _call_remediation_agent(finding, original_content, answers=None, flagged="")
 #                          suppression is .trivyignore, a separate file the
 #                          agent cannot write: it returns one file's
 #                          corrected content and nothing else.
+#   ARM/Bicep (KICS)    -- KICS reads `kics-scan ignore-line`,
+#                          `ignore-block` and `disable=<query-id>` comments.
+#                          Measured 2026-09-23 against the pinned v2.1.20:
+#                          none of them are honoured on Bicep or ARM, so the
+#                          marker is decorative there today. It is in the set
+#                          anyway, for the reason the set is a union at all --
+#                          a marker that costs a held-for-review when it is
+#                          early is the right side to be wrong on, and this
+#                          one stops being decorative the moment KICS wires
+#                          comment handling into its Bicep parser.
 #   Bicep               -- // comments, so checkov:skip is reached as it is
 #                          in HCL and no entry is needed. Measured the same
 #                          day: the comment must sit INSIDE the resource
@@ -946,7 +956,7 @@ def _call_remediation_agent(finding, original_content, answers=None, flagged="")
 #                          checkov-only language -- Trivy has no Bicep
 #                          scanner -- so there is no trivy:ignore to cover.
 SUPPRESSION_MARKERS = ("tfsec:ignore", "trivy:ignore", "checkov:skip", "checkov.io/skip",
-                       '"checkov"', "nosec")
+                       '"checkov"', "kics-scan", "nosec")
 
 
 def _find_added_suppressions(diff_text):

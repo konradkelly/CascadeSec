@@ -3,9 +3,17 @@
   "category": "network-exposure",
   "expected": [
     {
+      "source": "kics",
+      "rule_id": "9073f073-5d60-4b46-b569-0d6baa80ed95"
+    },
+    {
+      "source": "kics",
+      "rule_id": "d855ced8-6157-448f-9f1d-f05a41d046f7"
+    },
+    {
       "source": "checkov",
       "rule_id": "CKV_AZURE_35"
     }
   ],
-  "note": "CIS Azure 4.7. CORRECTED after the confirming run 2026-09-22, for the same reason as the ARM case: CKV_AZURE_36 only fires once defaultAction is Deny. Unlike the ARM case there is no Trivy AZU-0010 to label instead, so 4.8 is simply not reachable on Bicep -- an instance of the single-source cost, not a gap in the case. checkov-only: Trivy has no Bicep scanner (multi-iac-spec §2), so a Bicep finding's self-check has one source rather than two. The mirror of OpenTofu being Trivy-only. Labelled here and said in the UI by the \"checkov only\" badge (dashboard/src/review/coverage.ts), not left to be discovered."
+  "note": "CIS Azure 4.7 and 4.8. Bicep now has two sources, not one. KICS parses .bicep natively where Trivy has no Bicep scanner at all, so this case's self-check compares two tools and the single-source caveat multi-iac-spec §4 carried for Bicep is retired. This case previously expected one rule where its ARM twin expected three, because 4.8 was reachable only through Trivy and Trivy has no Bicep scanner. KICS covers 4.8 on both, so the asymmetry is gone. CORRECTED after the confirming run: KICS's Trusted Microsoft Services query was expected here for the 4.8 half and does not fire, for exactly the reason checkov's CKV_AZURE_36 does not -- both gate it on defaultAction being Deny, and with Allow there is nothing to bypass. Two independent tools agreeing on that makes it the rule rather than a quirk. 4.8 is exercised by the insecure-transfer cases instead, where the account declares no networkAcls at all."
 }

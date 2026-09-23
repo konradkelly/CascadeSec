@@ -8,6 +8,7 @@ an empty list as proof that a fix worked.
 """
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -141,10 +142,11 @@ def test_trivy_is_run_offline_with_the_projects_own_checks(mock_run):
     # The second half of language admission -- the download filter is the
     # first. Terraform covers OpenTofu; anything else needs its gates built
     # before it appears here (docs/multi-iac-spec.md §4). kubernetes joined
-    # on 2026-09-20 and azure-arm on 2026-09-22, each once its markers,
-    # structural guard, corpus and eval cases existed. There is no bicep
-    # entry because Trivy has no Bicep scanner -- checkov carries it alone.
-    assert args[args.index("--misconfig-scanners") + 1] == "terraform,kubernetes,azure-arm"
+    # on 2026-09-20. azure-arm joined on 2026-09-22 and left again on
+    # 2026-09-23: Trivy's ARM adapter cannot satisfy four of its own checks,
+    # so KICS scans ARM and Bicep instead
+    # (docs/trivy-azure-arm-adapter-gap.md).
+    assert args[args.index("--misconfig-scanners") + 1] == "terraform,kubernetes"
 
 
 @patch.object(handler.subprocess, "run")
@@ -413,58 +415,164 @@ def test_helm_is_not_admitted_even_though_trivy_supports_it(mock_run):
     assert "helm" not in scanners
     # The same reasoning, from the other side: these have no gates at all.
     assert not {"cloudformation", "dockerfile", "ansible"} & set(scanners)
-    # azure-arm left that set on 2026-09-22 -- its gates were built first, in
-    # remediation-agent, which is the whole point of the rule.
-    assert "azure-arm" in scanners
+    # azure-arm is excluded for a different reason from the rest: not missing
+    # gates but a broken adapter, with KICS covering the language instead.
+    assert "azure-arm" not in scanners
 
 
-def test_a_rule_the_arm_adapter_cannot_satisfy_is_not_reported():
-    """The one place this scanner drops a finding a deterministic check
-    raised, and the reasoning is in ARM_UNSATISFIABLE_TRIVY_RULES.
+# ---------- KICS: ARM and Bicep ----------
 
-    Measured 2026-09-23 on Trivy 0.74.0, which is the current release:
-    AZU-0057 and AZU-0058 pass on none of 175 real ARM templates, because the
-    adapter leaves accountreplicationtype empty and enablelogging false
-    whatever the template declares. A check that cannot pass separates
-    nothing, and these were a third of the Trivy findings on that corpus."""
-    results = [
-        {"ID": "AZU-0058", "Target": "azuredeploy.json", "Type": "azure-arm",
-         "Class": "config", "Severity": "LOW", "CauseMetadata": {"StartLine": 1, "EndLine": 2}},
-        {"ID": "AZU-0011", "Target": "azuredeploy.json", "Type": "azure-arm",
-         "Class": "config", "Severity": "CRITICAL", "CauseMetadata": {"StartLine": 1, "EndLine": 2}},
-    ]
-
-    reported = handler._normalize_trivy(results, "pr-1")
-
-    assert [f["rule_id"] for f in reported] == ["AZU-0011"]
+def _kics_report(queries=(), files_scanned=1, files_parsed=1):
+    """KICS's JSON report shape, as v2.1.20 emits it."""
+    return {
+        "files_scanned": files_scanned,
+        "files_parsed": files_parsed,
+        "files_failed_to_scan": 0,
+        "total_counter": sum(len(q.get("files") or []) for q in queries),
+        "queries": list(queries),
+    }
 
 
-def test_the_same_rules_are_still_reported_on_terraform():
-    """Scoped to ARM, because the adapter is what is broken and not the
-    checks: on a .tf file they read the azurerm schema correctly and a fix
-    clears them. Dropping them everywhere would lose real findings."""
-    results = [
-        {"ID": rule, "Target": "main.tf", "Type": "terraform", "Class": "config",
-         "Severity": "LOW", "CauseMetadata": {"StartLine": 1, "EndLine": 2}}
-        for rule in sorted(handler.ARM_UNSATISFIABLE_TRIVY_RULES)
-    ]
-
-    reported = handler._normalize_trivy(results, "pr-1")
-
-    assert sorted(f["rule_id"] for f in reported) == sorted(handler.ARM_UNSATISFIABLE_TRIVY_RULES)
-    assert {f["target_type"] for f in reported} == {"terraform"}
+def _no_kics(work_dir):
+    """KICS returning nothing, for the handler() tests that are about the
+    other two tools. Applied with `new=` so it adds no positional argument to
+    the test signatures it decorates."""
+    return _kics_report()
 
 
-def test_the_dropped_rules_are_not_mapped_to_a_control():
-    """The two decisions have to agree. A rule that is dropped here but still
-    carries a candidate in the corpus would be a mapping nothing can ever
-    reach -- dead weight that reads as coverage."""
-    mappings = json.loads(
-        (Path(__file__).resolve().parents[2] / "corpus" / "rule_mappings.json").read_text(encoding="utf-8")
-    )["mappings"]
-    still_mapped = [r for r in handler.ARM_UNSATISFIABLE_TRIVY_RULES if f"trivy:{r}" in mappings]
+KICS_STORAGE_QUERY = {
+    "query_id": "1367dd13-0ee9-4c8a-8a2b-2b2b6c2ba1ba",
+    "query_name": "Storage Account Allows Unsecure Transfer",
+    "severity": "MEDIUM",
+    "category": "Encryption",
+    "description": "Make sure that Storage Accounts only allow secure transfer.",
+    "files": [{
+        "file_name": "main.bicep",
+        "line": 10,
+        "resource_name": "stgevalinsecure",
+        "resource_type": "Microsoft.Storage/storageAccounts",
+        "search_key": "resources.name=stgevalinsecure.properties.supportsHttpsTrafficOnly",
+    }],
+}
 
-    assert not still_mapped, f"dropped on ARM but still mapped: {still_mapped}"
+
+def test_kics_findings_normalize_to_the_record_shape():
+    """The query's UUID as the rule id, not its name: the name is prose and
+    has been reworded upstream, where the id is the rule's identity and is
+    what corpus/rule_mappings.json is keyed on. The name rides along as the
+    title so a reviewer and the remediation prompt still get words."""
+    [finding] = handler._normalize_kics(_kics_report([KICS_STORAGE_QUERY]), ".", "pr-1")
+
+    assert finding["source"] == "kics"
+    assert finding["rule_id"] == "1367dd13-0ee9-4c8a-8a2b-2b2b6c2ba1ba"
+    assert finding["title"] == "Storage Account Allows Unsecure Transfer"
+    assert finding["file"] == "main.bicep"
+    assert finding["line_range"] == [10, 10]
+    assert finding["severity"] == "MEDIUM"
+    assert finding["target_type"] == "bicep"
+    assert finding["finding_class"] == "misconfiguration"
+    assert finding["resource"] == "stgevalinsecure"
+
+
+def test_kics_reports_a_severity_where_checkov_reports_none():
+    """The reason a severity floor was ruled out for Azure (multi-iac-spec
+    §5.1 fact 1) was that checkov reports no severity and Trivy was the only
+    source. KICS reports one on every finding, so that reasoning no longer
+    holds for ARM and Bicep."""
+    report = _kics_report([{**KICS_STORAGE_QUERY, "severity": "CRITICAL"}])
+
+    [finding] = handler._normalize_kics(report, ".", "pr-1")
+
+    assert finding["severity"] == "CRITICAL"
+
+
+def test_a_kics_secret_finding_is_classed_as_a_secret():
+    """finding_class branches the pipeline, and KICS puts its credential
+    queries in one category rather than naming them individually."""
+    report = _kics_report([{
+        **KICS_STORAGE_QUERY,
+        "query_id": "487f4be7-3fd9-4506-a07a-eae252180c08",
+        "query_name": "Passwords And Secrets - Generic Password",
+        "category": "Secret Management",
+    }])
+
+    [finding] = handler._normalize_kics(report, ".", "pr-1")
+
+    assert finding["finding_class"] == "secret"
+    assert finding["target_type"] == "bicep"
+
+
+def test_a_kics_path_is_reported_relative_to_the_work_dir(tmp_path):
+    """KICS reports each file relative to its own working directory, which it
+    inherits from this process -- so a file in /tmp/scan-abc comes back as
+    ../../tmp/scan-abc/main.bicep. Every other path in a finding is
+    work_dir-relative and remediation-agent matches on it."""
+    work_dir = str(tmp_path / "scan-abc")
+    reported = os.path.join(work_dir, "modules", "storage.bicep")
+
+    assert handler._relativize_kics_path(reported, work_dir) == "modules/storage.bicep"
+
+
+def test_kics_writing_no_report_is_a_failed_scan_not_a_clean_one(tmp_path):
+    """The same false-pass path Trivy's empty stdout guards: KICS writes a
+    report even when it finds nothing, so a missing one means the binary
+    failed -- and returning no findings for that would tell
+    remediation-agent the file is clean."""
+    with patch.object(handler.subprocess, "run") as mock_run:
+        mock_run.return_value = _proc(stdout="", stderr="exec format error", returncode=126)
+
+        with pytest.raises(handler.ScannerError, match="kics wrote no report"):
+            handler._run_kics(str(tmp_path))
+
+
+def test_kics_is_run_offline_against_the_bundled_queries(tmp_path):
+    """No egress from the function: --disable-full-descriptions stops the one
+    call KICS would otherwise make, and the queries come from the bundle in
+    the image rather than a fetch. Verified under `--network none`
+    2026-09-23."""
+    report_dir = {}
+
+    def fake_run(argv, **kwargs):
+        # write the report where the handler will look for it
+        out = argv[argv.index("-o") + 1]
+        report_dir["path"] = out
+        with open(os.path.join(out, "kics.json"), "w", encoding="utf-8") as fh:
+            json.dump(_kics_report(), fh)
+        return _proc(returncode=0)
+
+    with patch.object(handler.subprocess, "run", side_effect=fake_run) as mock_run:
+        handler._run_kics(str(tmp_path))
+
+    argv = mock_run.call_args.args[0]
+    assert argv[0] == handler.KICS_BIN
+    assert "--disable-full-descriptions" in argv
+    assert argv[argv.index("-t") + 1] == handler.KICS_PLATFORM
+    assert argv[argv.index("-q") + 1].startswith(handler.KICS_ASSETS_DIR)
+    assert argv[argv.index("-b") + 1].startswith(handler.KICS_ASSETS_DIR)
+    # the report directory is cleaned up whatever happened
+    assert not os.path.exists(report_dir["path"])
+
+
+def test_kics_covers_bicep_so_it_is_no_longer_single_source():
+    """The measurement that retires multi-iac-spec §4's Bicep caveat: Trivy
+    has no Bicep scanner, but KICS parses .bicep natively, so a Bicep
+    finding's self-check now compares two sources rather than one."""
+    report = _kics_report([KICS_STORAGE_QUERY])
+
+    findings = handler._normalize_kics(report, ".", "pr-1")
+
+    assert {f["target_type"] for f in findings} == {"bicep"}
+    assert {f["source"] for f in findings} == {"kics"}
+
+
+def test_kics_files_it_could_not_parse_are_counted_even_though_unnamed():
+    """KICS reports files_failed_to_scan: 0 even when it has silently dropped
+    a file -- measured 2026-09-23 on a deliberately broken template. The gap
+    between scanned and parsed is the only signal it gives, and it is a count
+    without names, so it is logged rather than put in scan_errors, which is a
+    list of files."""
+    assert handler._kics_unparsed_count(_kics_report(files_scanned=3, files_parsed=1)) == 2
+    assert handler._kics_unparsed_count(_kics_report(files_scanned=2, files_parsed=2)) == 0
 
 
 def pathlib_name(path):
@@ -778,6 +886,7 @@ def _emf_lines(captured_out):
 # ---------- handler() ----------
 
 @patch.object(handler, "_write_findings", return_value=(0, 0))
+@patch.object(handler, "_run_kics", new=_no_kics)
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -801,6 +910,7 @@ def test_handler_surfaces_parse_errors_without_discarding_real_findings(
 
 
 @patch.object(handler, "_write_findings", return_value=(0, 0))
+@patch.object(handler, "_run_kics", new=_no_kics)
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -829,6 +939,7 @@ def test_a_persisted_scan_emits_findings_per_scan_as_emf(
 
 
 @patch.object(handler, "_write_findings", return_value=(0, 0))
+@patch.object(handler, "_run_kics", new=_no_kics)
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -848,6 +959,7 @@ def test_a_self_check_scan_emits_no_metric(
 
 
 @patch.object(handler, "_write_findings", return_value=(0, 0))
+@patch.object(handler, "_run_kics", new=_no_kics)
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -866,6 +978,7 @@ def test_handler_reports_no_scan_errors_on_a_clean_scan(
 
 
 @patch.object(handler, "_write_findings", return_value=(0, 0))
+@patch.object(handler, "_run_kics", new=_no_kics)
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -900,6 +1013,7 @@ def test_handler_lets_a_scanner_failure_reach_the_caller(mock_download, mock_tri
 
 
 @patch.object(handler, "_write_findings", return_value=(0, 0))
+@patch.object(handler, "_run_kics", new=_no_kics)
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -1057,6 +1171,7 @@ def test_the_known_id_query_pages_to_exhaustion(mock_dynamodb):
 
 
 @patch.object(handler, "_write_findings", return_value=(3, 2))
+@patch.object(handler, "_run_kics", new=_no_kics)
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")
@@ -1074,6 +1189,7 @@ def test_the_handler_reports_what_the_rescan_preserved(
 
 
 @patch.object(handler, "_write_findings")
+@patch.object(handler, "_run_kics", new=_no_kics)
 @patch.object(handler, "_run_checkov")
 @patch.object(handler, "_run_trivy")
 @patch.object(handler, "_download_snapshot")

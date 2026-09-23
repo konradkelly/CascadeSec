@@ -3,6 +3,10 @@
   "category": "encryption-at-rest-and-in-transit",
   "expected": [
     {
+      "source": "kics",
+      "rule_id": "1367dd13-2c90-4020-80b7-e4339a3dc2c4"
+    },
+    {
       "source": "checkov",
       "rule_id": "CKV_AZURE_3"
     },
@@ -11,5 +15,5 @@
       "rule_id": "CKV_AZURE_44"
     }
   ],
-  "note": "CIS Azure 4.1 and 4.15, the Bicep mirror of arm-storage-insecure-transfer. checkov-only: Trivy has no Bicep scanner (multi-iac-spec §2), so a Bicep finding's self-check has one source rather than two. The mirror of OpenTofu being Trivy-only. Labelled here and said in the UI by the \"checkov only\" badge (dashboard/src/review/coverage.ts), not left to be discovered."
+  "note": "CIS Azure 4.1 and 4.15, the Bicep mirror of arm-storage-insecure-transfer. Bicep now has two sources, not one. KICS parses .bicep natively where Trivy has no Bicep scanner at all, so this case's self-check compares two tools and the single-source caveat multi-iac-spec §4 carried for Bicep is retired."
 }

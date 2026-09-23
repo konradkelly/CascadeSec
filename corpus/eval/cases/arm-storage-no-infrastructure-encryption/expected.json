@@ -1,11 +1,6 @@
 {
   "description": "ARM storage account without infrastructure encryption or blob soft delete",
-  "category": "encryption-at-rest-and-in-transit",
-  "expected": [
-    {
-      "source": "trivy",
-      "rule_id": "AZU-0061"
-    }
-  ],
-  "note": "CIS Azure 4.2. AZU-0061 responds correctly to requireInfrastructureEncryption -- setting it clears the finding, which is what makes this case worth having. AZU-0056 was labelled here until 2026-09-23 and was then removed, because the scanner no longer reports it on an ARM target at all: the adapter cannot satisfy it, so it separates nothing (ARM_UNSATISFIABLE_TRIVY_RULES, and corpus/README.md for the measurement). The case still earns its place on AZU-0061 alone -- it is the one create-time storage property the ARM adapter does read."
+  "category": "coverage-gap",
+  "expected": [],
+  "note": "A DELIBERATE GAP as of 2026-09-23, kept rather than deleted so the gap is recorded rather than forgotten. CIS Azure 4.2 (infrastructure encryption) was detected on ARM only by Trivy's AZU-0061, and Trivy no longer scans ARM (docs/trivy-azure-arm-adapter-gap.md). Neither KICS nor checkov has an infrastructure-encryption query for ARM, so this template -- which genuinely lacks it -- now raises nothing at all. 4.2 is reachable only from Terraform. Re-label this case the day either tool adds the query."
 }

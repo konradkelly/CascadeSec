@@ -3,8 +3,8 @@
   "category": "logging-and-audit",
   "expected": [
     {
-      "source": "trivy",
-      "rule_id": "AZU-0027"
+      "source": "kics",
+      "rule_id": "e055285c-bc01-48b4-8aa5-8a54acdd29df"
     },
     {
       "source": "checkov",
@@ -15,5 +15,5 @@
       "rule_id": "CKV_AZURE_113"
     }
   ],
-  "note": "CIS Azure 5.1.1 and 5.1.7. A SQL server with no auditing and public network access left on: no record of who reached it, and the whole internet able to try."
+  "note": "CIS Azure 5.1.1 and 5.1.7. A SQL server with no auditing and public network access left on: no record of who reached it, and the whole internet able to try. Relabelled 2026-09-23 when KICS replaced Trivy on ARM and Bicep: Trivy's ARM adapter could not satisfy four of its own checks (docs/trivy-azure-arm-adapter-gap.md), so the trivy:AZU-* labels here are gone and the KICS query that covers the same control takes their place."
 }

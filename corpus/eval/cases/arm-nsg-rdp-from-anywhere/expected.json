@@ -3,9 +3,13 @@
   "category": "network-exposure",
   "expected": [
     {
+      "source": "kics",
+      "rule_id": "59cb3da7-f206-4ae6-b827-7abf0a9cab9d"
+    },
+    {
       "source": "checkov",
       "rule_id": "CKV_AZURE_9"
     }
   ],
-  "note": "CIS Azure 7.1. RDP open to * from the internet. Labelled checkov-only deliberately: Trivy's azure-arm scanner raised nothing on this NSG when it was measured on 2026-09-22, which is a coverage gap in Trivy rather than a missing expectation here."
+  "note": "CIS Azure 7.1. RDP open to * from the internet. This case was checkov-only until 2026-09-23 because Trivy's azure-arm scanner raised nothing on an NSG; KICS does, so the finding now has two sources."
 }

@@ -13,6 +13,12 @@
 # Built and pushed by build-image.sh; terraform/lambda_terraform_scanner.tf
 # resolves the pushed image by digest.
 
+# KICS, for Azure ARM and Bicep (handler.py: KICS_BIN, KICS_ASSETS_DIR).
+# Taken out of the published image rather than the release archive, because
+# the archive ships the binary without its queries and KICS is useless
+# without them. Pinned like the other two: the version decides what fires.
+FROM checkmarx/kics:v2.1.20 AS kics
+
 FROM public.ecr.aws/lambda/python:3.12
 
 # Both pins are what the eval numbers were measured against (corpus/eval/
@@ -54,6 +60,19 @@ for dirpath, dirnames, _ in os.walk(root):
             dirnames.remove(name)
 PY
 EOF
+
+# KICS's binary and its query bundle. It runs with no egress:
+# --disable-full-descriptions stops the one call it would otherwise make to
+# fetch descriptions, verified under `--network none`.
+#
+# Why it is here when Trivy already claims an azure-arm scanner: Trivy's ARM
+# adapter does not populate the fields several of its own checks read, so
+# four of them can never pass on a template however it is written
+# (docs/trivy-azure-arm-adapter-gap.md). KICS reads ARM correctly, scans
+# Bicep natively -- which Trivy cannot at all -- and reports a severity on
+# every finding, which checkov does not. Measured 2026-09-23.
+COPY --from=kics /app/bin/kics /opt/bin/kics
+COPY --from=kics /app/bin/assets /opt/kics-assets
 
 # The project's own Trivy checks (handler.py: TRIVY_CHECKS_DIR).
 COPY checks/ /opt/checks/
