@@ -156,11 +156,41 @@ SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".to
 # corpus/external/run_external.py; corpus/test_corpus.py asserts all four agree.
 ARM_SCHEMA_RE = re.compile(r'"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json')
 
+# CloudFormation's equivalent, and the second language admitted by content.
+# A .json template is the same problem ARM posed -- the suffix says nothing --
+# with one extra turn: ARM already claimed `.json` in SUFFIX_TARGET_TYPES on
+# the strength of being the only content-admitted language, so admitting this
+# one means the suffix can no longer decide either. _json_template_verdict is
+# where both are decided now, and _target_type_for reads its answer.
+#
+# `AWSTemplateFormatVersion` is what a template declares about itself, as
+# `$schema` is for ARM -- but unlike `$schema` it is OPTIONAL, so the parsed
+# fallback in _is_cfn_document carries real weight rather than being a
+# belt-and-braces second check. A template without it is ordinary (cdk synth
+# omits it), which is why the fallback exists at all.
+CFN_MARKER_RE = re.compile(r'"AWSTemplateFormatVersion"\s*:')
+# The second cheap gate, and it is not optional. AWSTemplateFormatVersion is
+# the declaration a template *may* carry; a version-less template is ordinary
+# (cdk synth writes one), and with only the marker above the parsed fallback
+# in _is_cfn_document could never be reached to catch it -- the regex gate
+# would have returned "other" first. Caught by its own test rather than in
+# production, which is the whole point of having written that test.
+#
+# Cheap in the same way the marker is: a resource type in one of
+# CloudFormation's namespaces is a string no lockfile carries, so json.loads
+# is still never called on a 4MB file that is not a template.
+CFN_RESOURCE_TYPE_RE = re.compile(r'"Type"\s*:\s*"(?:AWS|Alexa|Custom)::')
+# The namespaces a CloudFormation resource type can sit in. AWS:: is the bulk,
+# Custom:: is a custom resource backed by a Lambda, and Alexa::ASK::Skill is
+# the one first-party type outside AWS::. A module's type ends `::MODULE` but
+# still begins AWS::, so it needs no entry.
+CFN_TYPE_NAMESPACES = frozenset({"AWS", "Alexa", "Custom"})
+
 # checkov frameworks. `secrets` is detect-secrets over every file in the
 # snapshot: AWS key patterns, `password = "..."` assignments, high-entropy
 # strings. It was off, so spec §2's "hardcoded secrets" goal measured 75% on
 # the eval corpus with the miss being a literal RDS master password.
-CHECKOV_FRAMEWORKS = "terraform,kubernetes,arm,bicep,secrets"
+CHECKOV_FRAMEWORKS = "terraform,kubernetes,arm,bicep,cloudformation,secrets"
 
 # Trivy scans every config type it knows unless told otherwise, so this is
 # the admission list and it is deliberately short. A language reaches
@@ -192,20 +222,30 @@ CHECKOV_FRAMEWORKS = "terraform,kubernetes,arm,bicep,secrets"
 # report are in docs/trivy-azure-arm-adapter-gap.md. KICS reads ARM correctly
 # and is what scans it now; Trivy keeps Terraform and Kubernetes, where it is
 # the better of the two tools. Revisit if the adapter is fixed.
-TRIVY_MISCONFIG_SCANNERS = "terraform,kubernetes"
+# cloudformation added 2026-09-23. Measured on a directory holding a
+# manifest, both template syntaxes, an ARM template, a tsconfig and a CI
+# workflow: the manifest reported the same 18 KSV rules with the scanner on
+# as off, both templates reported the same 10 AWS-* rules, and nothing
+# claimed the other three. So enabling it costs no cross-talk with the
+# Kubernetes admission that shares the .yaml suffix.
+TRIVY_MISCONFIG_SCANNERS = "terraform,kubernetes,cloudformation"
 
-# KICS's platform name for both ARM templates and Bicep. One flag covers both:
-# unlike Trivy, KICS parses .bicep natively, which is what gives Bicep a second
-# source and retires the single-source caveat multi-iac-spec §4 carried for it.
-KICS_PLATFORM = "AzureResourceManager"
+# KICS's platform names. AzureResourceManager covers both ARM templates and
+# Bicep -- unlike Trivy, KICS parses .bicep natively, which is what gives
+# Bicep a second source and retired the single-source caveat multi-iac-spec §4
+# carried for it. CloudFormation joined 2026-09-23 and is a third source for
+# that language rather than a second: Trivy and checkov both read it too.
+# Measured the same day on the mixed directory: KICS parsed 3 files and failed
+# none, attributing them to exactly the platform each belongs to.
+KICS_PLATFORMS = ("AzureResourceManager", "CloudFormation")
 # The secrets runner only opens files on checkov's SUPPORTED_FILE_EXTENSIONS
 # (.tf, .yml, .yaml, .json, .template, .bicep, .hcl) unless told to scan
 # everything. .tfvars is not on that list, which is the one file a hardcoded
 # password is most likely to be in. "All files" is bounded by
 # _download_snapshot, so this is exactly the admitted set and nothing else --
-# which is why a .json that does not sniff as ARM is deleted from work_dir
-# rather than merely left off the returned list: this runner reads the
-# directory, not our list.
+# which is why a .json that sniffs as neither template language is deleted
+# from work_dir rather than merely left off the returned list: this runner
+# reads the directory, not our list.
 CHECKOV_SECRETS_ALL_FILES = "--enable-secret-scan-all-files"
 
 # Trivy's Result.Class -> finding_class. Trivy already separates the two axes
@@ -239,15 +279,19 @@ SUFFIX_TARGET_TYPES = (
     (".tfvars", "terraform"),
     (".tf", "terraform"),
     (".bicep", "bicep"),
-    # Last, and only ever reached because every other .json above is claimed
-    # first. A bare .json is in the snapshot only because it sniffed as an ARM
-    # deployment template, so by construction of the download filter this is
-    # true rather than a guess. It earns its place on the secrets path:
-    # checkov reports check_type "secrets" for a literal in an ARM template,
-    # which names no target, and without this the finding would be
-    # target_type "unknown" -- which remediation-agent's structural guard
-    # refuses outright.
-    (".json", "arm"),
+    # `.json` and `.template` are deliberately NOT here. Until 2026-09-23 a
+    # bare .json mapped to "arm" unconditionally, which was sound while ARM
+    # was the only content-admitted language: such a file was in the snapshot
+    # only because it sniffed as a deployment template, so the mapping was
+    # true by construction of the download filter rather than by guess.
+    # CloudFormation breaks that construction -- a .json in the snapshot is
+    # now an ARM template OR a CloudFormation one -- so the classification
+    # moves to the content sniff that admitted the file, threaded here as
+    # `classifications`. Leaving the old entry in place would have labelled
+    # every CloudFormation .json "arm": the wrong structural guard, the wrong
+    # suppression dialect and the wrong dashboard group, and for KICS findings
+    # it would have hit every finding rather than only the secrets path,
+    # because _normalize_kics passes no `reported` at all.
 )
 
 # Where the two tools name one target differently. Trivy's scanner name for
@@ -258,12 +302,27 @@ SUFFIX_TARGET_TYPES = (
 REPORTED_TARGET_TYPES = {"azure-arm": "arm"}
 
 
-def _target_type_for(file_path, reported):
-    """The finding's target_type: the suffix where it is more specific than
-    the tool, otherwise what the tool said."""
+def _target_type_for(file_path, reported, classifications=None):
+    """The finding's target_type, from the most reliable source available.
+
+    In order: a suffix that is more specific than the tool (.tofu is
+    "opentofu" where Trivy says "terraform"); then what the content sniff
+    decided when the file was admitted, which is the only thing that can tell
+    an ARM .json from a CloudFormation one; then what the tool reported.
+
+    The sniff outranks the tool because the one path that needs it has no
+    tool answer to use: checkov reports check_type "secrets" for a literal in
+    a template, which names a discipline and not a target, and
+    _normalize_kics passes no `reported` whatsoever. Where both exist they
+    agree -- measured 2026-09-23, all three tools attribute each template to
+    its own language.
+    """
     for suffix, target in SUFFIX_TARGET_TYPES:
         if file_path.endswith(suffix):
             return target
+    sniffed = (classifications or {}).get(file_path.lstrip("./"))
+    if sniffed:
+        return sniffed
     reported = reported or ""
     return REPORTED_TARGET_TYPES.get(reported, reported) or "unknown"
 
@@ -356,7 +415,8 @@ def handler(event, context):
     os.makedirs(work_dir, exist_ok=True)
 
     try:
-        downloaded, unreadable_arm = _download_snapshot(ARTIFACTS_BUCKET, s3_prefix, work_dir)
+        downloaded, unreadable_templates, classifications = _download_snapshot(
+            ARTIFACTS_BUCKET, s3_prefix, work_dir)
         if not downloaded:
             raise ValueError(f"no IaC files found under s3://{ARTIFACTS_BUCKET}/{s3_prefix}")
 
@@ -365,15 +425,15 @@ def handler(event, context):
         kics_report = _run_kics(work_dir)
 
         findings = (
-            _normalize_trivy(trivy_results, pr_id)
-            + _normalize_checkov(checkov_report, pr_id)
-            + _normalize_kics(kics_report, work_dir, pr_id)
+            _normalize_trivy(trivy_results, pr_id, classifications)
+            + _normalize_checkov(checkov_report, pr_id, classifications)
+            + _normalize_kics(kics_report, work_dir, pr_id, classifications)
         )
 
         kics_unparsed = _kics_unparsed_count(kics_report)
         if kics_unparsed:
             # A count without names, so it cannot join scan_errors. ARM and
-            # Bicep are covered there by _arm_verdict and checkov anyway; this
+            # Bicep are covered there by _json_template_verdict and checkov anyway; this
             # is here so the gap is visible in the log.
             logger.warning("kics opened %d file(s) it could not parse", kics_unparsed)
 
@@ -386,7 +446,7 @@ def handler(event, context):
             # An admitted .json that claims the ARM schema and will not parse.
             # This one is ours, produced by json.loads, and does not depend on
             # either tool choosing to report -- which for ARM neither does.
-            | set(unreadable_arm)
+            | set(unreadable_templates)
         )
         if scan_errors:
             # Reported, not raised: the other files in the snapshot scanned
@@ -454,73 +514,125 @@ def _emit_metrics(metrics, dimensions, **context):
     }))
 
 
-def _arm_verdict(text):
-    """"arm" | "not-arm" | "unreadable", for a .json in the snapshot.
+def _json_template_verdict(text):
+    """"arm" | "cloudformation" | "other" | "unreadable", for a .json or
+    .template in the snapshot.
 
-    Three values rather than two, because the third is the dangerous one. A
-    .json that will not parse might be a truncated lockfile, or it might be
-    the ARM template a fix just broke -- and dropping the second silently is
-    the fail-open multi-iac-spec §4 names: no findings is exactly what the
-    self-check reads as "the fix worked". So one that still carries the ARM
-    schema text is reported as a scan error rather than discarded, and one
-    that does not was never our file.
+    Two languages are now admitted by content rather than by name, and one
+    function decides between them so that the two sniffs cannot drift into
+    overlapping. Measured over the whole azure-quickstart-templates tree
+    (4849 .json, 2026-09-23): 1887 sniff as ARM, 0 as CloudFormation, 0 as
+    both. The exclusivity is structural rather than lucky -- an ARM template
+    is identified by a `$schema` it declares about itself, a CloudFormation
+    template by `AWSTemplateFormatVersion` or by resource types in the
+    `AWS::`/`Alexa::`/`Custom::` namespaces, and neither vocabulary appears in
+    the other.
 
-    The regex runs first so json.loads is never called on a 4MB lockfile, and
-    the parsed check runs second so a "deploymentTemplate.json" string sitting
-    in some other file's data cannot admit it.
+    "unreadable" is the dangerous value and the reason there are four rather
+    than three. A .json that will not parse might be a truncated lockfile, or
+    it might be the template a fix just broke -- and dropping the second
+    silently is the fail-open multi-iac-spec §4 names: no findings is exactly
+    what the self-check reads as "the fix worked". So one that still carries
+    either language's marker text is reported as a scan error rather than
+    discarded, and one that does not was never our file.
+
+    The regexes run first so json.loads is never called on a 4MB lockfile,
+    and the parsed checks run second so a marker string sitting in some other
+    file's data cannot admit it.
     """
-    if not ARM_SCHEMA_RE.search(text):
-        return "not-arm"
+    looks_arm = bool(ARM_SCHEMA_RE.search(text))
+    looks_cfn = bool(CFN_MARKER_RE.search(text) or CFN_RESOURCE_TYPE_RE.search(text))
+    if not looks_arm and not looks_cfn:
+        return "other"
     try:
         doc = json.loads(text)
     except ValueError:
         return "unreadable"
     if not isinstance(doc, dict):
-        return "not-arm"
+        return "other"
     schema = doc.get("$schema")
-    return "arm" if isinstance(schema, str) and "deploymentTemplate.json" in schema else "not-arm"
+    if isinstance(schema, str) and "deploymentTemplate.json" in schema:
+        return "arm"
+    return "cloudformation" if _is_cfn_document(doc) else "other"
+
+
+def _is_cfn_document(doc):
+    """Whether a parsed JSON object is a CloudFormation template.
+
+    `AWSTemplateFormatVersion` is the declaration, and it is what CFN_MARKER_RE
+    looks for -- but it is optional in CloudFormation, so a template that
+    omits it still has to be recognised. The fallback is the `Resources`
+    mapping: every entry carrying a `Type` in one of CloudFormation's own
+    namespaces. Requiring *every* entry rather than any keeps an unrelated
+    document that happens to hold one such string from being admitted.
+    """
+    if "AWSTemplateFormatVersion" in doc:
+        return True
+    resources = doc.get("Resources")
+    if not isinstance(resources, dict) or not resources:
+        return False
+    return all(
+        isinstance(body, dict)
+        and isinstance(body.get("Type"), str)
+        and body["Type"].split("::")[0] in CFN_TYPE_NAMESPACES
+        for body in resources.values()
+    )
 
 
 def _download_snapshot(bucket, prefix, dest_dir):
-    """Returns (downloaded, unreadable_arm).
+    """Returns (downloaded, unreadable_templates, classifications).
 
-    ARM is the first language whose admission cannot be decided from the key.
-    The listing carries no content, so the only place to sniff is after the
-    GET: a .json that is not a template costs one download and is then
+    ARM was the first language whose admission could not be decided from the
+    key, and CloudFormation is the second. The listing carries no content, so
+    the only place to sniff is after the GET: a .json that is neither is
     *removed from dest_dir*, not merely left off the returned list, because
     checkov's secrets runner reads the directory rather than our list. Our own
     uploaders apply the same predicate locally and for free, so in practice
     little extra comes down; this is the backstop for a snapshot written by
     anything else.
+
+    `classifications` is what the sniff decided, keyed by the path relative to
+    the prefix -- the same spelling the tools report a finding's file under,
+    so _target_type_for can look a finding up. It is the only thing that can
+    tell an ARM .json from a CloudFormation one after the fact, since the two
+    share a suffix and checkov's secrets runner and KICS both report findings
+    without naming a target.
     """
     paginator = s3.get_paginator("list_objects_v2")
-    downloaded, unreadable_arm = [], []
+    downloaded, unreadable_templates, classifications = [], [], {}
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             admitted = key.endswith(SNAPSHOT_SUFFIXES)
-            arm_candidate = not admitted and key.endswith(".json")
-            if not admitted and not arm_candidate:
+            # .template is checkov's own extension for a CloudFormation
+            # template and says nothing on its own, so it is sniffed like a
+            # .json rather than admitted on the name.
+            sniff_candidate = key.endswith((".json", ".template"))
+            if not admitted and not sniff_candidate:
                 continue
             rel_path = key[len(prefix):]
             local_path = os.path.join(dest_dir, rel_path)
             os.makedirs(os.path.dirname(local_path) or dest_dir, exist_ok=True)
             s3.download_file(bucket, key, local_path)
-            if not arm_candidate:
+            # An admitted suffix that is also sniffable (.tf.json, .tofu.json,
+            # .tfvars.json) is Terraform's and already named by its suffix;
+            # SUFFIX_TARGET_TYPES claims those before the sniff is consulted.
+            if admitted:
                 downloaded.append(local_path)
                 continue
             try:
                 with open(local_path, encoding="utf-8") as fh:
-                    verdict = _arm_verdict(fh.read())
+                    verdict = _json_template_verdict(fh.read())
             except (OSError, UnicodeDecodeError):
-                verdict = "not-arm"
-            if verdict == "arm":
+                verdict = "other"
+            if verdict in ("arm", "cloudformation"):
                 downloaded.append(local_path)
+                classifications[rel_path.replace(os.sep, "/")] = verdict
                 continue
             os.remove(local_path)
             if verdict == "unreadable":
-                unreadable_arm.append(rel_path.replace(os.sep, "/"))
-    return downloaded, unreadable_arm
+                unreadable_templates.append(rel_path.replace(os.sep, "/"))
+    return downloaded, unreadable_templates, classifications
 
 
 def _run_trivy(work_dir):
@@ -606,7 +718,7 @@ def _run_kics(work_dir):
             [
                 KICS_BIN, "scan",
                 "-p", work_dir,
-                "-t", KICS_PLATFORM,
+                *[arg for platform in KICS_PLATFORMS for arg in ("-t", platform)],
                 "-q", os.path.join(KICS_ASSETS_DIR, "queries"),
                 "-b", os.path.join(KICS_ASSETS_DIR, "libraries"),
                 "--disable-full-descriptions",
@@ -644,7 +756,7 @@ def _kics_unparsed_count(report):
     `files_scanned` and `files_parsed`, and that is a count without names.
 
     So this is deliberately not wired into scan_errors, which is a list of
-    files: the scanner's own ARM parse check (_arm_verdict) and checkov's
+    files: the scanner's own template parse check (_json_template_verdict) and checkov's
     parsing_errors both name the file, and between them ARM and Bicep are
     covered. This exists so the gap is logged rather than invisible.
     """
@@ -704,7 +816,7 @@ def _relativize_kics_path(file_path, work_dir):
     return rel.replace(os.sep, "/")
 
 
-def _normalize_kics(report, work_dir, pr_id):
+def _normalize_kics(report, work_dir, pr_id, classifications=None):
     """KICS's report -> findings.
 
     The rule id is the query's UUID rather than its name: the name is prose
@@ -728,7 +840,7 @@ def _normalize_kics(report, work_dir, pr_id):
                 file_path=file_path,
                 line_range=[line, line],
                 severity=(query.get("severity") or "UNKNOWN").upper(),
-                target_type=_target_type_for(file_path, ""),
+                target_type=_target_type_for(file_path, "", classifications),
                 finding_class=finding_class,
                 now=now,
                 # KICS names the resource and its type separately; the pair is
@@ -756,11 +868,11 @@ def _relativize_path(file_path, work_dir):
     return file_path.lstrip("/")
 
 
-def _normalize_trivy(results, pr_id):
+def _normalize_trivy(results, pr_id, classifications=None):
     now = datetime.now(timezone.utc).isoformat()
     findings = []
     for r in results:
-        target_type = _target_type_for(r.get("Target", ""), r.get("Type"))
+        target_type = _target_type_for(r.get("Target", ""), r.get("Type"), classifications)
         cause = r.get("CauseMetadata") or {}
         findings.append(_build_finding(
             pr_id=pr_id,
@@ -855,7 +967,7 @@ def _unparseable_admitted_files(downloaded, work_dir):
     it.
 
     So the scanner parses what it admitted, itself. YAML here; ARM gets the
-    same guarantee from _arm_verdict, which has to parse the file to classify
+    same guarantee from _json_template_verdict, which has to parse the file to classify
     it at all. Bicep and Terraform are reported by the tools. A Go template is
     skipped because it is not a file this scanner failed to read -- it is one
     this scanner does not handle.
@@ -925,7 +1037,7 @@ def _checkov_reports(report):
     return [report]
 
 
-def _normalize_checkov(report, pr_id):
+def _normalize_checkov(report, pr_id, classifications=None):
     now = datetime.now(timezone.utc).isoformat()
     findings = []
     # Per report rather than flattened, because check_type lives on the
@@ -947,7 +1059,9 @@ def _normalize_checkov(report, pr_id):
                 # comes from the file -- a password in a .tfvars is a secret
                 # found in Terraform.
                 target_type=_target_type_for(
-                    file_path, "" if check_type in CHECKOV_TYPE_TO_FINDING_CLASS else check_type
+                    file_path,
+                    "" if check_type in CHECKOV_TYPE_TO_FINDING_CLASS else check_type,
+                    classifications,
                 ),
                 finding_class=finding_class,
                 now=now,

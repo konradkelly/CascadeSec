@@ -1,0 +1,11 @@
+{
+  "description": "CloudFormation security group allowing SSH from 0.0.0.0/0 and unrestricted egress",
+  "category": "network-exposure",
+  "expected": [
+    { "source": "trivy", "rule_id": "AWS-0107" },
+    { "source": "checkov", "rule_id": "CKV_AWS_24" },
+    { "source": "kics", "rule_id": "6e856af2-62d7-4ba2-adc1-73b62cef9cc1" },
+    { "source": "kics", "rule_id": "4a1e6b34-1008-4e61-a5f2-1f7c276f8d14" }
+  ],
+  "note": "CIS AWS 5.2. Port 22 open to the internet, which is the finding the remediation agent has the longest history with -- it is the one it tried to suppress rather than fix (remediation-agent handler.py, _find_added_suppressions). All three tools see it. Trivy additionally raises AWS-0104 for the open egress and AWS-0124 for the missing rule description; KICS raises six more including the egress pair. Unlabelled here because this case is about the ingress."
+}

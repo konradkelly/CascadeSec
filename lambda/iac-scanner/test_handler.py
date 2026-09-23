@@ -122,6 +122,13 @@ def test_trivy_parse_failure_is_reported_not_raised(mock_run):
     assert parse_errors == ["bad.tf"]
 
 
+# What the scanner is expected to ask each tool for. Spelled out here rather
+# than read off the handler, so a change to either has to be made twice --
+# once in the code and once as a claim about what the code should say.
+TRIVY_SCANNERS = "terraform,kubernetes,cloudformation"
+CHECKOV_FRAMEWORKS = "terraform,kubernetes,arm,bicep,cloudformation,secrets"
+
+
 @patch.object(handler.subprocess, "run")
 def test_trivy_is_run_offline_with_the_projects_own_checks(mock_run):
     """The flags that make a scan reproducible, complete, and confined to
@@ -146,7 +153,7 @@ def test_trivy_is_run_offline_with_the_projects_own_checks(mock_run):
     # 2026-09-23: Trivy's ARM adapter cannot satisfy four of its own checks,
     # so KICS scans ARM and Bicep instead
     # (docs/trivy-azure-arm-adapter-gap.md).
-    assert args[args.index("--misconfig-scanners") + 1] == "terraform,kubernetes"
+    assert args[args.index("--misconfig-scanners") + 1] == TRIVY_SCANNERS
 
 
 @patch.object(handler.subprocess, "run")
@@ -355,7 +362,7 @@ def test_snapshot_download_takes_every_file_type_the_scanner_reads(mock_s3):
     ]}]
 
     with patch.object(handler.os, "makedirs"):
-        downloaded, unreadable = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
+        downloaded, unreadable, _classified = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
 
     assert [pathlib_name(p) for p in downloaded] == [
         "main.tf", "main.tf.json", "terraform.tfvars", "prod.auto.tfvars.json",
@@ -367,16 +374,19 @@ def test_snapshot_download_takes_every_file_type_the_scanner_reads(mock_s3):
 @patch.object(handler, "s3")
 def test_the_snapshot_stops_at_the_languages_the_scanner_admits(mock_s3):
     """A language reaches the scanner only once its remediation gates exist
-    (docs/multi-iac-spec.md §4). npm, Dockerfile and CloudFormation have
-    none, so their files are not downloaded however well the tools would
-    parse them. The download filter is the first of the two guards;
-    --misconfig-scanners is the other.
+    (docs/multi-iac-spec.md §4). npm and Dockerfile have none, so their
+    files are not downloaded however well the tools would parse them. The
+    download filter is the first of the two guards; --misconfig-scanners is
+    the other.
 
-    Bicep left this list on 2026-09-22 when its gates were built. The
-    lockfile stays out for a stronger reason than a suffix: it is downloaded,
-    sniffed, found not to carry an ARM $schema and removed again -- which is
-    what admits a template named anything while excluding a .json that is not
-    one."""
+    Bicep left this list on 2026-09-22 when its gates were built, and
+    CloudFormation on 2026-09-23. Neither the lockfile nor the .template
+    survives here, for the stronger reason than a suffix: both are
+    downloaded, sniffed, found to carry neither template language's marker
+    and removed again -- which is what admits a template named anything while
+    excluding a .json that is not one. A `.template` is checkov's own
+    CloudFormation extension, and is sniffed rather than trusted, so a file
+    merely named like one is not admitted on the name."""
     mock_s3.get_paginator.return_value.paginate.return_value = [{"Contents": [
         {"Key": "scans/pr-1/package-lock.json"},
         {"Key": "scans/pr-1/Dockerfile"},
@@ -386,14 +396,14 @@ def test_the_snapshot_stops_at_the_languages_the_scanner_admits(mock_s3):
     with patch.object(handler.os, "makedirs"), \
          patch.object(handler.os, "remove") as mock_remove, \
          patch("builtins.open", _reading('{"name": "decoy", "lockfileVersion": 3}')):
-        downloaded, unreadable = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
+        downloaded, unreadable, _classified = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
 
     assert downloaded == []
     assert unreadable == []
     # Removed from the work dir, not merely left off the list: checkov's
     # secrets runner is given --enable-secret-scan-all-files and reads the
-    # directory.
-    assert mock_remove.call_count == 1
+    # directory. Both the .json and the .template are sniffed, so both go.
+    assert mock_remove.call_count == 2
 
 
 @patch.object(handler.subprocess, "run")
@@ -414,7 +424,8 @@ def test_helm_is_not_admitted_even_though_trivy_supports_it(mock_run):
     scanners = args[args.index("--misconfig-scanners") + 1].split(",")
     assert "helm" not in scanners
     # The same reasoning, from the other side: these have no gates at all.
-    assert not {"cloudformation", "dockerfile", "ansible"} & set(scanners)
+    # cloudformation left this list on 2026-09-23, when its gates were built.
+    assert not {"dockerfile", "ansible"} & set(scanners)
     # azure-arm is excluded for a different reason from the rest: not missing
     # gates but a broken adapter, with KICS covering the language instead.
     assert "azure-arm" not in scanners
@@ -546,7 +557,8 @@ def test_kics_is_run_offline_against_the_bundled_queries(tmp_path):
     argv = mock_run.call_args.args[0]
     assert argv[0] == handler.KICS_BIN
     assert "--disable-full-descriptions" in argv
-    assert argv[argv.index("-t") + 1] == handler.KICS_PLATFORM
+    assert set(handler.KICS_PLATFORMS) == {
+        argv[i + 1] for i, a in enumerate(argv) if a == "-t"}
     assert argv[argv.index("-q") + 1].startswith(handler.KICS_ASSETS_DIR)
     assert argv[argv.index("-b") + 1].startswith(handler.KICS_ASSETS_DIR)
     # the report directory is cleaned up whatever happened
@@ -605,7 +617,7 @@ def test_a_json_is_downloaded_only_if_its_schema_says_arm(mock_s3):
     ]}]
 
     with patch.object(handler.os, "makedirs"), patch("builtins.open", _reading(ARM_TEMPLATE)):
-        downloaded, unreadable = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
+        downloaded, unreadable, _classified = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
 
     assert [pathlib_name(p) for p in downloaded] == ["whatever-we-called-it.json"]
     assert unreadable == []
@@ -625,7 +637,7 @@ def test_an_arm_template_that_is_not_valid_json_is_a_scan_error_not_a_silent_ski
 
     with patch.object(handler.os, "makedirs"), patch.object(handler.os, "remove"), \
          patch("builtins.open", _reading(broken)):
-        downloaded, unreadable = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
+        downloaded, unreadable, _classified = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
 
     assert downloaded == []
     assert unreadable == ["azuredeploy.json"]
@@ -635,9 +647,102 @@ def test_a_json_that_merely_mentions_the_schema_string_is_not_admitted():
     """The regex is a cheap gate so json.loads is never called on a large
     lockfile; the parsed check behind it is what decides. A file with the
     words in its data does not become a template."""
-    assert handler._arm_verdict(json.dumps({"docs": "see deploymentTemplate.json for the $schema"})) == "not-arm"
-    assert handler._arm_verdict(ARM_TEMPLATE) == "arm"
-    assert handler._arm_verdict('{"name": "lockfile"}') == "not-arm"
+    assert handler._json_template_verdict(json.dumps({"docs": "see deploymentTemplate.json for the $schema"})) == "other"
+    assert handler._json_template_verdict(ARM_TEMPLATE) == "arm"
+    assert handler._json_template_verdict('{"name": "lockfile"}') == "other"
+
+
+# ---------- CloudFormation: the second content-admitted language ----------
+
+CFN_TEMPLATE = json.dumps({
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Resources": {"LogsBucket": {"Type": "AWS::S3::Bucket", "Properties": {}}},
+})
+
+# Legal, and what `cdk synth` writes: AWSTemplateFormatVersion is optional.
+CFN_TEMPLATE_NO_VERSION = json.dumps({
+    "Resources": {
+        "LogsBucket": {"Type": "AWS::S3::Bucket", "Properties": {}},
+        "Custom": {"Type": "Custom::Thing", "Properties": {}},
+    },
+})
+
+
+def test_the_two_content_sniffs_do_not_overlap():
+    """ARM and CloudFormation share the .json suffix, so one function decides
+    between them and the answer has to be exclusive. Measured over the whole
+    azure-quickstart-templates tree (4849 .json, 2026-09-23): 1887 sniff as
+    ARM, 0 as CloudFormation, 0 as both."""
+    assert handler._json_template_verdict(ARM_TEMPLATE) == "arm"
+    assert handler._json_template_verdict(CFN_TEMPLATE) == "cloudformation"
+
+
+def test_a_cloudformation_template_without_a_format_version_is_still_admitted():
+    """AWSTemplateFormatVersion is optional, and cdk synth omits it, so the
+    parsed fallback carries real weight rather than being a second opinion:
+    every Resources entry carrying a Type in one of CloudFormation's own
+    namespaces."""
+    assert handler._json_template_verdict(CFN_TEMPLATE_NO_VERSION) == "cloudformation"
+
+
+def test_a_json_with_a_resources_key_that_is_not_cloudformation_is_not_admitted():
+    """`Resources` is not a rare word. Requiring every entry to carry a Type
+    in an AWS::/Alexa::/Custom:: namespace is what keeps an unrelated
+    document out."""
+    assert handler._json_template_verdict(json.dumps(
+        {"Resources": {"a": {"Type": "my.custom/thing"}}})) == "other"
+    assert handler._json_template_verdict(json.dumps(
+        {"Resources": {"a": "just a string"}})) == "other"
+    assert handler._json_template_verdict(json.dumps({"Resources": {}})) == "other"
+
+
+def test_a_broken_cloudformation_template_is_a_scan_error_not_a_silent_skip():
+    """Same reasoning as ARM's: a .json that will not parse might be the
+    template a fix just broke, and no findings is what the self-check reads
+    as "the fix worked"."""
+    assert handler._json_template_verdict(CFN_TEMPLATE[:40]) == "unreadable"
+
+
+def test_a_cloudformation_json_is_not_labelled_arm():
+    """The conflict this change exists to resolve. Until 2026-09-23 a bare
+    .json mapped to "arm" unconditionally -- sound while ARM was the only
+    content-admitted language, wrong the moment a second one shares the
+    suffix. The wrong label means the wrong structural guard, the wrong
+    suppression dialect and the wrong dashboard group."""
+    classifications = {"stack.json": "cloudformation", "azuredeploy.json": "arm"}
+
+    assert handler._target_type_for("stack.json", "", classifications) == "cloudformation"
+    assert handler._target_type_for("azuredeploy.json", "", classifications) == "arm"
+
+
+def test_the_sniff_outranks_the_tool_because_two_paths_have_no_tool_answer():
+    """checkov reports check_type "secrets" for a literal in a template,
+    which names a discipline and not a target, and _normalize_kics passes no
+    `reported` at all -- so for KICS this would have mislabelled every
+    finding, not only the secrets ones."""
+    classifications = {"stack.json": "cloudformation"}
+
+    assert handler._target_type_for("stack.json", "", classifications) == "cloudformation"
+    # And a file the sniff never classified still falls through to the tool.
+    assert handler._target_type_for("manifest.yaml", "kubernetes", classifications) == "kubernetes"
+
+
+@patch.object(handler, "s3")
+def test_the_download_classifies_each_template_by_the_language_it_declares(mock_s3):
+    """The map _target_type_for reads, keyed by the path the tools report a
+    finding under."""
+    mock_s3.get_paginator.return_value.paginate.return_value = [{"Contents": [
+        {"Key": "scans/pr-1/stack.json"},
+    ]}]
+
+    with patch.object(handler.os, "makedirs"), patch.object(handler.os, "remove"), \
+         patch("builtins.open", _reading(CFN_TEMPLATE)):
+        downloaded, unreadable, classified = handler._download_snapshot(
+            "bucket", "scans/pr-1/", "/tmp/x")
+
+    assert len(downloaded) == 1
+    assert unreadable == []
+    assert classified == {"stack.json": "cloudformation"}
 
 
 def test_a_tf_json_is_terraform_not_arm():
@@ -706,7 +811,7 @@ def test_checkov_runs_the_secrets_framework_too(mock_run):
     handler._run_checkov(WORK_DIR)
 
     argv = mock_run.call_args.args[0]
-    assert argv[argv.index("--framework") + 1] == "terraform,kubernetes,arm,bicep,secrets"
+    assert argv[argv.index("--framework") + 1] == CHECKOV_FRAMEWORKS
     # Without this the secrets runner skips .tfvars: it is not on checkov's
     # SUPPORTED_FILE_EXTENSIONS, and that is where the passwords are.
     assert "--enable-secret-scan-all-files" in argv
@@ -960,7 +1065,7 @@ def test_handler_surfaces_parse_errors_without_discarding_real_findings(
 ):
     """One unparseable file among several doesn't invalidate the others'
     findings, so this is reported rather than raised."""
-    mock_download.return_value = (["main.tf", "broken.tf"], [])
+    mock_download.return_value = (["main.tf", "broken.tf"], [], {})
     mock_trivy.return_value = ([{
         "ID": "AWS-0132", "Target": "main.tf", "Severity": "HIGH",
         "CauseMetadata": {"StartLine": 1, "EndLine": 3},
@@ -985,7 +1090,7 @@ def test_a_persisted_scan_emits_findings_per_scan_as_emf(
     """Spec §4.1's findings-per-scan metric, as one Embedded Metric Format
     line on stdout. Printed rather than logged: Lambda prefixes logger output
     and EMF needs the whole event to be the JSON."""
-    mock_download.return_value = (["main.tf"], [])
+    mock_download.return_value = (["main.tf"], [], {})
     mock_trivy.return_value = ([{
         "ID": "AWS-0132", "Target": "main.tf", "Severity": "HIGH",
         "CauseMetadata": {"StartLine": 1, "EndLine": 3},
@@ -1014,7 +1119,7 @@ def test_a_self_check_scan_emits_no_metric(
     """persist=False is a rescan of one patched file for a self-check, not a
     scan of a PR. Counting it would make every remediation run look like a
     burst of tiny scans."""
-    mock_download.return_value = (["main.tf"], [])
+    mock_download.return_value = (["main.tf"], [], {})
     mock_trivy.return_value = ([], [])
     mock_checkov.return_value = _checkov_report()
 
@@ -1031,7 +1136,7 @@ def test_a_self_check_scan_emits_no_metric(
 def test_handler_reports_no_scan_errors_on_a_clean_scan(
     mock_download, mock_trivy, mock_checkov, mock_write
 ):
-    mock_download.return_value = (["main.tf"], [])
+    mock_download.return_value = (["main.tf"], [], {})
     mock_trivy.return_value = ([], [])
     mock_checkov.return_value = _checkov_report()
 
@@ -1056,7 +1161,7 @@ def test_handler_merges_parse_errors_from_both_tools(
     Paths are given already-relative here because handler() scans into a work
     dir it names itself; relativizing the absolute forms the tools really emit
     is covered by _relativize_path and _checkov_parse_errors directly."""
-    mock_download.return_value = (["main.tf", "odd.tf"], [])
+    mock_download.return_value = (["main.tf", "odd.tf"], [], {})
     mock_trivy.return_value = ([], ["main.tf"])
     mock_checkov.return_value = _checkov_report(parsing_errors=["main.tf", "odd.tf"])
 
@@ -1070,7 +1175,7 @@ def test_handler_merges_parse_errors_from_both_tools(
 def test_handler_lets_a_scanner_failure_reach_the_caller(mock_download, mock_trivy):
     """remediation-agent turns this into a failed Lambda invocation and leaves
     the finding at status "mapped" for a retry, rather than scoring the fix."""
-    mock_download.return_value = (["main.tf"], [])
+    mock_download.return_value = (["main.tf"], [], {})
     mock_trivy.side_effect = handler.ScannerError("trivy produced no output (exit 126)")
 
     with pytest.raises(handler.ScannerError):
@@ -1088,7 +1193,7 @@ def test_a_mixed_snapshot_labels_each_file_by_its_own_suffix(
     """OpenTofu and Terraform in one repository -- which OpenTofu itself
     allows, preferring .tofu where both exist. target_type is per finding,
     not per scan, so the two do not smear into one label."""
-    mock_download.return_value = (["main.tf", "main.tofu"], [])
+    mock_download.return_value = (["main.tf", "main.tofu"], [], {})
     mock_trivy.return_value = ([
         {"ID": "AWS-0132", "Target": "main.tf", "Severity": "HIGH",
          "Type": "terraform", "Class": "config",
@@ -1243,7 +1348,7 @@ def test_the_known_id_query_pages_to_exhaustion(mock_dynamodb):
 def test_the_handler_reports_what_the_rescan_preserved(
     mock_download, mock_trivy, mock_checkov, mock_write
 ):
-    mock_download.return_value = (["main.tf"], [])
+    mock_download.return_value = (["main.tf"], [], {})
     mock_trivy.return_value = ([], [])
     mock_checkov.return_value = _checkov_report()
 
@@ -1264,7 +1369,7 @@ def test_a_self_check_rescan_touches_nothing(
     """persist=false is remediation-agent proving a fix. It must not write --
     least of all mark every finding on the PR as no longer detected, which a
     rescan of one patched file would otherwise do."""
-    mock_download.return_value = (["main.tf"], [])
+    mock_download.return_value = (["main.tf"], [], {})
     mock_trivy.return_value = ([], [])
     mock_checkov.return_value = _checkov_report()
 

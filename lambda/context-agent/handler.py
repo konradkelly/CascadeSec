@@ -70,6 +70,13 @@ CONTEXT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json",
 # ARM_SCHEMA_RE; corpus/test_corpus.py asserts every copy agrees.
 ARM_SCHEMA_RE = re.compile(r'"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json')
 
+# CloudFormation's marker, for the same reason and with the same consequence:
+# a .json or .template that is a CloudFormation stack is repository context a
+# remediation may need to read, and one that is not is noise. Must match
+# iac-scanner's CFN_MARKER_RE; corpus/test_corpus.py asserts every copy
+# agrees.
+CFN_MARKER_RE = re.compile(r'"AWSTemplateFormatVersion"\s*:')
+
 # The caps. A question like "what depends on this" can match half a
 # repository, and a truncated search that answers confidently is the
 # fabrication risk wearing a different hat -- so the caps are told to the
@@ -430,13 +437,20 @@ def _unknown(question, explanation):
     return {"question": question, "answer": "unknown", "explanation": explanation, "citations": []}
 
 
-def _is_arm_template(path):
-    """Whether a downloaded .json is an ARM deployment template."""
+def _is_template(path):
+    """Whether a downloaded .json or .template is an ARM deployment template
+    or a CloudFormation stack.
+
+    Which of the two it is does not matter here -- this agent reads files and
+    quotes them back, it does not dispatch on the language. What matters is
+    that it is one of them rather than a lockfile.
+    """
     try:
         with open(path, encoding="utf-8") as fh:
-            return bool(ARM_SCHEMA_RE.search(fh.read()))
+            text = fh.read()
     except (OSError, UnicodeDecodeError):
         return False
+    return bool(ARM_SCHEMA_RE.search(text) or CFN_MARKER_RE.search(text))
 
 
 def _download_snapshot(bucket, prefix, dest_dir):
@@ -448,14 +462,14 @@ def _download_snapshot(bucket, prefix, dest_dir):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             admitted = key.endswith(CONTEXT_SUFFIXES)
-            arm_candidate = not admitted and key.endswith(".json")
-            if not admitted and not arm_candidate:
+            sniff_candidate = not admitted and key.endswith((".json", ".template"))
+            if not admitted and not sniff_candidate:
                 continue
             rel = key[len(prefix):]
             local = os.path.join(dest_dir, rel)
             os.makedirs(os.path.dirname(local) or dest_dir, exist_ok=True)
             s3.download_file(bucket, key, local)
-            if arm_candidate and not _is_arm_template(local):
+            if sniff_candidate and not _is_template(local):
                 os.remove(local)
                 continue
             files.append(rel)

@@ -196,7 +196,7 @@ def test_every_copy_of_the_snapshot_predicate_says_the_same_thing():
     Parsed out of the sources rather than imported, since importing the
     handlers would pull boto3 and anthropic into a data check.
     """
-    suffix_copies, schema_copies = {}, {}
+    suffix_copies, schema_copies, cfn_copies = {}, {}, {}
     for rel in ("lambda/iac-scanner/handler.py",
                 "scripts/scan.py",
                 "corpus/eval/run_eval.py",
@@ -206,6 +206,13 @@ def test_every_copy_of_the_snapshot_predicate_says_the_same_thing():
         schema = re.search(r"^ARM_SCHEMA_RE = re\.compile\((r'[^']*')\)$", source, re.M)
         assert schema, f"{rel}: no ARM_SCHEMA_RE"
         schema_copies[rel] = schema.group(1)
+        # CloudFormation's marker, added 2026-09-23. It matters more than
+        # ARM's did: the two languages share the .json suffix, so a drifted
+        # copy here does not merely lose a file, it can hand a template to
+        # the wrong language's structural guard.
+        cfn = re.search(r"^CFN_MARKER_RE = re\.compile\((r'[^']*')\)$", source, re.M)
+        assert cfn, f"{rel}: no CFN_MARKER_RE"
+        cfn_copies[rel] = cfn.group(1)
         # context-agent reads more than the scanner opens -- its list is
         # CONTEXT_SUFFIXES and is allowed to differ -- but "is this an ARM
         # template" is the same question everywhere and must not.
@@ -222,6 +229,10 @@ def test_every_copy_of_the_snapshot_predicate_says_the_same_thing():
     assert len(set(schema_copies.values())) == 1, (
         "ARM_SCHEMA_RE has drifted:\n  "
         + "\n  ".join(f"{rel}: {value}" for rel, value in schema_copies.items())
+    )
+    assert len(set(cfn_copies.values())) == 1, (
+        "CFN_MARKER_RE has drifted:\n  "
+        + "\n  ".join(f"{rel}: {value}" for rel, value in cfn_copies.items())
     )
 
 

@@ -1,0 +1,6 @@
+{
+  "description": "Hardened CloudFormation template -- a scoped security group and an account Access Analyzer",
+  "category": "clean-control",
+  "expected": [],
+  "note": "The false-positive control, and the CloudFormation counterpart to clean-sg-restricted. Measured clean on all three tools 2026-09-23. Two of its details are there to satisfy KICS specifically and are worth recording, because both are tool behaviour rather than security judgement. The ingress is a /25 rather than the more natural /24: KICS 0104165b wants fewer than 256 hosts and a /24 is exactly 256. And the template declares an AWS::AccessAnalyzer::Analyzer because KICS 8d29754a fires on any CloudFormation template that does not -- an account-level control expressed as a per-template check. It is satisfiable, unlike the four Trivy ARM rules in docs/trivy-azure-arm-adapter-gap.md, so it is satisfied here rather than dropped from the corpus; but it will fire on essentially every real template a user scans, which is worth knowing before the first support question about it."
+}
