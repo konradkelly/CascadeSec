@@ -175,9 +175,22 @@ only record of that.
 `Trusted Microsoft Services Not Enabled` was labelled on the two
 `default-allow` cases and does not fire there -- for exactly the reason
 checkov's `CKV_AZURE_36` does not, which was the correction logged in the
-first run: both require `defaultAction` to be Deny before asking about the
-bypass list, and with Allow there is nothing to bypass. Two independent
-tools agreeing makes that the rule rather than a quirk of one.
+first run. Measured across all four combinations 2026-09-23, both tools
+behaving identically:
+
+| `networkAcls` | fires? |
+|---|---|
+| absent entirely | yes |
+| `defaultAction: Allow` | **no** |
+| `defaultAction: Deny`, `bypass: None` | yes |
+| `defaultAction: Deny`, `bypass: AzureServices` | no |
+
+So the precondition is not "Deny is required before the bypass list is
+checked" -- an absent block fires too, and absent means Allow in Azure. It is
+that an *explicit* `Allow` switches the check off. Defensible either way:
+`bypass` is a carve-out from a block, and with everything allowed there is no
+block to carve out of. Two independent tools agreeing makes it the rule
+rather than a quirk of one.
 
 ## The Azure cases: what they cover
 
