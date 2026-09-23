@@ -63,7 +63,28 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 # recognises, so a .yaml here never reaches the scanner and anything outside
 # both sets is never uploaded.
 SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json",
-                     ".tofu", ".tofu.json", ".yaml", ".yml")
+                     ".tofu", ".tofu.json", ".yaml", ".yml", ".bicep")
+
+# ARM templates are .json and so is half of every repository, so they are
+# admitted by content: a top-level $schema naming a deploymentTemplate. Only
+# the cheap text test here -- the scanner re-sniffs and parses properly. An
+# uploader is deliberately the more permissive of the two: over-admitting
+# costs one S3 object that the scanner discards, where under-admitting loses
+# a file silently. Must match iac-scanner's ARM_SCHEMA_RE; corpus/
+# test_corpus.py asserts every copy agrees.
+ARM_SCHEMA_RE = re.compile(r'"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json')
+
+
+def is_snapshot_file(path):
+    """Whether the scanner would open this file."""
+    if path.name.endswith(SNAPSHOT_SUFFIXES):
+        return True
+    if not path.name.endswith(".json"):
+        return False
+    try:
+        return bool(ARM_SCHEMA_RE.search(path.read_text(encoding="utf-8")))
+    except (OSError, UnicodeDecodeError):
+        return False
 
 # remediation-agent may run for its full 900s. The read timeout has to
 # outlast it, and retries have to be OFF: a retried RequestResponse invoke of
@@ -91,10 +112,10 @@ SKIP_DIRS = {".terraform", ".git", "node_modules", ".venv", "venv", "__pycache__
 def collect_tf_files(root):
     files = sorted(
         p for p in root.rglob("*")
-        if p.is_file() and p.name.endswith(SNAPSHOT_SUFFIXES) and not (SKIP_DIRS & set(p.parts))
+        if p.is_file() and not (SKIP_DIRS & set(p.parts)) and is_snapshot_file(p)
     )
     if not files:
-        sys.exit(f"no Terraform files under {root}")
+        sys.exit(f"no IaC files under {root}")
     return files
 
 

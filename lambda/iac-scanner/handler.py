@@ -3,10 +3,10 @@
 Runs Trivy + Checkov against an IaC snapshot stored in S3 and writes raw
 findings (status: "raw") to the DynamoDB findings table.
 
-Terraform and OpenTofu today. One scanner rather than one per language
-(multi-iac-spec §3): the split in §4.3 existed for Lambda's 250MB layer
-ceiling, which the container image removed, and this one image already holds
-every parser. Which languages are admitted is a deliberate list --
+Terraform, OpenTofu, Kubernetes, ARM and Bicep today. One scanner rather than
+one per language (multi-iac-spec §3): the split in §4.3 existed for Lambda's
+250MB layer ceiling, which the container image removed, and this one image
+already holds every parser. Which languages are admitted is a deliberate list --
 TRIVY_MISCONFIG_SCANNERS and CHECKOV_FRAMEWORKS -- not whatever the tools
 would find, because a language whose suppression and deletion gates are not
 implemented must not reach remediation (multi-iac-spec §4). Also used by
@@ -16,7 +16,8 @@ call path passes persist=false and just reads the returned findings.
 Every finding records two things about what it came from, because one field
 could not answer both (multi-iac-spec §3.1):
 
-  target_type    what to re-run to verify a fix -- terraform, opentofu
+  target_type    what to re-run to verify a fix -- terraform, opentofu,
+                 kubernetes, arm, bicep
   finding_class  what kind of problem, and so which remediation path --
                  misconfiguration, secret, vulnerability
 
@@ -121,14 +122,36 @@ SCAN_TIMEOUT_SECONDS = 240
 # 2026-09-12 this was .tf alone, which is exactly where a hardcoded password
 # is *not* -- it is in the .tfvars that was never uploaded. scripts/scan.py
 # and corpus/eval/run_eval.py upload the same set; keep the three aligned.
+# .bicep joined on 2026-09-22, with ARM. Bicep is checkov-only -- Trivy has
+# no Bicep scanner -- so its self-check compares one source rather than two,
+# which is the mirror of OpenTofu being Trivy-only and is said on the badge
+# rather than left to be discovered (dashboard/src/review/coverage.ts).
 SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".tofu.json",
-                     ".yaml", ".yml")
+                     ".yaml", ".yml", ".bicep")
+
+# ARM templates are .json, and that is the .yaml ambiguity again but worse: a
+# .json is a deployment template, a lockfile, a tsconfig, a CI config or none
+# of them, and a repository holds far more of the others. Admitting the suffix
+# would download every one and hand it to checkov's secrets runner, which is
+# given --enable-secret-scan-all-files.
+#
+# So ARM is admitted by content: a top-level $schema naming a
+# deploymentTemplate, which every ARM template declares about itself. A
+# filename convention was the alternative and is measurably worse -- on
+# Azure/azure-quickstart-templates (2026-09-22) the tree holds 519 .json files
+# of which 175 are templates, and 159 of the remainder are
+# azuredeploy.parameters.json: files a name-based rule admits and this one does
+# not. Nothing outside the 175 sniffed as ARM.
+#
+# Must match the copies in scripts/scan.py, corpus/eval/run_eval.py and
+# corpus/external/run_external.py; corpus/test_corpus.py asserts all four agree.
+ARM_SCHEMA_RE = re.compile(r'"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json')
 
 # checkov frameworks. `secrets` is detect-secrets over every file in the
 # snapshot: AWS key patterns, `password = "..."` assignments, high-entropy
 # strings. It was off, so spec §2's "hardcoded secrets" goal measured 75% on
 # the eval corpus with the miss being a literal RDS master password.
-CHECKOV_FRAMEWORKS = "terraform,kubernetes,secrets"
+CHECKOV_FRAMEWORKS = "terraform,kubernetes,arm,bicep,secrets"
 
 # Trivy scans every config type it knows unless told otherwise, so this is
 # the admission list and it is deliberately short. A language reaches
@@ -150,12 +173,20 @@ CHECKOV_FRAMEWORKS = "terraform,kubernetes,secrets"
 # self-check fail open on every chart. Measured on a chart in the same mixed
 # directory: with helm off, Trivy skips the template silently rather than
 # reporting a parse error.
-TRIVY_MISCONFIG_SCANNERS = "terraform,kubernetes"
+# azure-arm added 2026-09-22, gates first as always: the ARM and Bicep
+# structural guards and the ARM suppression marker landed in
+# remediation-agent on the same day, the CIS Azure corpus before them, and the
+# eval cases with this change. There is no `bicep` entry because Trivy has no
+# Bicep scanner -- checkov carries that language alone.
+TRIVY_MISCONFIG_SCANNERS = "terraform,kubernetes,azure-arm"
 # The secrets runner only opens files on checkov's SUPPORTED_FILE_EXTENSIONS
 # (.tf, .yml, .yaml, .json, .template, .bicep, .hcl) unless told to scan
 # everything. .tfvars is not on that list, which is the one file a hardcoded
 # password is most likely to be in. "All files" is bounded by
-# _download_snapshot, so this is exactly SNAPSHOT_SUFFIXES and nothing else.
+# _download_snapshot, so this is exactly the admitted set and nothing else --
+# which is why a .json that does not sniff as ARM is deleted from work_dir
+# rather than merely left off the returned list: this runner reads the
+# directory, not our list.
 CHECKOV_SECRETS_ALL_FILES = "--enable-secret-scan-all-files"
 
 # Trivy's Result.Class -> finding_class. Trivy already separates the two axes
@@ -188,7 +219,24 @@ SUFFIX_TARGET_TYPES = (
     (".tfvars.json", "terraform"),
     (".tfvars", "terraform"),
     (".tf", "terraform"),
+    (".bicep", "bicep"),
+    # Last, and only ever reached because every other .json above is claimed
+    # first. A bare .json is in the snapshot only because it sniffed as an ARM
+    # deployment template, so by construction of the download filter this is
+    # true rather than a guess. It earns its place on the secrets path:
+    # checkov reports check_type "secrets" for a literal in an ARM template,
+    # which names no target, and without this the finding would be
+    # target_type "unknown" -- which remediation-agent's structural guard
+    # refuses outright.
+    (".json", "arm"),
 )
+
+# Where the two tools name one target differently. Trivy's scanner name for
+# ARM is "azure-arm"; checkov's check_type is "arm". A finding must carry one
+# name and not two: remediation-agent dispatches its structural guard on this
+# field and the dashboard groups drafted fixes by it, so two spellings would
+# be two groups and one unguarded language.
+REPORTED_TARGET_TYPES = {"azure-arm": "arm"}
 
 
 def _target_type_for(file_path, reported):
@@ -197,7 +245,8 @@ def _target_type_for(file_path, reported):
     for suffix, target in SUFFIX_TARGET_TYPES:
         if file_path.endswith(suffix):
             return target
-    return reported or "unknown"
+    reported = reported or ""
+    return REPORTED_TARGET_TYPES.get(reported, reported) or "unknown"
 
 
 s3 = boto3.client("s3")
@@ -261,9 +310,9 @@ def handler(event, context):
     os.makedirs(work_dir, exist_ok=True)
 
     try:
-        downloaded = _download_snapshot(ARTIFACTS_BUCKET, s3_prefix, work_dir)
+        downloaded, unreadable_arm = _download_snapshot(ARTIFACTS_BUCKET, s3_prefix, work_dir)
         if not downloaded:
-            raise ValueError(f"no Terraform files found under s3://{ARTIFACTS_BUCKET}/{s3_prefix}")
+            raise ValueError(f"no IaC files found under s3://{ARTIFACTS_BUCKET}/{s3_prefix}")
 
         trivy_results, trivy_parse_errors = _run_trivy(work_dir)
         checkov_report = _run_checkov(work_dir)
@@ -276,6 +325,10 @@ def handler(event, context):
             # The languages neither tool reports on. Not redundant with the
             # two above: see _unparseable_admitted_files.
             | set(_unparseable_admitted_files(downloaded, work_dir))
+            # An admitted .json that claims the ARM schema and will not parse.
+            # This one is ours, produced by json.loads, and does not depend on
+            # either tool choosing to report -- which for ARM neither does.
+            | set(unreadable_arm)
         )
         if scan_errors:
             # Reported, not raised: the other files in the snapshot scanned
@@ -343,20 +396,73 @@ def _emit_metrics(metrics, dimensions, **context):
     }))
 
 
+def _arm_verdict(text):
+    """"arm" | "not-arm" | "unreadable", for a .json in the snapshot.
+
+    Three values rather than two, because the third is the dangerous one. A
+    .json that will not parse might be a truncated lockfile, or it might be
+    the ARM template a fix just broke -- and dropping the second silently is
+    the fail-open multi-iac-spec §4 names: no findings is exactly what the
+    self-check reads as "the fix worked". So one that still carries the ARM
+    schema text is reported as a scan error rather than discarded, and one
+    that does not was never our file.
+
+    The regex runs first so json.loads is never called on a 4MB lockfile, and
+    the parsed check runs second so a "deploymentTemplate.json" string sitting
+    in some other file's data cannot admit it.
+    """
+    if not ARM_SCHEMA_RE.search(text):
+        return "not-arm"
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return "unreadable"
+    if not isinstance(doc, dict):
+        return "not-arm"
+    schema = doc.get("$schema")
+    return "arm" if isinstance(schema, str) and "deploymentTemplate.json" in schema else "not-arm"
+
+
 def _download_snapshot(bucket, prefix, dest_dir):
+    """Returns (downloaded, unreadable_arm).
+
+    ARM is the first language whose admission cannot be decided from the key.
+    The listing carries no content, so the only place to sniff is after the
+    GET: a .json that is not a template costs one download and is then
+    *removed from dest_dir*, not merely left off the returned list, because
+    checkov's secrets runner reads the directory rather than our list. Our own
+    uploaders apply the same predicate locally and for free, so in practice
+    little extra comes down; this is the backstop for a snapshot written by
+    anything else.
+    """
     paginator = s3.get_paginator("list_objects_v2")
-    downloaded = []
+    downloaded, unreadable_arm = [], []
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]
-            if not key.endswith(SNAPSHOT_SUFFIXES):
+            admitted = key.endswith(SNAPSHOT_SUFFIXES)
+            arm_candidate = not admitted and key.endswith(".json")
+            if not admitted and not arm_candidate:
                 continue
             rel_path = key[len(prefix):]
             local_path = os.path.join(dest_dir, rel_path)
             os.makedirs(os.path.dirname(local_path) or dest_dir, exist_ok=True)
             s3.download_file(bucket, key, local_path)
-            downloaded.append(local_path)
-    return downloaded
+            if not arm_candidate:
+                downloaded.append(local_path)
+                continue
+            try:
+                with open(local_path, encoding="utf-8") as fh:
+                    verdict = _arm_verdict(fh.read())
+            except (OSError, UnicodeDecodeError):
+                verdict = "not-arm"
+            if verdict == "arm":
+                downloaded.append(local_path)
+                continue
+            os.remove(local_path)
+            if verdict == "unreadable":
+                unreadable_arm.append(rel_path.replace(os.sep, "/"))
+    return downloaded, unreadable_arm
 
 
 def _run_trivy(work_dir):
@@ -527,10 +633,11 @@ def _unparseable_admitted_files(downloaded, work_dir):
     fail-open multi-iac-spec §4 exists to prevent, and neither tool closes
     it.
 
-    So the scanner parses what it admitted, itself. Only YAML today: ARM is
-    covered when it is admitted (its $schema sniff has to parse the file
-    anyway), Bicep and Terraform are reported by the tools, and a Go template
-    is skipped because it is not a file this scanner claims to handle.
+    So the scanner parses what it admitted, itself. YAML here; ARM gets the
+    same guarantee from _arm_verdict, which has to parse the file to classify
+    it at all. Bicep and Terraform are reported by the tools. A Go template is
+    skipped because it is not a file this scanner failed to read -- it is one
+    this scanner does not handle.
     """
     yaml_paths = [p for p in downloaded if p.endswith((".yaml", ".yml"))]
     if not yaml_paths:

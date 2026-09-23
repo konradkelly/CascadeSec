@@ -59,7 +59,16 @@ AGENT_NAME = "context-agent"
 # the motivating assumptions needed (cert-manager issuers, ingress). Anything
 # else under the prefix is ignored, whatever scripts/scan.py uploaded.
 CONTEXT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json",
-                    ".tofu", ".tofu.json", ".yaml", ".yml")
+                    ".tofu", ".tofu.json", ".yaml", ".yml", ".bicep")
+
+# ARM templates are .json, which says nothing on its own, so they are admitted
+# by content like everywhere else: a top-level $schema naming a
+# deploymentTemplate. Sniffed after the download because a listing carries no
+# content, and the file is removed again if it is not a template -- a lockfile
+# offered to the model as repository context is noise at best, and this agent
+# quotes what it reads back as a citation. Must match iac-scanner's
+# ARM_SCHEMA_RE; corpus/test_corpus.py asserts every copy agrees.
+ARM_SCHEMA_RE = re.compile(r'"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json')
 
 # The caps. A question like "what depends on this" can match half a
 # repository, and a truncated search that answers confidently is the
@@ -421,6 +430,15 @@ def _unknown(question, explanation):
     return {"question": question, "answer": "unknown", "explanation": explanation, "citations": []}
 
 
+def _is_arm_template(path):
+    """Whether a downloaded .json is an ARM deployment template."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return bool(ARM_SCHEMA_RE.search(fh.read()))
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def _download_snapshot(bucket, prefix, dest_dir):
     """Every file under the prefix with a CONTEXT_SUFFIXES suffix, to
     dest_dir, returned as paths relative to the prefix."""
@@ -429,12 +447,17 @@ def _download_snapshot(bucket, prefix, dest_dir):
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]
-            if not key.endswith(CONTEXT_SUFFIXES):
+            admitted = key.endswith(CONTEXT_SUFFIXES)
+            arm_candidate = not admitted and key.endswith(".json")
+            if not admitted and not arm_candidate:
                 continue
             rel = key[len(prefix):]
             local = os.path.join(dest_dir, rel)
             os.makedirs(os.path.dirname(local) or dest_dir, exist_ok=True)
             s3.download_file(bucket, key, local)
+            if arm_candidate and not _is_arm_template(local):
+                os.remove(local)
+                continue
             files.append(rel)
             if len(files) >= MAX_SNAPSHOT_FILES:
                 logger.warning("snapshot capped at %d files", MAX_SNAPSHOT_FILES)

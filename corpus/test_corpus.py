@@ -176,6 +176,53 @@ def test_the_handlers_framework_map_matches_the_files_on_disk():
     assert declared == on_disk
 
 
+def test_every_copy_of_the_snapshot_predicate_says_the_same_thing():
+    """What the scanner opens is declared in more than one file.
+
+    SNAPSHOT_SUFFIXES and ARM_SCHEMA_RE live in iac-scanner/handler.py,
+    scripts/scan.py, eval/run_eval.py and external/run_external.py, and the
+    ARM predicate additionally in context-agent/handler.py, because there is
+    no shared package to put them in and the scanner is a container image
+    built from its own directory. Each says "keep the copies aligned" in a
+    comment; this is what makes that true rather than aspirational.
+
+    A drifted ARM predicate is the worse of the two failures, and it is
+    invisible from either end: the uploader stops sending a template the
+    scanner would have scanned, so the file is simply absent from the
+    findings -- no error, no scan_error, nothing to notice.
+
+    Parsed out of the sources rather than imported, since importing the
+    handlers would pull boto3 and anthropic into a data check.
+    """
+    suffix_copies, schema_copies = {}, {}
+    for rel in ("lambda/iac-scanner/handler.py",
+                "scripts/scan.py",
+                "corpus/eval/run_eval.py",
+                "corpus/external/run_external.py",
+                "lambda/context-agent/handler.py"):
+        source = (CORPUS.parent / rel).read_text(encoding="utf-8")
+        schema = re.search(r"^ARM_SCHEMA_RE = re\.compile\((r'[^']*')\)$", source, re.M)
+        assert schema, f"{rel}: no ARM_SCHEMA_RE"
+        schema_copies[rel] = schema.group(1)
+        # context-agent reads more than the scanner opens -- its list is
+        # CONTEXT_SUFFIXES and is allowed to differ -- but "is this an ARM
+        # template" is the same question everywhere and must not.
+        suffixes = re.search(r"^SNAPSHOT_SUFFIXES = (\(.*?\))$", source, re.S | re.M)
+        if suffixes:
+            suffix_copies[rel] = ast.literal_eval(suffixes.group(1))
+
+    assert len(suffix_copies) == 4, sorted(suffix_copies)
+
+    assert len(set(suffix_copies.values())) == 1, (
+        "SNAPSHOT_SUFFIXES has drifted:\n  "
+        + "\n  ".join(f"{rel}: {value}" for rel, value in suffix_copies.items())
+    )
+    assert len(set(schema_copies.values())) == 1, (
+        "ARM_SCHEMA_RE has drifted:\n  "
+        + "\n  ".join(f"{rel}: {value}" for rel, value in schema_copies.items())
+    )
+
+
 # ---------- the eval labels ----------
 
 @pytest.mark.parametrize("case", EVAL_CASES, ids=lambda p: p.name)
