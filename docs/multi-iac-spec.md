@@ -23,7 +23,8 @@ by how the tools see the input:
   code, which is a different trust model — see §7. This sorts CDK correctly
   by its *source* and misleadingly as a whole: `cdk synth` emits a
   CloudFormation template, which puts CDK's detection in the middle bucket
-  the day step 4 lands. §7.1 separates the two cases.
+  the day step 4 lands. §7.1 separates the two cases, and records that CDK
+  was left out of scope anyway.
 
 Sorting the work this way is the whole point of the document. The scanner is
 the cheap part everywhere; what costs is §5.
@@ -48,7 +49,7 @@ Measured, not inferred:
 | **ARM** | ✅ `azure-arm`, ids `AZU-nnnn` | ✅ `arm` | Measured 2026-09-22 on `azure-quickstart-templates` (175 templates): Trivy **264 findings, 30 rules**; checkov **640**. Four Trivy rules cannot pass on ARM at all and are dropped for that target -- see `docs/trivy-azure-arm-adapter-gap.md` |
 | **Bicep** | ❌ not a Trivy scanner; **KICS parses it natively** | ✅ `bicep` | 4 Azure findings (`CKV_AZURE_3/35/44/206`) on a storage account with `supportsHttpsTrafficOnly: false`. At scale (107 files): **366 findings**. The runner loads in the stripped image -- `pycep-parser` survives the numpy strip, verified 2026-09-22 |
 | **Pulumi** | ❌ | ❌ | no runner in either; see §7 |
-| **CDK** | ❌ | ~ `cdk` runner, but SAST over TypeScript/Python, not a resource graph | not a `target_type`, but **not Pulumi's case either** — `cdk synth` emits a CloudFormation template, so step 4 covers its detection. See §7.1 |
+| **CDK** | ❌ | ~ `cdk` runner, but SAST over TypeScript/Python, not a resource graph | **out of scope** (2026-09-23). `cdk synth` emits CloudFormation, which step 4 scans, but a fix to a generated template does not survive the next synth; `cdk.out` is skipped. See §7.1 |
 
 Two results worth pulling out.
 
@@ -676,7 +677,7 @@ By cost, and each step earns the next:
    section 5. v4.0 renumbers every storage control and drops SQL auditing
    entirely, so v3.0 is vendored deliberately rather than by default. See
    `corpus/README.md`.
-6. **Pulumi/CDK.** §7.
+6. **Pulumi/CDK.** §7. CDK is out of scope, decided 2026-09-23 (§7.1).
 
 ### 6.2 Trivy gives up ARM to KICS, 2026-09-23
 
@@ -800,7 +801,7 @@ sprint. **Recommendation: do not commit to Pulumi support. Spec the
 plan-artifact ingestion path, and prototype the adapter against one provider
 to find out whether the schema mapping holds.**
 
-### 7.1 CDK is not Pulumi, and CloudFormation is why
+### 7.1 CDK is not Pulumi, and CloudFormation is why — out of scope, 2026-09-23
 
 §2's table files CDK next to Pulumi — "out of scope with Pulumi" — and §1
 sorts both into "no parser exists, because there is no file to parse". That
@@ -860,6 +861,41 @@ recognise a `cdk.out/` template so a finding on one can be badged
 detection-only and held out of remediation rather than drafted against a file
 that regenerates. That is a small, honest feature sitting on top of work step
 4 does anyway — where Pulumi still needs an adapter nobody has written.
+
+**Decided 2026-09-23: CDK is out of scope, and excluded explicitly rather
+than by omission.** The recommendation above was sound and is not what was
+chosen. CascadeSec scans the files people write and proposes fixes to them;
+the detection half of CDK support is CloudFormation support, already built,
+and the half CDK would add is the remediation this project cannot honestly
+give it. A detection-only mode would be a second product shape for one
+input.
+
+A probe settled the facts the decision rests on. A small CDK app — a bucket
+on defaults, SSH open to `0.0.0.0/0`, a `*:*` policy — synthesized in a
+throwaway `node:22-slim` container with no AWS credentials, because the stack
+named no account. Its template carried no `AWSTemplateFormatVersion` and was
+admitted by `_is_cfn_document`'s fallback alone; `manifest.json`, `tree.json`
+and the assets manifest were all rejected; and all three scanners raised the
+injected defects (Trivy `AWS-0107`/`0132`, checkov `CKV_AWS_24` and
+`109`–`111`, KICS on all three). Every resource carried an `aws:cdk:path`
+naming its construct, behind a hashed logical id. So the path would have
+been cheap to build. It was declined on scope, not on cost.
+
+**Why leaving it out needed a change.** "Out of scope" did not happen by
+default. `scripts/scan.py` walks the filesystem, which ignores `.gitignore`,
+and did not skip `cdk.out` — so a repository synthesized locally had its
+templates uploaded, admitted as CloudFormation, and remediated as if someone
+had written them, plus whatever `.yaml` or `.json` sat in the `asset.*`
+folders of bundled Lambda code. `cdk.out` is now in `SKIP_DIRS` in both
+uploaders, and `corpus/test_corpus.py` asserts both copies agree and both
+carry it. A CDK user who wants detection can still synth and scan the
+template as CloudFormation by hand; CascadeSec will treat it as a hand-written
+template, which is the caveat that comes with doing so.
+
+Not done, and the first thing to revisit if templates start arriving by
+another route: remediation-agent could refuse any template whose resources
+carry `aws:cdk:path`, which would hold a generated file out of remediation
+however it got in. `SKIP_DIRS` covers `scan.py` only.
 
 ## 8. What this does not change
 

@@ -100,7 +100,11 @@ def is_snapshot_file(path):
     except (OSError, UnicodeDecodeError):
         return False
     return bool(ARM_SCHEMA_RE.search(text) or CFN_MARKER_RE.search(text))
-SKIP_DIRS = {".terraform", ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"}
+
+
+# Must match scripts/scan.py's; see the reasoning there, cdk.out included.
+SKIP_DIRS = {".terraform", ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
+             "cdk.out"}
 
 # The scanner's own timeout is 300s (terraform/lambda_iac_scanner.tf). boto3's
 # default read timeout is 60s, which would abandon a legitimately slow scan

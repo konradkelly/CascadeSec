@@ -294,3 +294,22 @@ def test_every_case_file_declares_the_target_type_it_should_scan_as():
                 continue
             assert path.name in declared, (
                 f"{case.name}/{path.name}: add it to CASE_FILE_TARGET_TYPES in run_eval.py")
+
+
+def test_both_uploaders_skip_the_same_directories_including_cdk_out():
+    """scan.py and run_external.py each walk a checkout and each say their
+    SKIP_DIRS must match the other's; this makes that true. cdk.out is
+    asserted by name because leaving it out is a scope decision rather than
+    noise reduction (multi-iac-spec §7.1): CDK's synthesized templates are
+    CloudFormation the scanner admits by content, so dropping it from either
+    list would have generated templates scanned and remediated as if someone
+    wrote them."""
+    copies = {}
+    for rel in ("scripts/scan.py", "corpus/external/run_external.py"):
+        source = (CORPUS.parent / rel).read_text(encoding="utf-8")
+        found = re.search(r"^SKIP_DIRS = (\{.*?\})$", source, re.S | re.M)
+        assert found, f"{rel}: no SKIP_DIRS"
+        copies[rel] = ast.literal_eval(found.group(1))
+
+    assert len({frozenset(v) for v in copies.values()}) == 1, copies
+    assert all("cdk.out" in v for v in copies.values())
