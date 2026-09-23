@@ -299,7 +299,20 @@ SUFFIX_TARGET_TYPES = (
 # name and not two: remediation-agent dispatches its structural guard on this
 # field and the dashboard groups drafted fixes by it, so two spellings would
 # be two groups and one unguarded language.
-REPORTED_TARGET_TYPES = {"azure-arm": "arm"}
+REPORTED_TARGET_TYPES = {
+    "azure-arm": "arm",
+    # KICS names a platform per query, not a target, and until 2026-09-23 it
+    # did not need to be read: every file KICS scanned was either a .bicep
+    # (claimed by suffix) or a sniffed .json (claimed by classifications).
+    # CloudFormation in YAML is the first KICS input on a suffix nothing
+    # classifies, and with no reported type its findings came back "unknown"
+    # -- found on the first deployed run, where remediation-agent would have
+    # refused all ten on one template. AzureResourceManager covers Bicep too,
+    # but "arm" is only ever the fallback: .bicep is claimed by suffix and a
+    # .json by the sniff before this is consulted.
+    "CloudFormation": "cloudformation",
+    "AzureResourceManager": "arm",
+}
 
 
 def _target_type_for(file_path, reported, classifications=None):
@@ -840,7 +853,7 @@ def _normalize_kics(report, work_dir, pr_id, classifications=None):
                 file_path=file_path,
                 line_range=[line, line],
                 severity=(query.get("severity") or "UNKNOWN").upper(),
-                target_type=_target_type_for(file_path, "", classifications),
+                target_type=_target_type_for(file_path, query.get("platform"), classifications),
                 finding_class=finding_class,
                 now=now,
                 # KICS names the resource and its type separately; the pair is

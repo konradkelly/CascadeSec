@@ -16,16 +16,27 @@ Needs `boto3`, AWS credentials for the dev account, and the `terraform` CLI on
 
 ## Result
 
-**98.7% — 155 of 157 expected findings, across 78 positive cases and 5 clean
-controls.** Run 2026-09-23 against the **deployed** scanner: checkov 3.3.16,
-Trivy 0.74.0 and KICS 2.1.20 plus the project's own check `IACP-0001`, as
-packaged in the `iac-scanner` image.
+**98.9% — 178 of 180 expected findings, across 84 positive cases and 6 clean
+controls.** Run 2026-09-23 against the **deployed** scanner (image
+`6d19e30`): checkov 3.3.16, Trivy 0.74.0 and KICS 2.1.20 plus the project's
+own check `IACP-0001`, as packaged in the `iac-scanner` image.
 
-By source: **Trivy 57/57, KICS 13/13, checkov 85/87.** All five clean
+By source: **Trivy 63/63, KICS 22/22, checkov 93/95.** All six clean
 controls raised nothing. Both misses are the long-standing labelled tool
 gaps below (`CKV_AWS_60` on a bare `"*"` principal, `CKV_SECRET_6` on a
 password containing `!`), so this is the ceiling for these tools on these
-cases.
+cases. The CloudFormation cases fold in here: all 23 of their labelled
+pairs fired on the deployed scanner, matching the local labelling exactly.
+The run before this one was 98.7% (155/157), the same day, before them.
+
+**What this number does not check is `target_type`, and that let a bug
+through.** Recall compares `(source, rule_id)` pairs, so a finding that
+fires under the wrong target type counts as a hit. A targeted scan after
+this run found KICS findings on a YAML CloudFormation template coming back
+`unknown` -- all ten on one file -- which remediation-agent refuses outright.
+Detection was right and the language was unremediable. Fixed in iac-scanner
+(KICS's per-query platform is now its reported type); the JSON syntax was
+already correct.
 
 This is now one number over the whole corpus rather than the AWS-and-OpenTofu
 subset. The previous headline was 97.3% (73/75) on 2026-09-16, before the
