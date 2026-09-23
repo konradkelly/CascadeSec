@@ -213,16 +213,34 @@ Found while building the eval cases, and the reason three of them are
 deliberately *not* mapped even though they fire constantly.
 
 `AZU-0056` (blob soft delete), `AZU-0057` (storage logging), `AZU-0058`
-(geo-redundant replication) and `AZU-0013` (Key Vault network ACLs) raise on
-an ARM template regardless of what the template says. A storage account with
-`deleteRetentionPolicy.enabled: true` still raises `AZU-0056`; one with
-`Standard_GRS` still raises `AZU-0058`, while a template using
-`Standard_LRS` -- the worst possible case for a geo-redundancy check --
-escapes it. A Key Vault declaring `networkAcls` still raises `AZU-0013`. The
-same intent written in Terraform clears all of them, so the checks work; it
-is Trivy's `azure-arm` adapter that does not map these properties onto the
-schema the checks read. This is of a piece with Trivy claiming only 92 of the
-175 templates it was given.
+(geo-redundant replication) and `AZU-0013` (Key Vault network ACLs) cannot be
+cleared by configuring the thing they name.
+
+Measured two ways on 2026-09-23. **Trivy's own `--include-non-failures` over
+all 175 templates: `AZU-0057` is 0 PASS / 25 FAIL, `AZU-0058` 0 PASS / 25
+FAIL, `AZU-0013` 0 PASS / 13 FAIL.** Not one real template satisfies any of
+them. `AZU-0056` does show 7 passes, but every one is a storage account that
+declares *nothing* about blobs -- the vacuous case -- and every template that
+actually configures `deleteRetentionPolicy` alongside a realistic
+`properties` block fails it, including with 365-day retention. So its pass is
+not reachable from a failing state by any benign edit, which is the same
+practical outcome.
+
+**Why**, from dumping the adapted state a Rego check actually receives: the
+ARM adapter populates the fields it reads out of `properties` --
+`minimumtlsversion` comes back `TLS1_2`, `enforcehttps` `true` -- and leaves
+the rest empty. On a fully hardened template `accountreplicationtype` is
+`""` despite `"sku": {"name": "Standard_GRS"}`, and `queueproperties.
+enablelogging` is `false` despite a `queueServices` child configuring it.
+The adapter does not read `sku` (a sibling of `properties`) or the child
+resources. The same intent in Terraform clears all of them, so the checks are
+correct and the adapter is not. This is of a piece with Trivy claiming only
+92 of the 175 templates it was given.
+
+*An earlier version of this section said a template using `Standard_LRS`
+"escapes" `AZU-0058`. That was read off the failure list, where a check that
+was never evaluated looks the same as one that passed. The pass/fail census
+above is the right instrument and shows no passes at all.*
 
 `AZU-0058` was never mapped (geo-redundancy is availability, not a CIS
 control). The other three were, and were **unmapped again on 2026-09-22**.

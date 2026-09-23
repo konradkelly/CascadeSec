@@ -201,12 +201,13 @@ expectation entirely, per the paragraph above.
 
 **`clean-arm-hardened` was a hardened storage account, and could not be
 one.** `AZU-0056` (blob soft delete), `AZU-0057` (logging) and `AZU-0058`
-(geo-redundancy) fire on an ARM storage account whatever it declares. The
-template that exposed it used `Standard_GRS` and still raised `AZU-0058`,
-while a real quickstart using `Standard_LRS` -- the worst case for a
-geo-redundancy check -- escaped it. The same intent in Terraform clears all
-three, so the checks are fine and Trivy's `azure-arm` adapter is not reading
-the properties. A clean control that cannot be clean is not a control, so it
+(geo-redundancy) cannot be cleared on an ARM storage account by configuring
+what they name. The template that exposed it declared `Standard_GRS` and
+still raised `AZU-0058`; Trivy's own pass/fail census over 175 real templates
+then showed `AZU-0058` and `AZU-0057` never pass on any of them. The adapted
+state a check receives has `accountreplicationtype` empty, because the
+adapter reads `properties` and not its sibling `sku`. The same intent in
+Terraform clears all three, so the checks are fine and the adapter is not. A clean control that cannot be clean is not a control, so it
 was rebuilt from a hardened NSG and VNet, which both tools read correctly.
 Both clean controls now return zero findings from both tools.
 
