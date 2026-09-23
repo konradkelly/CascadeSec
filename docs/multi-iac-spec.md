@@ -42,7 +42,7 @@ Measured, not inferred:
 | **Kubernetes** | ✅ `KSV-*` ids | ✅ `CKV_K8S_*` | PugetScope's `k8s/`: **239 findings, 19 distinct rules, 14 files** |
 | **Helm** | ✅ renders charts natively | ✅ | not yet measured |
 | **CloudFormation** | ✅ 8 rules on a bare bucket | ✅ 6 failed checks | same template, both tools |
-| **ARM** | ✅ `azure-arm`, ids `AZU-nnnn` | ✅ `arm` | Measured 2026-09-22 on `azure-quickstart-templates` (175 templates): Trivy **264 findings, 30 rules**; checkov **640**. Trivy claimed only 92 of the 175 and said nothing about the rest |
+| **ARM** | ✅ `azure-arm`, ids `AZU-nnnn` | ✅ `arm` | Measured 2026-09-22 on `azure-quickstart-templates` (175 templates): Trivy **264 findings, 30 rules**; checkov **640**. Four Trivy rules cannot pass on ARM at all and are dropped for that target -- see `docs/trivy-azure-arm-adapter-gap.md` |
 | **Bicep** | ❌ not a Trivy scanner | ✅ `bicep` | 4 Azure findings (`CKV_AZURE_3/35/44/206`) on a storage account with `supportsHttpsTrafficOnly: false`. At scale (107 files): **366 findings**. The runner loads in the stripped image -- `pycep-parser` survives the numpy strip, verified 2026-09-22 |
 | **Pulumi** | ❌ | ❌ | no runner in either; see §7 |
 | **CDK** | ❌ | ~ `cdk` runner, but SAST over TypeScript/Python, not a resource graph | out of scope with Pulumi |
@@ -497,9 +497,8 @@ By cost, and each step earns the next:
    are templates, and 159 of the remainder are `azuredeploy.parameters.json`
    -- files a filename convention admits and this does not.
 
-   *Trivy's `azure-arm` adapter is weaker than its scanner list suggests.* It
-   claimed 92 of 175 valid templates and said nothing about the other 83, and
-   four of its rules -- `AZU-0056`, `AZU-0057`, `AZU-0058`, `AZU-0013` --
+   *Trivy's `azure-arm` adapter is weaker than its scanner list suggests.*
+   Four of its rules -- `AZU-0056`, `AZU-0057`, `AZU-0058`, `AZU-0013` --
    cannot be cleared by configuring what they name. Trivy's own pass/fail
    census over the 175 templates gives `AZU-0057` 0 PASS / 25 FAIL,
    `AZU-0058` 0 PASS / 25 FAIL and `AZU-0013` 0 PASS / 13 FAIL. Dumping the

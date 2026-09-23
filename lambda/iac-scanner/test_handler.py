@@ -418,6 +418,55 @@ def test_helm_is_not_admitted_even_though_trivy_supports_it(mock_run):
     assert "azure-arm" in scanners
 
 
+def test_a_rule_the_arm_adapter_cannot_satisfy_is_not_reported():
+    """The one place this scanner drops a finding a deterministic check
+    raised, and the reasoning is in ARM_UNSATISFIABLE_TRIVY_RULES.
+
+    Measured 2026-09-23 on Trivy 0.74.0, which is the current release:
+    AZU-0057 and AZU-0058 pass on none of 175 real ARM templates, because the
+    adapter leaves accountreplicationtype empty and enablelogging false
+    whatever the template declares. A check that cannot pass separates
+    nothing, and these were a third of the Trivy findings on that corpus."""
+    results = [
+        {"ID": "AZU-0058", "Target": "azuredeploy.json", "Type": "azure-arm",
+         "Class": "config", "Severity": "LOW", "CauseMetadata": {"StartLine": 1, "EndLine": 2}},
+        {"ID": "AZU-0011", "Target": "azuredeploy.json", "Type": "azure-arm",
+         "Class": "config", "Severity": "CRITICAL", "CauseMetadata": {"StartLine": 1, "EndLine": 2}},
+    ]
+
+    reported = handler._normalize_trivy(results, "pr-1")
+
+    assert [f["rule_id"] for f in reported] == ["AZU-0011"]
+
+
+def test_the_same_rules_are_still_reported_on_terraform():
+    """Scoped to ARM, because the adapter is what is broken and not the
+    checks: on a .tf file they read the azurerm schema correctly and a fix
+    clears them. Dropping them everywhere would lose real findings."""
+    results = [
+        {"ID": rule, "Target": "main.tf", "Type": "terraform", "Class": "config",
+         "Severity": "LOW", "CauseMetadata": {"StartLine": 1, "EndLine": 2}}
+        for rule in sorted(handler.ARM_UNSATISFIABLE_TRIVY_RULES)
+    ]
+
+    reported = handler._normalize_trivy(results, "pr-1")
+
+    assert sorted(f["rule_id"] for f in reported) == sorted(handler.ARM_UNSATISFIABLE_TRIVY_RULES)
+    assert {f["target_type"] for f in reported} == {"terraform"}
+
+
+def test_the_dropped_rules_are_not_mapped_to_a_control():
+    """The two decisions have to agree. A rule that is dropped here but still
+    carries a candidate in the corpus would be a mapping nothing can ever
+    reach -- dead weight that reads as coverage."""
+    mappings = json.loads(
+        (Path(__file__).resolve().parents[2] / "corpus" / "rule_mappings.json").read_text(encoding="utf-8")
+    )["mappings"]
+    still_mapped = [r for r in handler.ARM_UNSATISFIABLE_TRIVY_RULES if f"trivy:{r}" in mappings]
+
+    assert not still_mapped, f"dropped on ARM but still mapped: {still_mapped}"
+
+
 def pathlib_name(path):
     return path.replace("\\", "/").rsplit("/", 1)[-1]
 
