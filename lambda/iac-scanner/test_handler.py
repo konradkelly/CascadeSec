@@ -791,6 +791,71 @@ def test_a_valid_manifest_is_not_a_scan_error(tmp_path):
     assert handler._unparseable_admitted_files(downloaded, str(tmp_path)) == []
 
 
+# A CloudFormation template in the style people actually write: short-form
+# intrinsics throughout, in all three node shapes a constructor has to take.
+CFN_TEMPLATE_WITH_INTRINSICS = """AWSTemplateFormatVersion: '2010-09-09'
+
+Conditions:
+  HasTags: !Equals [!Ref Env, prod]
+
+Resources:
+  LogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-logs'
+      LoggingConfiguration: !If [HasTags, {DestinationBucketName: !Ref Other}, !Ref 'AWS::NoValue']
+
+Outputs:
+  Arn:
+    Value: !GetAtt LogsBucket.Arn
+  Joined:
+    Value: !Join [',', [!Ref LogsBucket, !GetAtt LogsBucket.Arn]]
+"""
+
+
+def test_a_cloudformation_template_is_not_reported_as_unparseable(tmp_path):
+    """CloudFormation's short-form intrinsics are YAML *tags*, and a stock
+    PyYAML has no constructor for them -- `!Sub` raises ConstructorError,
+    which is a YAMLError and so was caught here as an unreadable file.
+
+    A .yaml is downloaded whatever it turns out to be, so this misreported
+    every idiomatic template from the day .yaml was admitted, well before
+    CloudFormation was a target. The direction is the safe one -- a scan
+    error holds a fix rather than passing it -- but it is still a readable
+    file reported as unreadable, and it would block remediation across the
+    whole language once CloudFormation is admitted."""
+    (tmp_path / "template.yaml").write_text(CFN_TEMPLATE_WITH_INTRINSICS,
+                                            encoding="utf-8")
+    downloaded = [str(tmp_path / "template.yaml")]
+
+    assert handler._unparseable_admitted_files(downloaded, str(tmp_path)) == []
+
+
+def test_an_unknown_tag_is_still_a_scan_error(tmp_path):
+    """The tags are enumerated, not matched as a `!` prefix. A prefix rule is
+    the shorter version of this and would accept any tag at all -- so a
+    genuinely broken file would parse and this check would under-report,
+    which is the failure it exists to prevent."""
+    (tmp_path / "manifest.yaml").write_text("spec: !Whatever value\n",
+                                            encoding="utf-8")
+    downloaded = [str(tmp_path / "manifest.yaml")]
+
+    assert handler._unparseable_admitted_files(downloaded, str(tmp_path)) == \
+        ["manifest.yaml"]
+
+
+def test_the_cfn_tags_do_not_make_a_broken_manifest_parse(tmp_path):
+    """The Kubernetes guarantee is unchanged by the CloudFormation one. The
+    tab-indented Service from argocd-example-apps is the case found in the
+    wild, and it has to keep failing."""
+    (tmp_path / "svc.yaml").write_text("metadata:\n\tname: guestbook\n",
+                                       encoding="utf-8")
+    downloaded = [str(tmp_path / "svc.yaml")]
+
+    assert handler._unparseable_admitted_files(downloaded, str(tmp_path)) == \
+        ["svc.yaml"]
+
+
 def test_a_helm_template_is_not_reported_as_unparseable(tmp_path):
     """A chart template is not valid YAML until it is rendered, and helm is
     deliberately not admitted -- so this is a file the scanner does not

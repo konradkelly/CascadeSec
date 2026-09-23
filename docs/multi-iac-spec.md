@@ -20,7 +20,10 @@ by how the tools see the input:
   The scanner needs a flag; the *project* needs a corpus and an eval.
 - **No parser exists, because there is no file to parse.** Pulumi and CDK
   are programs. Getting a resource graph out of them means running the user's
-  code, which is a different trust model — see §7.
+  code, which is a different trust model — see §7. This sorts CDK correctly
+  by its *source* and misleadingly as a whole: `cdk synth` emits a
+  CloudFormation template, which puts CDK's detection in the middle bucket
+  the day step 4 lands. §7.1 separates the two cases.
 
 Sorting the work this way is the whole point of the document. The scanner is
 the cheap part everywhere; what costs is §5.
@@ -45,7 +48,7 @@ Measured, not inferred:
 | **ARM** | ✅ `azure-arm`, ids `AZU-nnnn` | ✅ `arm` | Measured 2026-09-22 on `azure-quickstart-templates` (175 templates): Trivy **264 findings, 30 rules**; checkov **640**. Four Trivy rules cannot pass on ARM at all and are dropped for that target -- see `docs/trivy-azure-arm-adapter-gap.md` |
 | **Bicep** | ❌ not a Trivy scanner; **KICS parses it natively** | ✅ `bicep` | 4 Azure findings (`CKV_AZURE_3/35/44/206`) on a storage account with `supportsHttpsTrafficOnly: false`. At scale (107 files): **366 findings**. The runner loads in the stripped image -- `pycep-parser` survives the numpy strip, verified 2026-09-22 |
 | **Pulumi** | ❌ | ❌ | no runner in either; see §7 |
-| **CDK** | ❌ | ~ `cdk` runner, but SAST over TypeScript/Python, not a resource graph | out of scope with Pulumi |
+| **CDK** | ❌ | ~ `cdk` runner, but SAST over TypeScript/Python, not a resource graph | not a `target_type`, but **not Pulumi's case either** — `cdk synth` emits a CloudFormation template, so step 4 covers its detection. See §7.1 |
 
 Two results worth pulling out.
 
@@ -287,6 +290,80 @@ scanner-verified badge for free. It is the exact failure this was written for,
 and it turned up in a real repository rather than a fixture on the first run
 that could have found it.
 
+**Built for CloudFormation 2026-09-23**, ahead of the language as always —
+and this time the gates are all that was built. The scanner admission is
+*not* in this change, because it needs measurement against the pinned tools
+and the scanner image could not be built on the day (see §6 step 4). What the
+build settled:
+
+- *CloudFormation is the first language whose guard reads two syntaxes for
+  one `target_type`.* A template is YAML or JSON and all three scanners call
+  both `cloudformation`, so unlike every reader before it this one has to
+  decide which it is holding. It sniffs the content — a template whose first
+  non-space character is `{` is the JSON form. The suffix could not settle it
+  anyway, and a structural reader's signature carries no `file_path`.
+- *The YAML form cannot use a parser, and for a sharper reason than
+  Kubernetes had.* PyYAML is absent from this runtime and its layer, which is
+  the reason already on the record — but a CloudFormation template using the
+  short-form intrinsics (`!Ref`, `!GetAtt`, `!Sub`) is not loadable by a
+  stock PyYAML *at all*: those are unregistered tags and `safe_load` raises
+  on them. They are idiomatic in hand-written templates, so a parser-based
+  reader would raise on the ordinary case and the gate would be an error
+  rather than an answer. The JSON form is stdlib `json`, as ARM's is, and
+  raises on unparseable input for ARM's reason exactly. The one shape a line
+  reader cannot see into — `Resources:` written in YAML flow style — raises
+  too, and for the reason that decides all of these: "no resources found" is
+  indistinguishable from "this fix deletes nothing", so a template the reader
+  never read must not come back as a clean verdict.
+- *Depth is what separates a resource from a property here.* Only the
+  top-level `Resources:` mapping counts, and a resource's `Type:` is read at
+  the logical id's own first child indent. Matching `Type:` at any depth
+  would count an ELBv2 listener's `DefaultActions: - Type: forward`, a
+  CodePipeline stage's and an SSM association's as resources — and an
+  inflated before-count makes an unrelated fix look like a deletion.
+  `Parameters:` is the same trap one section over: `VpcId: {Type:
+  AWS::EC2::VPC::Id}` has a resource's exact shape and is not one.
+- *SAM needs nothing added, and must not be expanded.* A `Transform:
+  AWS::Serverless-2016-10-31` template declares `AWS::Serverless::Function`
+  under the same `Resources:` key, so the reader already handles it. What it
+  does not do is expand the transform — one SAM function becomes a function,
+  a role and often an API in the deployed stack, and counting what
+  CloudFormation *would create* rather than what the file *says* would make
+  every SAM fix look like a deletion. Bicep's `copy`-loop decision again.
+- *And the build found a live bug in the third guard, in the opposite
+  direction to the one found on 2026-09-23.* CloudFormation's short-form
+  intrinsics are YAML **tags**, not YAML syntax, and a stock PyYAML has no
+  constructor for them: `!Sub` raises `ConstructorError`, which is a
+  `YAMLError` and so was caught by `_unparseable_admitted_files` as an
+  unreadable file. A `.yaml` is downloaded whatever it turns out to be, so
+  this has misreported every idiomatic CloudFormation template since `.yaml`
+  was admitted on 2026-09-20 — before CloudFormation was a target at all.
+  The direction is the safe one, unlike the tab-indented Service: a scan
+  error *holds* a fix rather than passing it. But it is a file the scanner
+  can read being reported as one it cannot, and it would have blocked
+  remediation across the whole language the day step 4 admitted it. The
+  loader now knows the intrinsics, enumerated rather than matched as a `!`
+  prefix — a prefix rule accepts any tag at all, so a genuinely broken file
+  carrying `!Whatever` would parse and the check would under-report, which
+  is the failure it exists to prevent. Fixed and tested here rather than
+  with the admission, because it is wrong today.
+- *Two suppression systems, and the YAML form of the first defeats a set
+  that already covers HCL, YAML annotations and JSON.* checkov's
+  CloudFormation skip is a `Metadata:` block whose `checkov:` key sits alone
+  on its line, so `checkov:skip` matches nothing — the marker is `checkov:`
+  with nothing after it — and ARM's quoted `"checkov"` does not reach an
+  unquoted YAML key either. `checkov:` subsumes `checkov:skip`, which leaves
+  the tuple as a result. `cfn_nag` is the second system and is not a scanner
+  this project runs; it is in the set for the reason the KICS entry is, since
+  an agent writing one has silenced something for a reader downstream. Both
+  its keys are listed because a template that already carries the block gets
+  only the inner line added. **This is the one claim in this section that is
+  not measured** — it is checkov's documented syntax and the ARM entry's
+  measured shape one level of quoting apart, but the pinned 3.3.16 has not
+  been run on it. Confirm the check moves from `failed_checks` to
+  `skipped_checks`, as ARM's was confirmed on 2026-09-22, before admitting
+  the language.
+
 **And where only one tool covers the language** (OpenTofu; Bicep until
 2026-09-23, see §6.2), the self-check has
 one source rather than two. That is weaker but not broken — the comparison is
@@ -494,7 +571,50 @@ By cost, and each step earns the next:
    and a repository full of unrelated YAML costs a download.
 4. **CloudFormation.** AWS, so much of the corpus carries over — the same CIS
    AWS controls, reached through different rule ids. Cheapest of the
-   remaining.
+   remaining. 🔸 **Gates built 2026-09-23** (§4); the language is **not
+   admitted to the scanner yet**, and the ordering rule is the reason this is
+   a partial step rather than a late one. What is left, and the two things
+   that turned out not to be cheap:
+
+   *Admission is the hard part, and it collides with two languages already
+   in.* A CloudFormation template is `.yaml`, `.yml`, `.json` or `.template`,
+   and three of those four are spoken for:
+
+   - `.yaml`/`.yml` are already admitted **for Kubernetes**, so the files are
+     downloaded and nothing new has to be uploaded. Classification is what
+     changes: `SUFFIX_TARGET_TYPES` does not claim `.yaml`, so the finding
+     takes the `target_type` the tool reports, and all three report
+     `cloudformation`. That part is free.
+   - `.json` is **not** free and is the blocking conflict. Today a `.json` is
+     admitted only if it sniffs as an ARM template, and `SUFFIX_TARGET_TYPES`
+     maps `.json` → `arm` unconditionally on the strength of that — the
+     comment there says the mapping is "true rather than a guess *by
+     construction of the download filter*". Admit CloudFormation JSON and the
+     construction no longer holds: a CloudFormation template would be
+     downloaded and then labelled `arm`, which is the wrong structural guard,
+     the wrong suppression dialect and the wrong group in the dashboard. The
+     `.json` entry has to become a content decision rather than a suffix one,
+     alongside a second sniff — `AWSTemplateFormatVersion`, or a `Resources`
+     mapping whose entries carry a `Type` — and the two sniffs have to be
+     mutually exclusive and tested as such.
+   - `.template` is checkov's own extension for this and is admitted by
+     nothing today.
+
+   *Whether `.yaml` stays cheap is a measurement, not a deduction.* The
+   Kubernetes admission was safe because both tools read a directory of mixed
+   YAML and reported only the manifest, silently skipping the rest (§6 step
+   3). That measurement says nothing about what happens once
+   `cloudformation` is switched on: the question is whether a Kubernetes
+   manifest and a CloudFormation stack in the same snapshot each get read by
+   exactly one parser, or whether the CloudFormation parser now has an
+   opinion about the manifest. Re-run the mixed-directory test with the
+   scanner enabled before trusting it.
+
+   Then the ordinary remainder: the corpus mappings (AWS controls are
+   already vendored — what is missing is the rule ids, which have to be
+   observed rather than guessed), eval cases in both syntaxes, and the
+   coverage badge. All three scanners cover CloudFormation, so it is
+   three-source and needs no single-source caveat.
 5. **Bicep/ARM.** ✅ **Built 2026-09-22**, gates first as always: the ARM
    and Bicep structural guards and the ARM suppression marker, the CIS Azure
    3.0 corpus, the volume measurement and the single-source badge, 14 eval
@@ -654,6 +774,67 @@ the interesting version of this problem and it is a research project, not a
 sprint. **Recommendation: do not commit to Pulumi support. Spec the
 plan-artifact ingestion path, and prototype the adapter against one provider
 to find out whether the schema mapping holds.**
+
+### 7.1 CDK is not Pulumi, and CloudFormation is why
+
+§2's table files CDK next to Pulumi — "out of scope with Pulumi" — and §1
+sorts both into "no parser exists, because there is no file to parse". That
+is right about the *source* and wrong about CDK as a whole, and step 4 is
+what exposes the difference. Worth stating plainly, because "is CDK an IaC
+language?" is a reasonable question with a two-part answer.
+
+**Is it IaC? Yes. Is it a language this scanner adds? No — and not for
+Pulumi's reason.** The taxonomy that matters here is §1's, which sorts by how
+the *tool* sees the input, not by what the ecosystem calls itself. By that
+sort CDK is a program: a TypeScript, Python, Java, Go or C# codebase whose
+resource graph does not exist until it runs. checkov's `cdk` runner does not
+change this — it is SAST over the source text, not a resource graph, so it
+cannot answer "is this bucket encrypted" the way a check on a template can.
+
+**But CDK has something Pulumi does not: a declarative artifact that is
+already a first-class target here.** `cdk synth` writes
+`cdk.out/<StackName>.template.json` — a CloudFormation template. Once step 4
+lands, that file is not a new language at all. It is the language the scanner
+just learned, and the JSON syntax of it specifically. Detection on a CDK
+project is a solved problem the day CloudFormation is admitted, with no new
+parser, no new rules and no new corpus.
+
+Synthesis is still executing the user's program, so §7's trust boundary
+applies unchanged — and the answer is the same one: **ingest the artifact the
+user already produces.** `cdk synth` is milder than `pulumi preview`, which
+is worth saying precisely rather than treating the two as equivalent: it
+needs no cloud credentials and reaches no provider state in the ordinary
+case, because it renders a template rather than diffing against reality. It
+is not free of that, though — a stack using context lookups (`Vpc.fromLookup`
+and friends) *does* call AWS during synth, and that is exactly the case a
+user cannot run credential-free either. Either way the execution stays in
+their CI, where it already happens and is already trusted. `cdk.out/` is
+commonly gitignored, so this is an upload the user opts into rather than a
+directory the scanner finds.
+
+**What does not come for free is the half this project exists for.** A
+synthesized template is a build artifact, and a fix written into it is
+overwritten by the next `cdk synth`. The source of truth is the TypeScript
+that produced it, and nothing in the pipeline maps a template resource back
+to the constructor call that emitted it — CDK's logical ids are
+path-derived and hashed, which is a thread to pull but not one the scanner
+has hold of today. So CDK would be the first target where **detection and
+remediation come apart**: the scanner could find and map a finding with full
+confidence, and the remediation agent could not draft against it without
+either editing a generated file or reasoning about source it never sees.
+
+That is not a reason to refuse the detection half; it is a reason not to let
+the UI imply the other half exists. The single-source badge (§4, §6.2) is the
+precedent — a language whose guarantee is weaker than Terraform's says so in
+the UI rather than leaving it to be discovered.
+
+**Recommendation, and it differs from Pulumi's.** Do not add CDK as a
+`target_type`. After step 4, support it as *CloudFormation from a synth
+artifact*: document the `cdk synth` + upload path, and have the scanner
+recognise a `cdk.out/` template so a finding on one can be badged
+detection-only and held out of remediation rather than drafted against a file
+that regenerates. That is a small, honest feature sitting on top of work step
+4 does anyway — where Pulumi still needs an adapter nobody has written.
 
 ## 8. What this does not change
 

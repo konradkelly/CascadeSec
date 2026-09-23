@@ -204,6 +204,43 @@ BICEP_RESOURCE_RE = re.compile(
 BICEP_MODULE_RE = re.compile(
     r"^[ \t]*module[ \t]+([A-Za-z_]\w*)[ \t]+'([^']+)'", re.MULTILINE)
 
+# CloudFormation, which is the first language whose guard has to read two
+# syntaxes for one target_type: a template is YAML or JSON, and both are
+# `cloudformation` to all three scanners. So the reader sniffs the content --
+# a template whose first non-space character is `{` is the JSON form -- and
+# there is no file_path in a structural reader's signature to decide it from
+# anyway.
+#
+# The JSON form is read by the stdlib, as ARM's is. The YAML form gets a
+# line-based reader for the reason the Kubernetes one has, plus a second that
+# is specific to CloudFormation: PyYAML is in neither this runtime nor its
+# layer, AND a template using the short-form intrinsics (`!Ref`, `!GetAtt`,
+# `!Sub`) is not loadable by a stock PyYAML at all -- those are unregistered
+# tags and safe_load raises on them. They are idiomatic in hand-written
+# templates, so a parser-based reader would raise on the ordinary case and
+# the gate would be an error rather than an answer.
+#
+# What it needs is each entry of the top-level `Resources:` mapping and that
+# entry's `Type:`. Both are structural: `Resources:` is at column 0, a logical
+# id sits at its first child indent, and the resource's own `Type:` sits at
+# the logical id's first child indent -- which is what keeps a nested `Type:`
+# out, and there are plenty (an ELBv2 listener's `DefaultActions: - Type:
+# forward`, an SSM association's, a CodePipeline stage's). Matching `Type:` at
+# any depth would count those as resources.
+CFN_RESOURCES_RE = re.compile(r"^Resources:[ \t]*\r?$", re.MULTILINE)
+# `Resources: {A: {Type: ...}}` -- YAML's flow style, which a line-based
+# reader cannot see into. Rare in a real template (it is the verbose section
+# by nature) but not invalid, and the failure mode is the one that matters:
+# the block form would not match, the reader would return no resources, and
+# "no resources" is indistinguishable from "this fix deletes nothing". So it
+# is detected and raised on rather than read -- the same call
+# _cfn_json_resources makes on a file that will not parse.
+CFN_RESOURCES_INLINE_RE = re.compile(r"^Resources:[ \t]*\S", re.MULTILINE)
+# A logical id is alphanumeric per CloudFormation's own rule, so this does not
+# have to tolerate the quoting a general YAML key would need.
+CFN_LOGICAL_ID_RE = re.compile(r"^[ \t]*([A-Za-z0-9]+):[ \t]*\r?$")
+CFN_TYPE_RE = re.compile(r"""^[ \t]*Type:[ \t]*['"]?([A-Za-z0-9:_-]+)""")
+
 
 def handler(event, context):
     pr_id = event["pr_id"]
@@ -955,8 +992,52 @@ def _call_remediation_agent(finding, original_content, answers=None, flagged="")
 #                          checkov:skip, which is what this set matches on.
 #                          checkov-only language -- Trivy has no Bicep
 #                          scanner -- so there is no trivy:ignore to cover.
-SUPPRESSION_MARKERS = ("tfsec:ignore", "trivy:ignore", "checkov:skip", "checkov.io/skip",
-                       '"checkov"', "kics-scan", "nosec")
+#   CloudFormation      -- two suppression systems, and the YAML form of the
+#                          first is what an HCL-, YAML- and JSON-shaped set
+#                          still misses. checkov reads a resource-level
+#                            Metadata:
+#                              checkov:
+#                                skip:
+#                                  - id: CKV_AWS_18
+#                          whose added lines are `checkov:` and `skip:` on
+#                          separate lines. A marker is a substring of ONE
+#                          added line, so `checkov:skip` matches neither --
+#                          the token is `checkov:` with nothing after it, and
+#                          ARM's quoted `"checkov"` does not reach it either
+#                          because YAML does not quote its keys. So
+#                          `checkov:` is the entry, and it subsumes
+#                          `checkov:skip`, which is why that one is no longer
+#                          in the tuple: every line matching it matches this.
+#                          The JSON syntax of the same template is ARM's case
+#                          exactly and `"checkov"` already covers it.
+#                          NOT YET MEASURED, unlike every entry above it:
+#                          this is checkov's documented CloudFormation skip
+#                          and the ARM entry's measured shape one level of
+#                          quoting apart, but the pinned 3.3.16 has not been
+#                          run on it -- a check moving from failed_checks to
+#                          skipped_checks is what would settle it, as it did
+#                          for ARM on 2026-09-22. Confirm before
+#                          CloudFormation is admitted to the scanner.
+#                          cfn_nag is the second system --
+#                            Metadata:
+#                              cfn_nag:
+#                                rules_to_suppress:
+#                                  - id: W41
+#                          -- and is not a scanner this project runs. It is
+#                          in the set anyway, for the reason the KICS entry
+#                          is: an agent that writes a cfn_nag suppression
+#                          into a template has silenced *something* for a
+#                          reader downstream, and holding that for review is
+#                          the right side to be wrong on. Both keys are
+#                          listed because a template that already has the
+#                          block gets only the inner line added.
+#                          Trivy and KICS read their usual comments in the
+#                          YAML form (covered above) and cannot be
+#                          suppressed in the JSON form at all, which is ARM's
+#                          finding again: JSON has no comment syntax.
+SUPPRESSION_MARKERS = ("tfsec:ignore", "trivy:ignore", "checkov:", "checkov.io/skip",
+                       '"checkov"', "cfn_nag", "rules_to_suppress", "kics-scan",
+                       "nosec")
 
 
 def _find_added_suppressions(diff_text):
@@ -1165,6 +1246,122 @@ def _bicep_resources(content):
     return found
 
 
+def _cfn_resources(content):
+    """(type, logicalId) per CloudFormation resource, from either syntax.
+
+    A template is YAML or JSON and both are target_type `cloudformation`, so
+    unlike every reader above this one has to decide which it is holding. It
+    sniffs: a template whose first non-space character is `{` is JSON. The
+    signature carries no file_path, and the suffix would not settle it anyway
+    -- a .json template and a .yaml template are the same target.
+
+    Only the top-level `Resources:` mapping counts. A CloudFormation template
+    has no nesting to recurse into the way ARM does: a nested stack is an
+    `AWS::CloudFormation::Stack` resource pointing at another file, so it
+    counts once, as itself, which is what this gate wants. `Outputs`,
+    `Parameters`, `Mappings` and `Conditions` are not resources and deleting
+    one is not the edit this guard is looking for.
+
+    SAM is read by the same rule, and deliberately: a `Transform:
+    AWS::Serverless-2016-10-31` template declares `AWS::Serverless::Function`
+    under the same `Resources:` key, so the reader needs nothing added for it.
+    What it does NOT do is expand the transform -- one `AWS::Serverless::
+    Function` becomes a function, a role and often an API in the deployed
+    stack, and counting what CloudFormation would create rather than what the
+    file says would make every SAM fix look like a deletion. The Bicep reader
+    takes the same side on a `copy` loop.
+    """
+    if content.lstrip().startswith("{"):
+        return _cfn_json_resources(content)
+    return _cfn_yaml_resources(content)
+
+
+def _cfn_json_resources(content):
+    """The JSON syntax, read by the stdlib as ARM's is -- and it raises for
+    the same reason. An empty list means "this fix deletes nothing", and
+    handing that verdict to a file nobody could read is the gate failing
+    open."""
+    try:
+        doc = json.loads(content)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ValueError(
+            f"CloudFormation template did not parse, so nothing can be "
+            f"proven about it: {exc}"
+        ) from exc
+    if not isinstance(doc, dict):
+        raise ValueError("CloudFormation template is not a JSON object")
+    resources = doc.get("Resources")
+    if not isinstance(resources, dict):
+        return []
+    found = []
+    for logical_id, body in resources.items():
+        rtype = body.get("Type") if isinstance(body, dict) else None
+        found.append((rtype if isinstance(rtype, str) else "", logical_id))
+    return found
+
+
+def _cfn_yaml_resources(content):
+    """The YAML syntax, read off the lines (see CFN_RESOURCES_RE).
+
+    A resource whose `Type:` cannot be read still counts, under an empty
+    type, exactly as the Kubernetes reader counts a document whose name it
+    cannot read: the alternative is that deleting a malformed resource is
+    free, which is this gate failing open on the one file most likely to
+    deserve a look.
+
+    Does not raise on unreadable YAML, where the JSON reader does. There is
+    nothing to raise on -- this never parses, it scans lines -- and the
+    Kubernetes precedent is the one that applies: iac-scanner parses what it
+    admitted and reports what it cannot read, so a broken template is already
+    a scan_error and the self-check returns before reaching here.
+    """
+    match = CFN_RESOURCES_RE.search(content)
+    if not match:
+        if CFN_RESOURCES_INLINE_RE.search(content):
+            raise ValueError(
+                "CloudFormation `Resources:` is written in YAML flow style, "
+                "which this reader cannot see into; nothing can be proven "
+                "about it"
+            )
+        return []
+    # The `Resources:` block: everything up to the next column-0 line, which
+    # is the next top-level section (`Outputs:`, `Parameters:`) or EOF.
+    block = []
+    for line in content[match.end():].splitlines()[1:]:
+        if line.strip() and not line.startswith((" ", "\t")):
+            break
+        block.append(line)
+
+    found, child_indent, current = [], None, None
+    for line in block:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" \t"))
+        if child_indent is None:
+            child_indent = indent
+        if indent == child_indent:
+            logical_id = CFN_LOGICAL_ID_RE.match(line)
+            # A line at this indent that is not a logical id ends the
+            # previous resource without starting one: the block is not the
+            # shape this reader understands, and guessing would be worse.
+            current = None
+            if logical_id:
+                current = [logical_id.group(1), "", None]
+                found.append(current)
+        elif current is not None and indent > child_indent:
+            # The resource's own keys sit at ITS first child indent. `Type:`
+            # anywhere deeper belongs to a property (an ELBv2 listener's
+            # DefaultActions, a CodePipeline stage) and is not this
+            # resource's type.
+            if current[2] is None:
+                current[2] = indent
+            if indent == current[2] and not current[1]:
+                rtype = CFN_TYPE_RE.match(line)
+                if rtype:
+                    current[1] = rtype.group(1)
+    return [(rtype, logical_id) for logical_id, rtype, _ in found]
+
+
 K8S_TARGET_TYPES = ("kubernetes", "helm")
 # target_type -> reader. Adding a language to the scanner's admission list
 # means adding it here, or _find_dropped_resources refuses it.
@@ -1174,16 +1371,21 @@ STRUCTURAL_READERS = {
     **{t: _k8s_resources for t in K8S_TARGET_TYPES},
     "arm": _arm_resources,
     "bicep": _bicep_resources,
+    "cloudformation": _cfn_resources,
 }
 # How an address is written back to a reviewer, per language. Terraform's own
 # form is type.name and Kubernetes' is Kind/name. ARM and Bicep both take the
 # slash: an ARM type already contains dots (Microsoft.Storage/storageAccounts),
 # so a dot join would read as part of the type, where a slash makes the
-# address look like the resource id the reviewer already knows.
+# address look like the resource id the reviewer already knows. CloudFormation
+# takes it for the same reason and more so -- AWS::S3::Bucket is already two
+# colons deep, and AWS::S3::Bucket/LogsBucket reads the way the console's
+# resource list does.
 TARGET_TYPE_ADDRESS_JOIN = {
     **{t: "/" for t in K8S_TARGET_TYPES},
     "arm": "/",
     "bicep": "/",
+    "cloudformation": "/",
 }
 
 

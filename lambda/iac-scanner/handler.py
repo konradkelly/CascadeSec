@@ -306,6 +306,33 @@ TRIVY_PARSE_ERROR_RE = re.compile(
 # carries a chart, and two of the external baselines carry one.
 GO_TEMPLATE_RE = re.compile(r"\{\{")
 
+# CloudFormation's short-form intrinsics, which are YAML tags and not YAML
+# syntax: `BucketName: !Sub '${AWS::StackName}-logs'`. A stock PyYAML has no
+# constructor for them, so safe_load raises ConstructorError -- a YAMLError
+# subclass, which is what _unparseable_admitted_files catches.
+#
+# That made every CloudFormation template written in the idiomatic style an
+# "unparseable admitted file" from the day .yaml was admitted (2026-09-20),
+# long before CloudFormation itself was on the list: a .yaml is downloaded
+# whatever it turns out to be. The direction of that failure is the safe one
+# -- a scan error holds a fix for review rather than passing it -- but it is
+# still a file this scanner CAN read being reported as one it cannot, and it
+# would block remediation across the whole language the moment CloudFormation
+# is admitted. Measured against PyYAML as shipped: `!Sub` raises
+# "could not determine a constructor for the tag '!Sub'".
+#
+# Enumerated rather than matched as a `!`-prefix multi-constructor, which is
+# the shorter version of this and the wrong one: a prefix rule accepts any
+# tag at all, so a genuinely broken file carrying `!Whatever` would parse and
+# this check would under-report. Under-reporting is the failure the check
+# exists to prevent. This is a closed, documented set, and one the tools that
+# read the template already agree on.
+CFN_INTRINSIC_TAGS = (
+    "!Ref", "!Sub", "!GetAtt", "!GetAZs", "!ImportValue", "!Join", "!Select",
+    "!Split", "!FindInMap", "!Base64", "!Cidr", "!Transform", "!If", "!Not",
+    "!And", "!Or", "!Equals", "!Condition",
+)
+
 
 class ScannerError(RuntimeError):
     """A scanner did not run to completion.
@@ -781,6 +808,37 @@ def _yaml_module():
     return yaml
 
 
+def _cfn_aware_loader(yaml_mod):
+    """SafeLoader plus a constructor per CloudFormation intrinsic tag.
+
+    The check this feeds asks one question -- can this file be read at all --
+    so the constructors only have to consume the node, not model what the
+    intrinsic means. Each returns the node's own value, dispatching on node
+    type because the intrinsics take all three: `!Ref Foo` is a scalar,
+    `!Join [",", [...]]` a sequence, and `!GetAtt` appears in both forms.
+
+    Subclassed rather than registered on SafeLoader itself, which would be
+    global and would leak these tags into checkov's own PyYAML use in the
+    same interpreter -- except that checkov runs in a subprocess, so it would
+    not, and the subclass is still right: a constructor added to a shared
+    loader is exactly the kind of action at a distance that makes a later
+    parse check pass for a reason nobody can find.
+    """
+    class Loader(yaml_mod.SafeLoader):
+        pass
+
+    def construct(loader, node):
+        if isinstance(node, yaml_mod.SequenceNode):
+            return loader.construct_sequence(node, deep=True)
+        if isinstance(node, yaml_mod.MappingNode):
+            return loader.construct_mapping(node, deep=True)
+        return loader.construct_scalar(node)
+
+    for tag in CFN_INTRINSIC_TAGS:
+        Loader.add_constructor(tag, construct)
+    return Loader
+
+
 def _unparseable_admitted_files(downloaded, work_dir):
     """Admitted files this scanner cannot parse itself, relative to work_dir.
 
@@ -801,12 +859,18 @@ def _unparseable_admitted_files(downloaded, work_dir):
     it at all. Bicep and Terraform are reported by the tools. A Go template is
     skipped because it is not a file this scanner failed to read -- it is one
     this scanner does not handle.
+
+    The loader knows CloudFormation's short-form intrinsics (see
+    CFN_INTRINSIC_TAGS). Without them a `!Sub` made an ordinary template
+    unreadable to this check, which is the same mistake in the other
+    direction: reporting a file the scanner can read as one it cannot.
     """
     yaml_paths = [p for p in downloaded if p.endswith((".yaml", ".yml"))]
     if not yaml_paths:
         return []
 
     yaml_mod = _yaml_module()
+    loader = _cfn_aware_loader(yaml_mod)
     unparseable = []
     for path in yaml_paths:
         rel = os.path.relpath(path, work_dir).replace(os.sep, "/")
@@ -819,7 +883,7 @@ def _unparseable_admitted_files(downloaded, work_dir):
         if GO_TEMPLATE_RE.search(content):
             continue
         try:
-            for _ in yaml_mod.safe_load_all(content):
+            for _ in yaml_mod.load_all(content, Loader=loader):
                 pass
         except yaml_mod.YAMLError:
             unparseable.append(rel)
