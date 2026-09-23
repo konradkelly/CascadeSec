@@ -992,6 +992,50 @@ def test_the_cfn_tags_do_not_make_a_broken_manifest_parse(tmp_path):
         ["svc.yaml"]
 
 
+def test_admitted_yaml_is_classified_by_what_it_declares(tmp_path):
+    """A .yaml is claimed by no suffix, so the pass that already parses it
+    also says what it is. CloudFormation by the rule the .json sniff uses,
+    Kubernetes by apiVersion + kind; a CI workflow is neither and gets no
+    entry, since no admitted scanner reads it."""
+    (tmp_path / "template.yaml").write_text(CFN_TEMPLATE_WITH_INTRINSICS, encoding="utf-8")
+    (tmp_path / "manifest.yaml").write_text(VALID_MANIFEST, encoding="utf-8")
+    (tmp_path / "workflow.yml").write_text("on: [push]\njobs: {}\n", encoding="utf-8")
+    downloaded = [str(tmp_path / n) for n in ("template.yaml", "manifest.yaml", "workflow.yml")]
+
+    unparseable, classified = handler._read_admitted_yaml(downloaded, str(tmp_path))
+
+    assert unparseable == []
+    assert classified == {"template.yaml": "cloudformation", "manifest.yaml": "kubernetes"}
+
+
+def test_a_secret_on_a_yaml_file_takes_the_files_language():
+    """checkov reports a literal secret as check_type "secrets", which names
+    a discipline and not a target, and a .yaml has no suffix entry -- so
+    CKV_SECRET_6 on a manifest came back "unknown" from the day .yaml was
+    admitted. run_eval.py's target_type check found it on its first run,
+    2026-09-23, on a manifest and a template alike."""
+    classifications = {"db/template.yaml": "cloudformation", "k8s/secret.yaml": "kubernetes"}
+
+    assert handler._target_type_for("db/template.yaml", "", classifications) == "cloudformation"
+    assert handler._target_type_for("k8s/secret.yaml", "", classifications) == "kubernetes"
+
+
+def test_a_kics_platform_that_is_not_a_language_names_no_target():
+    """KICS files its generic-password query under platform "Common". Passed
+    through verbatim, that became a target_type for an hour on 2026-09-23 --
+    a language no structural guard exists for. An unlisted platform now
+    defers to the file's classification."""
+    query = {**KICS_STORAGE_QUERY, "platform": "Common",
+             "files": [{**KICS_STORAGE_QUERY["files"][0], "file_name": "template.yaml"}]}
+
+    [classified] = handler._normalize_kics(_kics_report([query]), ".", "pr-1",
+                                           {"template.yaml": "cloudformation"})
+    [unclassified] = handler._normalize_kics(_kics_report([query]), ".", "pr-1")
+
+    assert classified["target_type"] == "cloudformation"
+    assert unclassified["target_type"] == "unknown"
+
+
 def test_a_helm_template_is_not_reported_as_unparseable(tmp_path):
     """A chart template is not valid YAML until it is rendered, and helm is
     deliberately not admitted -- so this is a file the scanner does not

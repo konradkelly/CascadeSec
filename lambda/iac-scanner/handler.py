@@ -299,17 +299,20 @@ SUFFIX_TARGET_TYPES = (
 # name and not two: remediation-agent dispatches its structural guard on this
 # field and the dashboard groups drafted fixes by it, so two spellings would
 # be two groups and one unguarded language.
-REPORTED_TARGET_TYPES = {
-    "azure-arm": "arm",
-    # KICS names a platform per query, not a target, and until 2026-09-23 it
-    # did not need to be read: every file KICS scanned was either a .bicep
-    # (claimed by suffix) or a sniffed .json (claimed by classifications).
-    # CloudFormation in YAML is the first KICS input on a suffix nothing
-    # classifies, and with no reported type its findings came back "unknown"
-    # -- found on the first deployed run, where remediation-agent would have
-    # refused all ten on one template. AzureResourceManager covers Bicep too,
-    # but "arm" is only ever the fallback: .bicep is claimed by suffix and a
-    # .json by the sniff before this is consulted.
+REPORTED_TARGET_TYPES = {"azure-arm": "arm"}
+
+# KICS names a platform per query, not a target. Until 2026-09-23 it did not
+# need reading: every file KICS scanned was a .bicep (claimed by suffix) or a
+# sniffed .json. CloudFormation in YAML put KICS on a suffix nothing claimed,
+# and its findings came back "unknown". A separate map rather than entries in
+# REPORTED_TARGET_TYPES, because that one passes an unknown name through --
+# and KICS files its generic-password query under platform "Common", which
+# came through as a target_type for an hour. A platform not listed here names
+# no target, and the classifications decide.
+#
+# AzureResourceManager covers Bicep too, so "arm" is only ever the fallback:
+# .bicep is claimed by suffix and a .json by the sniff before this is read.
+KICS_PLATFORM_TARGET_TYPES = {
     "CloudFormation": "cloudformation",
     "AzureResourceManager": "arm",
 }
@@ -432,6 +435,10 @@ def handler(event, context):
             ARTIFACTS_BUCKET, s3_prefix, work_dir)
         if not downloaded:
             raise ValueError(f"no IaC files found under s3://{ARTIFACTS_BUCKET}/{s3_prefix}")
+        # Before normalizing, because what a .yaml is has to be known by the
+        # time its findings are given a target_type.
+        unparseable_yaml, yaml_classifications = _read_admitted_yaml(downloaded, work_dir)
+        classifications = {**classifications, **yaml_classifications}
 
         trivy_results, trivy_parse_errors = _run_trivy(work_dir)
         checkov_report = _run_checkov(work_dir)
@@ -455,7 +462,7 @@ def handler(event, context):
             | set(_checkov_parse_errors(checkov_report, work_dir))
             # The languages neither tool reports on. Not redundant with the
             # two above: see _unparseable_admitted_files.
-            | set(_unparseable_admitted_files(downloaded, work_dir))
+            | set(unparseable_yaml)
             # An admitted .json that claims the ARM schema and will not parse.
             # This one is ours, produced by json.loads, and does not depend on
             # either tool choosing to report -- which for ARM neither does.
@@ -853,7 +860,9 @@ def _normalize_kics(report, work_dir, pr_id, classifications=None):
                 file_path=file_path,
                 line_range=[line, line],
                 severity=(query.get("severity") or "UNKNOWN").upper(),
-                target_type=_target_type_for(file_path, query.get("platform"), classifications),
+                target_type=_target_type_for(
+                    file_path, KICS_PLATFORM_TARGET_TYPES.get(query.get("platform"), ""),
+                    classifications),
                 finding_class=finding_class,
                 now=now,
                 # KICS names the resource and its type separately; the pair is
@@ -990,13 +999,34 @@ def _unparseable_admitted_files(downloaded, work_dir):
     unreadable to this check, which is the same mistake in the other
     direction: reporting a file the scanner can read as one it cannot.
     """
+    return _read_admitted_yaml(downloaded, work_dir)[0]
+
+
+def _read_admitted_yaml(downloaded, work_dir):
+    """(unparseable, classifications) for the admitted YAML files.
+
+    One pass, because both answers come from parsing the same file.
+    `classifications` is what the file is, by its own content, keyed the way
+    _download_snapshot keys the .json ones -- and it exists for the same
+    reason. A .yaml is claimed by no suffix, and two finding paths name no
+    target: checkov reports a literal secret as check_type "secrets", and
+    KICS files its generic-password query under platform "Common". Both came
+    back "unknown" on a Kubernetes manifest and a CloudFormation template
+    alike, which remediation-agent's structural guard refuses outright --
+    found by run_eval.py's target_type check on its first run, 2026-09-23,
+    and live on manifests since .yaml was admitted on 2026-09-20.
+
+    Read from the content rather than from what another tool reported about
+    the same file, because a file whose only finding is the secret has no
+    other tool's word to borrow.
+    """
     yaml_paths = [p for p in downloaded if p.endswith((".yaml", ".yml"))]
     if not yaml_paths:
-        return []
+        return [], {}
 
     yaml_mod = _yaml_module()
     loader = _cfn_aware_loader(yaml_mod)
-    unparseable = []
+    unparseable, classifications = [], {}
     for path in yaml_paths:
         rel = os.path.relpath(path, work_dir).replace(os.sep, "/")
         try:
@@ -1008,11 +1038,30 @@ def _unparseable_admitted_files(downloaded, work_dir):
         if GO_TEMPLATE_RE.search(content):
             continue
         try:
-            for _ in yaml_mod.load_all(content, Loader=loader):
-                pass
+            docs = [d for d in yaml_mod.load_all(content, Loader=loader) if isinstance(d, dict)]
         except yaml_mod.YAMLError:
             unparseable.append(rel)
-    return unparseable
+            continue
+        target = _yaml_target_type(docs)
+        if target:
+            classifications[rel] = target
+    return unparseable, classifications
+
+
+def _yaml_target_type(docs):
+    """"cloudformation" | "kubernetes" | None, for one file's documents.
+
+    CloudFormation by the rule the .json sniff uses (_is_cfn_document), since
+    a template's syntax does not change what it is. Kubernetes by carrying
+    both `apiVersion` and `kind`, which every manifest declares about itself.
+    None for a CI workflow, a values file, anything else: those raise nothing
+    that needs a target, since no admitted scanner reads them.
+    """
+    if any(_is_cfn_document(d) for d in docs):
+        return "cloudformation"
+    if any("apiVersion" in d and "kind" in d for d in docs):
+        return "kubernetes"
+    return None
 
 
 def _checkov_parse_errors(report, work_dir):
