@@ -403,7 +403,12 @@ def test_the_snapshot_takes_the_suffixes_the_agent_can_read(mock_s3):
     """Wider than the scanner's: context-agent answers questions about the
     rest of the repository, and the manifests that motivated it -- a
     cert-manager ClusterIssuer, an ingress -- are YAML the scanner
-    deliberately never opens."""
+    deliberately never opens.
+
+    The lockfile is the ARM sniff working: a .json is downloaded and then
+    removed again unless it carries a deploymentTemplate $schema, which is
+    what lets an ARM template called anything be read while a lockfile is
+    never quoted back as repository context."""
     mock_s3.get_paginator.return_value = _paginated([
         "scans/pr-1/main.tf",
         "scans/pr-1/main.tofu",
@@ -411,16 +416,26 @@ def test_the_snapshot_takes_the_suffixes_the_agent_can_read(mock_s3):
         "scans/pr-1/modules/vpc/net.tf.json",
         "scans/pr-1/k8s/issuer.yaml",
         "scans/pr-1/k8s/ingress.yml",
+        "scans/pr-1/infra/main.bicep",
+        "scans/pr-1/infra/azuredeploy.json",
         "scans/pr-1/README.md",
         "scans/pr-1/package-lock.json",
     ])
+    arm = '{"$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"}'
 
-    with patch.object(handler.os, "makedirs"):
+    def contents(path, *a, **k):
+        handle = MagicMock()
+        handle.__enter__.return_value.read.return_value = (
+            arm if path.replace("\\", "/").endswith("azuredeploy.json") else '{"lockfileVersion": 3}'
+        )
+        return handle
+
+    with patch.object(handler.os, "makedirs"), patch.object(handler.os, "remove"),          patch("builtins.open", side_effect=contents):
         files = handler._download_snapshot("bucket", "scans/pr-1/", "/tmp/x")
 
     assert files == [
         "main.tf", "main.tofu", "terraform.tfvars", "modules/vpc/net.tf.json",
-        "k8s/issuer.yaml", "k8s/ingress.yml",
+        "k8s/issuer.yaml", "k8s/ingress.yml", "infra/main.bicep", "infra/azuredeploy.json",
     ]
     # Paths are relative to the prefix, because that is how the model is
     # shown them and how it cites them back.

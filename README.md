@@ -9,7 +9,7 @@
 
 ## What it does
 
-CascadeSec scans Terraform for security misconfigurations, maps every finding to the specific OWASP or CIS control it violates, and proposes a minimal fix — one it has already proven clears the issue before a human ever sees it.
+CascadeSec scans infrastructure-as-code -- Terraform, OpenTofu, Kubernetes manifests, Azure ARM templates and Bicep -- for security misconfigurations, maps every finding to the specific OWASP or CIS control it violates, and proposes a minimal fix — one it has already proven clears the issue before a human ever sees it.
 
 **The core design principle: the agent proposes, it never decides.**
 
@@ -102,7 +102,7 @@ finding -- which is why it asks first (`--no-remediate` stops after mapping).
 
 ## Status
 
-**v1 is deployed and running** against a dev AWS account: Terraform-only scanning, control mapping, self-verified remediation with per-file fix chains, and the human review dashboard. Triggered manually by `scripts/scan.py`; no GitHub write-back yet.
+**v1 is deployed and running** against a dev AWS account: multi-language IaC scanning, control mapping, self-verified remediation with per-file fix chains, and the human review dashboard. Triggered manually by `scripts/scan.py`; no GitHub write-back yet.
 
 CI runs the Lambda test suites (pytest, 217 tests) and the dashboard lint + type-check on every push — deliberately with no AWS credentials, so a test run can never touch real infrastructure.
 
@@ -110,13 +110,14 @@ CI runs the Lambda test suites (pytest, 217 tests) and the dashboard lint + type
 
 - [x] v1 — Terraform scanning, mapping, remediation, review dashboard (manual trigger, no GitHub write-back)
 - [~] v2 — Kubernetes manifest scanning (**built 2026-09-20**); Helm charts held back, see [`docs/multi-iac-spec.md`](docs/multi-iac-spec.md) §6
+- [~] v2 — Azure ARM templates and Bicep (**built 2026-09-22**), with CIS Azure 3.0; Bicep is checkov-only and says so on the badge
 - [ ] v3 — GitHub App / PR-triggered CI integration
 - [ ] v4 — Approved-fix write-back to PR branch
 
 ## Tech stack
 
 - **Infra:** AWS Lambda (zip and container-image), Step Functions, API Gateway, DynamoDB, S3, ECR, Cognito, CloudFront, Secrets Manager, CloudWatch (EMF metrics, alarms), X-Ray, SNS — all in Terraform
-- **Scanning:** Trivy, Checkov, custom Trivy checks in Rego — Terraform, OpenTofu and Kubernetes manifests
+- **Scanning:** Trivy, Checkov, custom Trivy checks in Rego — Terraform, OpenTofu, Kubernetes manifests, Azure ARM templates and Bicep
 - **Agents:** Anthropic API, strict JSON-schema-constrained outputs
 - **Frontend:** React, Vite, TypeScript
 - **CI:** GitHub Actions — pytest per Lambda, oxlint + `tsc` for the dashboard

@@ -476,8 +476,40 @@ By cost, and each step earns the next:
 4. **CloudFormation.** AWS, so much of the corpus carries over — the same CIS
    AWS controls, reached through different rule ids. Cheapest of the
    remaining.
-5. **Bicep/ARM.** A whole new cloud: CIS Azure content, plus §4's
-   single-source self-check caveat.
+5. **Bicep/ARM.** ✅ **Built 2026-09-22**, gates first as always: the ARM
+   and Bicep structural guards and the ARM suppression marker, the CIS Azure
+   3.0 corpus, the volume measurement and the single-source badge, 14 eval
+   cases, then the admission -- `.bicep` in `SNAPSHOT_SUFFIXES`, `azure-arm`
+   in `--misconfig-scanners`, `arm,bicep` in `--framework`. 26 of 26 labelled
+   pairs fire locally against the pinned tools.
+
+   **Three things the run taught us that the plan did not predict.**
+
+   *ARM is the first language admitted by content rather than by name.* A
+   `.json` is a deployment template, a lockfile, a tsconfig or none of them,
+   and unlike `.yaml` the non-matches vastly outnumber the matches, so the
+   Kubernetes precedent -- let the admission lists classify -- does not carry
+   over: checkov's secrets runner is given `--enable-secret-scan-all-files`
+   and reads the directory, so an unwanted `.json` has to be *removed*, not
+   merely unlisted. Admission is a top-level `$schema` naming a
+   `deploymentTemplate`. The measurement that settles the alternative: on
+   `azure-quickstart-templates` the tree holds 519 `.json` files of which 175
+   are templates, and 159 of the remainder are `azuredeploy.parameters.json`
+   -- files a filename convention admits and this does not.
+
+   *Trivy's `azure-arm` adapter is weaker than its scanner list suggests.* It
+   claimed 92 of 175 valid templates and said nothing about the other 83, and
+   four of its rules -- `AZU-0056`, `AZU-0057`, `AZU-0058`, `AZU-0013` --
+   fire regardless of what the template declares: `Standard_GRS` raises the
+   geo-redundancy rule while a real quickstart on `Standard_LRS` escapes it.
+   The same intent in Terraform clears all four, so it is the adapter and not
+   the checks. Three were unmapped in the corpus as a result: a finding no
+   edit can clear would be drafted, failed and redrafted forever.
+
+   *The CIS edition is part of the citation here*, unlike CIS Kubernetes
+   section 5. v4.0 renumbers every storage control and drops SQL auditing
+   entirely, so v3.0 is vendored deliberately rather than by default. See
+   `corpus/README.md`.
 6. **Pulumi/CDK.** §7.
 
 ### 6.1 Azure volume, measured 2026-09-22
