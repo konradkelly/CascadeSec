@@ -19,6 +19,13 @@ Needs `boto3`, AWS credentials for the dev account, and the `terraform` CLI on
 **97.3% — 73 of 75 expected findings, across 45 positive cases and 2 clean
 controls.** Run 2026-09-16 against checkov 3.3.16 and Trivy 0.74.0 plus the
 project's own check `IACP-0001`, as packaged in the `iac-scanner` image.
+
+*This is the AWS Terraform and OpenTofu corpus only.* The directory now holds
+83 cases: the Kubernetes ones (2026-09-20) and the Azure ones (2026-09-22)
+each report their own number, measured locally against the same pinned tools,
+in their sections below. Folding them into one headline needs a rebuild and a
+deployed `run_eval.py` run, and until that happens saying so is more useful
+than a blended figure nobody measured.
 Both misses are labelled tool gaps (`CKV_AWS_60` on a bare `"*"` principal;
 `CKV_SECRET_6` on a password with a `!` in it), so this is the ceiling for
 these tools on these cases.
