@@ -1,0 +1,9 @@
+{
+  "description": "The same bare S3 bucket as cfn-s3-unencrypted, written in CloudFormation's JSON syntax",
+  "category": "missing-encryption",
+  "expected": [
+    { "source": "trivy", "rule_id": "AWS-0132" },
+    { "source": "kics", "rule_id": "b2e8752c-3497-4255-98d2-e4ae5b46bbf5" }
+  ],
+  "note": "The syntax-equivalence control, and the only case here whose point is the file format rather than the vulnerability. CloudFormation is the first language admitted in two syntaxes under one target_type, so 'both syntaxes are the same target' is a claim the eval should hold rather than a comment. Measured 2026-09-23: Trivy and checkov each report exactly the same rule ids on this file as on cfn-s3-unencrypted's YAML. It also exercises the JSON admission path, which is where CloudFormation collides with ARM -- both are content-sniffed off a bare .json, and this file must come back target_type cloudformation rather than arm."
+}

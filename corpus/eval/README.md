@@ -454,13 +454,91 @@ assumed.
 
 An ARM case's sample must carry a top-level `$schema` naming a
 `deploymentTemplate`, or nothing will upload it: `.json` is admitted by
-content, not by name. This is also what keeps each case's own
-`expected.json` out of its snapshot.
+content, not by name. A CloudFormation case in the JSON syntax has the same
+requirement against the other marker -- `AWSTemplateFormatVersion`, or a
+`Resources` mapping whose every entry carries an `AWS::`/`Alexa::`/`Custom::`
+`Type`. This is also what keeps each case's own `expected.json` out of its
+snapshot. A CloudFormation case in YAML needs no marker to be uploaded,
+since `.yaml` is admitted by suffix for Kubernetes -- but it should carry one
+anyway, because that is what the scanner's tools classify it by.
+
+## The CloudFormation cases (added 2026-09-23)
+
+Seven cases: five positive, one clean control, and one that exists for the
+file format rather than a vulnerability. **Labelled locally against the same
+pinned Trivy 0.74.0, checkov 3.3.16 and KICS 2.1.20 the scanner image
+carries**, because the deployed scanner had not been rebuilt when they were
+written — the Kubernetes and Azure cases were added the same way. *Re-run
+`run_eval.py` after the deploy and fold these into the headline.*
+
+| case | what it injects | sources that see it |
+|---|---|---|
+| `cfn-s3-unencrypted` | bucket with no encryption, versioning, logging or public-access block | trivy, kics |
+| `cfn-sg-open-ingress` | SSH from `0.0.0.0/0`, unrestricted egress | trivy, checkov, kics |
+| `cfn-iam-full-admin` | `Action: '*'` on `Resource: '*'` | checkov, kics |
+| `cfn-rds-literal-password` | hardcoded `MasterUserPassword` | checkov, kics |
+| `cfn-cloudtrail-no-validation` | log validation off, single-region, no CMK | trivy, checkov, kics |
+| `cfn-json-syntax` | the bucket again, in the JSON syntax | trivy, kics |
+| `clean-cfn-hardened` | nothing — the false-positive control | none, on all three |
+
+**`cfn-json-syntax` is the odd one and is deliberate.** CloudFormation is the
+first language admitted in two syntaxes under one `target_type`, so "both
+syntaxes are the same target" is a claim the eval holds rather than a comment
+in the scanner. It also exercises the JSON admission path, which is where
+CloudFormation collides with ARM: both are content-sniffed off a bare
+`.json`, and this file has to come back `target_type` `cloudformation`
+rather than `arm`.
+
+### Two per-tool gaps, labelled rather than papered over
+
+**checkov raises no S3 encryption check on a template.** On
+`cfn-s3-unencrypted` it reports `CKV_AWS_18`, `21` and `53`–`56` — logging,
+versioning and the four public-access-block checks — and nothing about
+encryption, where Trivy has `AWS-0132` and KICS has `b2e8752c`. So the
+project's opening example, the unencrypted bucket, is two-source in
+CloudFormation where it is three-source in Terraform.
+
+**Trivy reports nothing at all on a full-admin IAM policy** — and this one is
+*not* a CloudFormation gap, which is why the case says so. Trivy deprecated
+`aws-iam-no-policy-wildcards` (`AWS-0057`), it is off by default and nothing
+replaced it, so the Terraform case `iam-policy-full-admin` is checkov-only
+for exactly the same reason. The difference is that KICS covers it here,
+which the Terraform case cannot say: KICS is scoped to ARM, Bicep and
+CloudFormation.
+
+### What the clean control had to do to be clean
+
+Two KICS queries fire on essentially any CloudFormation template, and both
+are tool behaviour rather than security judgement:
+
+- `0104165b` (*DB Security Group Open To Large Scope*) wants an ingress CIDR
+  of fewer than 256 hosts, so the control uses a `/25` — a `/24` is exactly
+  256 and one host too many.
+- `8d29754a` (*IAM Access Analyzer Not Enabled*) fires on any template that
+  does not declare an `AWS::AccessAnalyzer::Analyzer`, which is an
+  account-level control expressed as a per-template check.
+
+Both are *satisfiable*, unlike the four Trivy ARM rules in
+`docs/trivy-azure-arm-adapter-gap.md`, so they are satisfied here rather than
+dropped from the corpus. Worth knowing anyway: they will fire on nearly every
+real template a user scans.
+
+### Corpus cost was low, as §6 step 4 predicted
+
+**11 of the 21 labelled rules were already mapped**, through the Terraform
+work — Trivy and checkov report the same `AWS-*` and `CKV_AWS_*` ids on a
+template as on HCL, and only one candidate in the whole table is
+`target_type`-scoped (Kubernetes'). The ten added are seven KICS AWS query
+ids — KICS had only Azure keys until now — and checkov's three IAM
+constraint checks, each landing on the control its Trivy or checkov
+counterpart already carried.
 
 ## Adding a case
 
 ```
 cases/<name>/main.tf          # one clear injected vulnerability, self-contained
+                              # (manifest.yaml, azuredeploy.json, main.bicep,
+                              #  template.yaml/.json per language)
 cases/<name>/expected.json    # {description, category, expected: [{source, rule_id}], note?}
 ```
 

@@ -1010,14 +1010,12 @@ def _call_remediation_agent(finding, original_content, answers=None, flagged="")
 #                          in the tuple: every line matching it matches this.
 #                          The JSON syntax of the same template is ARM's case
 #                          exactly and `"checkov"` already covers it.
-#                          NOT YET MEASURED, unlike every entry above it:
-#                          this is checkov's documented CloudFormation skip
-#                          and the ARM entry's measured shape one level of
-#                          quoting apart, but the pinned 3.3.16 has not been
-#                          run on it -- a check moving from failed_checks to
-#                          skipped_checks is what would settle it, as it did
-#                          for ARM on 2026-09-22. Confirm before
-#                          CloudFormation is admitted to the scanner.
+#                          Measured 2026-09-23 against the pinned checkov
+#                          3.3.16, the same confirmation shape ARM got on
+#                          2026-09-22: CKV_AWS_21 moved from failed_checks
+#                          to skipped_checks on a bucket carrying the block
+#                          above, while the other five checks on the same
+#                          file still failed.
 #                          cfn_nag is the second system --
 #                            Metadata:
 #                              cfn_nag:

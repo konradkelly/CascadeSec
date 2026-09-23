@@ -1,0 +1,23 @@
+{
+  "description": "CloudFormation IAM managed policy granting Action '*' on Resource '*'",
+  "category": "iam-over-permissioning",
+  "expected": [
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AWS_109"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AWS_110"
+    },
+    {
+      "source": "checkov",
+      "rule_id": "CKV_AWS_111"
+    },
+    {
+      "source": "kics",
+      "rule_id": "022f8938-4b17-420c-aca3-f917f290f322"
+    }
+  ],
+  "note": "CIS AWS 1.16. Full administrative access in one statement. Trivy is absent from the labels, and unlike the S3 case this is NOT a CloudFormation gap: Trivy deprecated aws-iam-no-policy-wildcards (AWS-0057), it is off by default and nothing replaced it, so the Terraform case iam-policy-full-admin is checkov-only for exactly the same reason. The language is three-source; this rule is one-tool-short everywhere. KICS does cover it here, which the Terraform case cannot say -- KICS is scoped to ARM, Bicep and CloudFormation. checkov also raises CKV_AWS_107 (credentials exposure) and CKV_AWS_108 (data exfiltration) on the same statement."
+}

@@ -1,0 +1,16 @@
+{
+  "description": "CloudFormation CloudTrail with log file validation off, single-region, no KMS",
+  "category": "logging-monitoring",
+  "expected": [
+    { "source": "trivy", "rule_id": "AWS-0016" },
+    { "source": "trivy", "rule_id": "AWS-0014" },
+    { "source": "trivy", "rule_id": "AWS-0015" },
+    { "source": "checkov", "rule_id": "CKV_AWS_36" },
+    { "source": "checkov", "rule_id": "CKV_AWS_67" },
+    { "source": "checkov", "rule_id": "CKV_AWS_35" },
+    { "source": "kics", "rule_id": "2a3560fe-52ca-4443-b34f-bf0ed5eb74c8" },
+    { "source": "kics", "rule_id": "058ac855-989f-4378-ba4d-52d004020da7" },
+    { "source": "kics", "rule_id": "050a9ba8-d1cb-4c61-a5e8-8805a70d3b85" }
+  ],
+  "note": "CIS AWS 3.1, 3.2 and 3.7. The one case here where all three tools agree rule for rule on all three defects -- log file validation, single-region, and logs not encrypted with a CMK -- which is what a three-source language is supposed to look like. The trail's own S3 bucket raises the bare-bucket set again (AWS-0086 through AWS-0132, CKV_AWS_18/21/53-56); unlabelled here because cfn-s3-unencrypted owns it."
+}

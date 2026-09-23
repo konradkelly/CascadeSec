@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: The hardened counterpart to the positive cases -- expected to raise nothing
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+Resources:
+  # KICS 8d29754a fires on any template that does not declare one, so a
+  # reference template that means to be clean declares one. See expected.json.
+  AccountAnalyzer:
+    Type: AWS::AccessAnalyzer::Analyzer
+    Properties:
+      AnalyzerName: !Sub '${AWS::StackName}-analyzer'
+      Type: ACCOUNT
+
+  AppGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Application tier, scoped to one subnet
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          # /25 rather than /24: KICS 0104165b wants fewer than 256 hosts,
+          # and a /24 is exactly 256.
+          CidrIp: 10.0.1.0/25
+          Description: HTTPS from one subnet only
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.0.1.0/25
+          Description: HTTPS to one subnet only

@@ -1,0 +1,9 @@
+{
+  "description": "CloudFormation S3 bucket with no encryption, versioning, logging or public-access block",
+  "category": "missing-encryption",
+  "expected": [
+    { "source": "trivy", "rule_id": "AWS-0132" },
+    { "source": "kics", "rule_id": "b2e8752c-3497-4255-98d2-e4ae5b46bbf5" }
+  ],
+  "note": "CIS AWS 2.1.1. The bare bucket, in the language's own syntax -- the same resource the Terraform cases open with, reached through CloudFormation rule ids. Labelled 2026-09-23 against the pinned Trivy 0.74.0, checkov 3.3.16 and KICS 2.1.20. checkov is deliberately absent from the labels and that is the finding, not an omission: it raises CKV_AWS_18/21/53/54/55/56 on this file -- logging, versioning and the four public-access-block checks -- and no encryption check at all, where both other tools have one. The same gap the Bicep and ARM cases document per tool. The public-access and versioning rules the other two raise are real and unlabelled here because cfn-json-syntax and the clean control cover that ground."
+}

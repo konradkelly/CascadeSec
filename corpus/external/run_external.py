@@ -71,21 +71,35 @@ SNAPSHOT_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".tfvars.json", ".tofu", ".to
 # ARM_SCHEMA_RE; corpus/test_corpus.py asserts every copy agrees.
 ARM_SCHEMA_RE = re.compile(r'"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json')
 
+# CloudFormation templates are .json, .yaml or checkov's own .template, so the
+# same problem again -- and the JSON case collides with ARM's, since both
+# languages are admitted by content off one suffix. The scanner decides
+# between them in _json_template_verdict; an uploader applies only the cheap
+# text test for either marker. Must match iac-scanner's CFN_MARKER_RE;
+# corpus/test_corpus.py asserts every copy agrees.
+CFN_MARKER_RE = re.compile(r'"AWSTemplateFormatVersion"\s*:')
+
 
 def is_snapshot_file(path):
     """Whether the scanner would open this file.
 
-    Suffix for everything that declares itself by name, plus the ARM sniff for
-    a bare .json. Note .tf.json and .tofu.json match on suffix first and never
-    reach the sniff."""
+    Suffix for everything that declares itself by name, plus the two content
+    sniffs for a bare .json or .template. Note .tf.json and .tofu.json match
+    on suffix first and never reach a sniff.
+
+    A .yaml CloudFormation template needs no sniff here: .yaml is already on
+    SNAPSHOT_SUFFIXES for Kubernetes, so it is uploaded either way and the
+    scanner's own tools decide which language it is.
+    """
     if path.name.endswith(SNAPSHOT_SUFFIXES):
         return True
-    if not path.name.endswith(".json"):
+    if not path.name.endswith((".json", ".template")):
         return False
     try:
-        return bool(ARM_SCHEMA_RE.search(path.read_text(encoding="utf-8")))
+        text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return False
+    return bool(ARM_SCHEMA_RE.search(text) or CFN_MARKER_RE.search(text))
 SKIP_DIRS = {".terraform", ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"}
 
 # The scanner's own timeout is 300s (terraform/lambda_iac_scanner.tf). boto3's

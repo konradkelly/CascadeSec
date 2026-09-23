@@ -1,0 +1,9 @@
+{
+  "description": "CloudFormation RDS instance with a hardcoded MasterUserPassword",
+  "category": "hardcoded-secrets",
+  "expected": [
+    { "source": "checkov", "rule_id": "CKV_SECRET_6" },
+    { "source": "kics", "rule_id": "487f4be7-3fd9-4506-a07a-eae252180c08" }
+  ],
+  "note": "The literal credential, which is the goal spec §2 measured at 75% before the secrets framework was switched on. Worth contrasting with the Terraform case: CKV_SECRET_6 misses that one because its password contains a '!', and catches this one, so the labelled gap is about the value and not the language. Trivy raises six RDS misconfigurations on this file (AWS-0077/0080/0133/0176/0177/0180, including unencrypted storage and PubliclyAccessible) and nothing about the secret."
+}

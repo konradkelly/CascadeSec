@@ -47,6 +47,24 @@
         "control_id": "1.16"
       }
     ],
+    "checkov:CKV_AWS_109": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "1.16"
+      }
+    ],
+    "checkov:CKV_AWS_110": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "1.16"
+      }
+    ],
+    "checkov:CKV_AWS_111": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "1.16"
+      }
+    ],
     "checkov:CKV_AWS_130": [
       {
         "framework": "OWASP-CloudNative",
@@ -604,10 +622,34 @@
         "control_id": "CICD-SEC-9"
       }
     ],
+    "kics:022f8938-4b17-420c-aca3-f917f290f322": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "1.16"
+      }
+    ],
+    "kics:050a9ba8-d1cb-4c61-a5e8-8805a70d3b85": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "3.7"
+      }
+    ],
+    "kics:058ac855-989f-4378-ba4d-52d004020da7": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "3.1"
+      }
+    ],
     "kics:1367dd13-2c90-4020-80b7-e4339a3dc2c4": [
       {
         "framework": "CIS-Azure-3.0",
         "control_id": "4.1"
+      }
+    ],
+    "kics:2a3560fe-52ca-4443-b34f-bf0ed5eb74c8": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "3.2"
       }
     ],
     "kics:2ade1579-4b2c-4590-bebb-f99bf597f612": [
@@ -630,6 +672,12 @@
       {
         "framework": "CIS-Azure-3.0",
         "control_id": "9.1"
+      }
+    ],
+    "kics:4a1e6b34-1008-4e61-a5f2-1f7c276f8d14": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "5.2"
       }
     ],
     "kics:4d2cf896-c053-4be5-9c95-8b4771112f29": [
@@ -660,6 +708,12 @@
         "control_id": "5.1.2"
       }
     ],
+    "kics:6e856af2-62d7-4ba2-adc1-73b62cef9cc1": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "5.2"
+      }
+    ],
     "kics:7c25f361-7c66-44bf-9b69-022acd5eb4bd": [
       {
         "framework": "CIS-Azure-3.0",
@@ -676,6 +730,12 @@
       {
         "framework": "CIS-Azure-3.0",
         "control_id": "4.7"
+      }
+    ],
+    "kics:b2e8752c-3497-4255-98d2-e4ae5b46bbf5": [
+      {
+        "framework": "CIS-AWS-1.4",
+        "control_id": "2.1.1"
       }
     ],
     "kics:b5c851d5-00f1-43dc-a8de-3218fd6f71be": [

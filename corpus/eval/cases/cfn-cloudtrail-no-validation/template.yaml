@@ -1,0 +1,16 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudTrail without log file validation or KMS encryption
+
+Resources:
+  TrailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-trail'
+
+  Trail:
+    Type: AWS::CloudTrail::Trail
+    Properties:
+      S3BucketName: !Ref TrailBucket
+      IsLogging: true
+      EnableLogFileValidation: false
+      IsMultiRegionTrail: false

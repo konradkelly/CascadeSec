@@ -290,11 +290,10 @@ scanner-verified badge for free. It is the exact failure this was written for,
 and it turned up in a real repository rather than a fixture on the first run
 that could have found it.
 
-**Built for CloudFormation 2026-09-23**, ahead of the language as always —
-and this time the gates are all that was built. The scanner admission is
-*not* in this change, because it needs measurement against the pinned tools
-and the scanner image could not be built on the day (see §6 step 4). What the
-build settled:
+**Built for CloudFormation 2026-09-23**, ahead of the language as always.
+The gates landed in their own commit, before the admission that followed the
+same day once the scanner image could be built and the measurements §6 step 4
+needed were taken. What the build settled:
 
 - *CloudFormation is the first language whose guard reads two syntaxes for
   one `target_type`.* A template is YAML or JSON and all three scanners call
@@ -357,12 +356,10 @@ build settled:
   this project runs; it is in the set for the reason the KICS entry is, since
   an agent writing one has silenced something for a reader downstream. Both
   its keys are listed because a template that already carries the block gets
-  only the inner line added. **This is the one claim in this section that is
-  not measured** — it is checkov's documented syntax and the ARM entry's
-  measured shape one level of quoting apart, but the pinned 3.3.16 has not
-  been run on it. Confirm the check moves from `failed_checks` to
-  `skipped_checks`, as ARM's was confirmed on 2026-09-22, before admitting
-  the language.
+  only the inner line added. Measured 2026-09-23 before the language was
+  admitted, and by the same test ARM's was: `CKV_AWS_21` moved from
+  `failed_checks` to `skipped_checks` on a bucket carrying the block, while
+  the other five checks on that file still failed.
 
 **And where only one tool covers the language** (OpenTofu; Bicep until
 2026-09-23, see §6.2), the self-check has
@@ -569,52 +566,80 @@ By cost, and each step earns the next:
    only the Kubernetes manifest, skipping the rest silently with no parse
    error and nothing on stderr. So the admission lists are the classifier,
    and a repository full of unrelated YAML costs a download.
-4. **CloudFormation.** AWS, so much of the corpus carries over — the same CIS
-   AWS controls, reached through different rule ids. Cheapest of the
-   remaining. 🔸 **Gates built 2026-09-23** (§4); the language is **not
-   admitted to the scanner yet**, and the ordering rule is the reason this is
-   a partial step rather than a late one. What is left, and the two things
-   that turned out not to be cheap:
+4. **CloudFormation.** ✅ **Built 2026-09-23**, gates first as always
+   (§4), then the admission. AWS, so much of the corpus carried over exactly
+   as predicted: **11 of the 21 rules the eval cases label were already
+   mapped**, through the Terraform work, because Trivy and checkov report the
+   same `AWS-*` and `CKV_AWS_*` ids on a template as on HCL. Only one
+   candidate in the whole table is `target_type`-scoped, and it is
+   Kubernetes', so the AWS mappings applied without being touched.
 
-   *Admission is the hard part, and it collides with two languages already
-   in.* A CloudFormation template is `.yaml`, `.yml`, `.json` or `.template`,
-   and three of those four are spoken for:
+   **Admission was the hard part, and it was a collision rather than a
+   parser.** A template is `.yaml`, `.yml`, `.json` or `.template`:
 
-   - `.yaml`/`.yml` are already admitted **for Kubernetes**, so the files are
-     downloaded and nothing new has to be uploaded. Classification is what
-     changes: `SUFFIX_TARGET_TYPES` does not claim `.yaml`, so the finding
-     takes the `target_type` the tool reports, and all three report
-     `cloudformation`. That part is free.
-   - `.json` is **not** free and is the blocking conflict. Today a `.json` is
-     admitted only if it sniffs as an ARM template, and `SUFFIX_TARGET_TYPES`
-     maps `.json` → `arm` unconditionally on the strength of that — the
-     comment there says the mapping is "true rather than a guess *by
-     construction of the download filter*". Admit CloudFormation JSON and the
-     construction no longer holds: a CloudFormation template would be
-     downloaded and then labelled `arm`, which is the wrong structural guard,
-     the wrong suppression dialect and the wrong group in the dashboard. The
-     `.json` entry has to become a content decision rather than a suffix one,
-     alongside a second sniff — `AWSTemplateFormatVersion`, or a `Resources`
-     mapping whose entries carry a `Type` — and the two sniffs have to be
-     mutually exclusive and tested as such.
-   - `.template` is checkov's own extension for this and is admitted by
-     nothing today.
+   - `.yaml`/`.yml` were already admitted **for Kubernetes**, so the files
+     were downloaded before this change and only classification moved.
+     Measured on a directory holding a manifest, both template syntaxes, an
+     ARM template, a `tsconfig.json` and a CI workflow: with
+     `cloudformation` enabled the manifest reported **the same 18 KSV rules
+     as with it off**, both templates reported the same 10 `AWS-*` rules,
+     checkov attributed each file to exactly one `check_type`, KICS parsed 3
+     and failed 0, and nothing claimed the tsconfig or the workflow. So §6
+     step 3's "the admission lists are the classifier" survives a second
+     language sharing the suffix. That was a measurement and not a
+     deduction; the Kubernetes result said nothing about it.
+   - `.json` **was** the blocking conflict. `SUFFIX_TARGET_TYPES` mapped a
+     bare `.json` to `arm` unconditionally, sound only while ARM was the
+     single content-admitted language — the comment there justified it "by
+     construction of the download filter". A second such language ends that,
+     so the suffix entry is gone and `_json_template_verdict` decides
+     between the two, threaded to `_target_type_for` as `classifications`.
+     Worse than it first looked: `_normalize_kics` passes no `reported` at
+     all, so the stale mapping would have mislabelled **every** KICS finding
+     on a CloudFormation template, not merely the secrets path.
+   - `.template` is checkov's own extension and is sniffed rather than
+     trusted, so a file merely named like one is not admitted.
 
-   *Whether `.yaml` stays cheap is a measurement, not a deduction.* The
-   Kubernetes admission was safe because both tools read a directory of mixed
-   YAML and reported only the manifest, silently skipping the rest (§6 step
-   3). That measurement says nothing about what happens once
-   `cloudformation` is switched on: the question is whether a Kubernetes
-   manifest and a CloudFormation stack in the same snapshot each get read by
-   exactly one parser, or whether the CloudFormation parser now has an
-   opinion about the manifest. Re-run the mixed-directory test with the
-   scanner enabled before trusting it.
+   **The two sniffs are exclusive, measured rather than argued.** Over the
+   whole `azure-quickstart-templates` tree — 4849 `.json`, a strictly larger
+   set than the 519 of `quickstarts/microsoft.storage` that grounded the ARM
+   work — 1887 sniff as ARM, **0 as CloudFormation, 0 as both**. The
+   exclusivity is structural: ARM declares a `$schema`, CloudFormation an
+   `AWSTemplateFormatVersion` or resource types in `AWS::`/`Alexa::`/
+   `Custom::`, and neither vocabulary appears in the other.
 
-   Then the ordinary remainder: the corpus mappings (AWS controls are
-   already vendored — what is missing is the rule ids, which have to be
-   observed rather than guessed), eval cases in both syntaxes, and the
-   coverage badge. All three scanners cover CloudFormation, so it is
-   three-source and needs no single-source caveat.
+   **One thing the plan got wrong, caught by its own test.**
+   `AWSTemplateFormatVersion` is *optional* — `cdk synth` omits it — so
+   `_is_cfn_document` has a parsed fallback over the `Resources` mapping.
+   The first implementation gated that fallback behind the cheap marker
+   regex, which made it unreachable for exactly the templates it existed
+   for. `CFN_RESOURCE_TYPE_RE` is the second cheap gate that fixes it, and
+   the property that mattered is preserved: `json.loads` is still never
+   called on a 4MB lockfile.
+
+   **Three-source, so no badge.** All three scanners read CloudFormation, so
+   unlike OpenTofu and pre-2026-09-23 Bicep it needs no single-source
+   caveat and `dashboard/src/review/coverage.ts` is untouched.
+
+   Seven eval cases, all labelled against the pinned tools: five positive,
+   a clean control, and `cfn-json-syntax` — the syntax-equivalence control,
+   which is the first case in the corpus whose point is the file format
+   rather than the vulnerability. Two per-tool gaps are labelled rather than
+   papered over: checkov raises **no** S3 encryption check on a template
+   where both other tools do, and Trivy reports nothing at all on a
+   full-admin IAM policy — the latter *not* a CloudFormation gap, since
+   `AWS-0057` is deprecated and off by default and the Terraform case is
+   checkov-only for the same reason.
+
+   **What the clean control had to do to be clean is worth knowing.** Two
+   KICS queries fire on essentially any template: `0104165b` wants an
+   ingress CIDR of fewer than 256 hosts, so a `/24` is one host too many;
+   and `8d29754a` fires on any template that does not declare an
+   `AWS::AccessAnalyzer::Analyzer` — an account-level control expressed as a
+   per-template check. Both are satisfiable, unlike the four Trivy ARM rules
+   in `docs/trivy-azure-arm-adapter-gap.md`, so they are satisfied rather
+   than dropped from the corpus. They will fire on real user templates.
+
 5. **Bicep/ARM.** ✅ **Built 2026-09-22**, gates first as always: the ARM
    and Bicep structural guards and the ARM suppression marker, the CIS Azure
    3.0 corpus, the volume measurement and the single-source badge, 14 eval
