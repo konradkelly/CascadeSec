@@ -500,10 +500,13 @@ By cost, and each step earns the next:
    *Trivy's `azure-arm` adapter is weaker than its scanner list suggests.* It
    claimed 92 of 175 valid templates and said nothing about the other 83, and
    four of its rules -- `AZU-0056`, `AZU-0057`, `AZU-0058`, `AZU-0013` --
-   fire regardless of what the template declares: `Standard_GRS` raises the
-   geo-redundancy rule while a real quickstart on `Standard_LRS` escapes it.
-   The same intent in Terraform clears all four, so it is the adapter and not
-   the checks. Three were unmapped in the corpus as a result: a finding no
+   cannot be cleared by configuring what they name. Trivy's own pass/fail
+   census over the 175 templates gives `AZU-0057` 0 PASS / 25 FAIL,
+   `AZU-0058` 0 PASS / 25 FAIL and `AZU-0013` 0 PASS / 13 FAIL. Dumping the
+   adapted state a check receives says why: `accountreplicationtype` is
+   empty on a template declaring `Standard_GRS`, because the adapter reads
+   `properties` and not its sibling `sku`. The same intent in Terraform
+   clears all four, so it is the adapter and not the checks. Three were unmapped in the corpus as a result: a finding no
    edit can clear would be drafted, failed and redrafted forever.
 
    *The CIS edition is part of the citation here*, unlike CIS Kubernetes
