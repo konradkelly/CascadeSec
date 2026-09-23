@@ -196,12 +196,18 @@ a candidate control.**
 
 Two measurements from that run worth keeping.
 
-**Trivy detected 92 of the 175 ARM templates**, and said nothing about the other
-83 -- no parse error, no mention. They are valid JSON carrying the ARM
-`$schema`, so the scanner's own parse check clears them; Trivy simply did not
-claim them. This is why that check exists rather than a wider stderr regex (see
-multi-iac-spec §4). checkov reported 8 real `parsing_errors` on the same tree,
-4 ARM and 4 Bicep, which is the path working as intended.
+**Trivy produced a result for 92 of the 175 ARM templates.** Checked
+2026-09-23 rather than left as a worry: the other 84 declare resource types
+Trivy has no Azure checks for -- 44 virtual networks, 32 public IPs, 15
+application gateways -- and `--debug` reports `[rego] Scanning inputs count=1`
+for them, so they are parsed and scanned and match nothing. Exactly one of the
+84 declares something checkable, and it is a `vaults/accessPolicies` child
+rather than a vault. So this is ordinary coverage, not a silent skip.
+
+What does still hold is why the scanner parses ARM itself rather than widening
+a stderr regex: Trivy emits no parse error for ARM at all (multi-iac-spec §4).
+checkov reported 8 real `parsing_errors` on the same tree, 4 ARM and 4 Bicep,
+which is that path working as intended.
 
 **checkov reports no severity on Azure either.** All 1006 checkov findings carry
 `severity: None`, as all 250 Kubernetes ones did. The §5.1 conclusion that a
@@ -234,8 +240,14 @@ the rest empty. On a fully hardened template `accountreplicationtype` is
 enablelogging` is `false` despite a `queueServices` child configuring it.
 The adapter does not read `sku` (a sibling of `properties`) or the child
 resources. The same intent in Terraform clears all of them, so the checks are
-correct and the adapter is not. This is of a piece with Trivy claiming only
-92 of the 175 templates it was given.
+correct and the adapter is not.
+
+*A second earlier claim, also withdrawn: that Trivy "claimed only 92 of the
+175 templates" was offered as corroboration. It is not evidence of anything.
+The other 84 declare resource types Trivy has no Azure checks for -- 44
+virtual networks, 32 public IPs, 15 application gateways -- and `--debug`
+confirms they are parsed and scanned. They match nothing because there is
+nothing to match.*
 
 *An earlier version of this section said a template using `Standard_LRS`
 "escapes" `AZU-0058`. That was read off the failure list, where a check that

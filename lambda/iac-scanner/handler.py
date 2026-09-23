@@ -189,6 +189,51 @@ TRIVY_MISCONFIG_SCANNERS = "terraform,kubernetes,azure-arm"
 # directory, not our list.
 CHECKOV_SECRETS_ALL_FILES = "--enable-secret-scan-all-files"
 
+# Rules the pinned Trivy cannot satisfy on ARM, whatever the template says.
+#
+# This is a deliberate exception to the rule that the scanner reports
+# everything a deterministic check raises (spec §8.1), and the only one. It is
+# scoped to a single target type and a single tool because the same rules are
+# correct on Terraform, where they are left alone.
+#
+# Measured 2026-09-23 against Trivy 0.74.0, which is the current release, so
+# there is no version to move to. Two instruments agree:
+#
+#   - `--include-non-failures` over 175 real templates from
+#     Azure/azure-quickstart-templates: AZU-0057 0 PASS / 25 FAIL, AZU-0058
+#     0 PASS / 25 FAIL, AZU-0013 0 PASS / 13 FAIL. Not one template satisfies
+#     any of them. AZU-0056 passes 7 times, but only on accounts that declare
+#     nothing about blobs at all -- every template that actually configures
+#     deleteRetentionPolicy next to a realistic `properties` block fails it,
+#     at 30 days and at 365, so the pass is the say-nothing default rather
+#     than somewhere a fix could get to.
+#   - Dumping the adapted state a Rego check is handed: the adapter fills the
+#     fields it reads out of `properties` (minimumtlsversion comes back
+#     TLS1_2, enforcehttps true) and leaves the rest. On a fully hardened
+#     template accountreplicationtype is "" despite `"sku": {"name":
+#     "Standard_GRS"}`, and queueproperties.enablelogging is false despite a
+#     queueServices child configuring it. It does not read `sku`, a sibling of
+#     `properties`, nor the child resources.
+#
+# The same intent in Terraform clears all four, so the checks are right and
+# the adapter is not. docs/trivy-azure-arm-adapter-gap.md is the writeup.
+#
+# Why drop rather than report: these were already unmapped, so nothing was
+# ever drafted from them, but they were still 87 of the 264 Trivy findings on
+# that corpus -- a third of the output, permanently unresolvable, returning on
+# every scan. A findings list where a third of the entries can never be
+# actioned is one a reviewer learns to skim, and reviewer attention is the
+# scarce resource this project is built around. Dropping them is a filter, so
+# it is stated here, tested, and pinned to a Trivy version: a bump must
+# re-run the check above before keeping this list, exactly as it must re-run
+# the eval.
+ARM_UNSATISFIABLE_TRIVY_RULES = frozenset({
+    "AZU-0013",  # key vault network acls -- networkAcls declared, still fails
+    "AZU-0056",  # blob soft delete -- child resource not read
+    "AZU-0057",  # storage logging -- queueproperties.enablelogging always false
+    "AZU-0058",  # geo-redundant replication -- accountreplicationtype always ""
+})
+
 # Trivy's Result.Class -> finding_class. Trivy already separates the two axes
 # this project needs, which is where §3.1's design came from: Class says what
 # kind of problem, Type says what was scanned.
@@ -571,6 +616,12 @@ def _normalize_trivy(results, pr_id):
     now = datetime.now(timezone.utc).isoformat()
     findings = []
     for r in results:
+        target_type = _target_type_for(r.get("Target", ""), r.get("Type"))
+        if target_type == "arm" and r.get("ID") in ARM_UNSATISFIABLE_TRIVY_RULES:
+            # See ARM_UNSATISFIABLE_TRIVY_RULES. Not a severity or noise
+            # judgement: these cannot pass on this target type, so they
+            # separate nothing.
+            continue
         cause = r.get("CauseMetadata") or {}
         findings.append(_build_finding(
             pr_id=pr_id,
@@ -583,7 +634,7 @@ def _normalize_trivy(results, pr_id):
             file_path=r.get("Target", ""),
             line_range=[cause.get("StartLine"), cause.get("EndLine")],
             severity=(r.get("Severity") or "UNKNOWN").upper(),
-            target_type=_target_type_for(r.get("Target", ""), r.get("Type")),
+            target_type=target_type,
             finding_class=TRIVY_CLASS_TO_FINDING_CLASS.get(r.get("Class"), "misconfiguration"),
             now=now,
             resource=cause.get("Resource") or "",
