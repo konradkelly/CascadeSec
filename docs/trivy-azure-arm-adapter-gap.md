@@ -158,7 +158,16 @@ Only one of the 84 declares anything checkable, and that is a
 
 ## What this project did meanwhile
 
-Dropped the four ids for ARM targets only, in the scanner's normalisation
-step, pinned to Trivy 0.74.0 and covered by a test that fails if they are
-still mapped to a control. They remain enabled for Terraform. If the adapter
-is fixed, that list should be deleted and the eval re-run.
+First the four ids were dropped for ARM targets only, in the scanner's
+normalisation step. A day later that was replaced by the better fix: **Trivy
+no longer scans ARM here at all.** KICS took over ARM and Bicep, Trivy kept
+Terraform and Kubernetes, and the filter was deleted -- with `azure-arm` off
+the scanner list there was nothing left for it to filter, and a filter that
+never fires is one nobody remembers to remove. The three rules that had been
+unmapped are mapped again, because on Terraform's azurerm resources they are
+correct.
+
+So this report costs us nothing now, and is filed in the hope it is useful to
+somebody scanning ARM with Trivy who has not measured it. If the adapter is
+fixed, `azure-arm` can go back on the list and be measured against KICS on
+the same corpus.

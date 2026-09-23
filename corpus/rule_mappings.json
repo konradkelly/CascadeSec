@@ -604,6 +604,122 @@
         "control_id": "CICD-SEC-9"
       }
     ],
+    "kics:1367dd13-2c90-4020-80b7-e4339a3dc2c4": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.1"
+      }
+    ],
+    "kics:2ade1579-4b2c-4590-bebb-f99bf597f612": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "7.2"
+      }
+    ],
+    "kics:487f4be7-3fd9-4506-a07a-eae252180c08": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-5"
+      },
+      {
+        "framework": "OWASP-CICD-Top10",
+        "control_id": "CICD-SEC-6"
+      }
+    ],
+    "kics:488847ff-6031-487c-bf42-98fd6ac5c9a0": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.1"
+      }
+    ],
+    "kics:4d2cf896-c053-4be5-9c95-8b4771112f29": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-5"
+      },
+      {
+        "framework": "OWASP-CICD-Top10",
+        "control_id": "CICD-SEC-6"
+      }
+    ],
+    "kics:564b70f8-41cd-4690-aff8-bb53add86bc9": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "7.5"
+      }
+    ],
+    "kics:59cb3da7-f206-4ae6-b827-7abf0a9cab9d": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "7.1"
+      }
+    ],
+    "kics:6a3201a5-1630-494b-b294-3129d06b0eca": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.1.2"
+      }
+    ],
+    "kics:7c25f361-7c66-44bf-9b69-022acd5eb4bd": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.5"
+      }
+    ],
+    "kics:90120147-f2e7-4fda-bb21-6fa9109afd63": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.3.1"
+      }
+    ],
+    "kics:9073f073-5d60-4b46-b569-0d6baa80ed95": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.7"
+      }
+    ],
+    "kics:b5c851d5-00f1-43dc-a8de-3218fd6f71be": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.4"
+      }
+    ],
+    "kics:c09cdac2-7670-458a-bf6c-efad6880973a": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.1.6"
+      }
+    ],
+    "kics:cff9c3f7-e8f0-455f-9fb4-5f72326da96e": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.3"
+      }
+    ],
+    "kics:d855ced8-6157-448f-9f1d-f05a41d046f7": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.7"
+      }
+    ],
+    "kics:e055285c-bc01-48b4-8aa5-8a54acdd29df": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "5.1.1"
+      }
+    ],
+    "kics:e25b56cd-a4d6-498f-ab92-e6296a082097": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.8"
+      }
+    ],
+    "kics:e9c133e5-c2dd-4b7b-8fff-40f2de367b56": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "9.2"
+      }
+    ],
     "trivy:AWS-0014": [
       {
         "framework": "CIS-AWS-1.4",
@@ -828,6 +944,12 @@
         "control_id": "4.7"
       }
     ],
+    "trivy:AZU-0013": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "3.3.7"
+      }
+    ],
     "trivy:AZU-0014": [
       {
         "framework": "CIS-Azure-3.0",
@@ -862,6 +984,18 @@
       {
         "framework": "CIS-Azure-3.0",
         "control_id": "7.5"
+      }
+    ],
+    "trivy:AZU-0056": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.10"
+      }
+    ],
+    "trivy:AZU-0057": [
+      {
+        "framework": "CIS-Azure-3.0",
+        "control_id": "4.13"
       }
     ],
     "trivy:AZU-0059": [

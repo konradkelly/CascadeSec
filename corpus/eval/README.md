@@ -152,7 +152,34 @@ value in a local-development overlay looks exactly like this finding. Whether
 that matters is a reviewer's call recorded in the dashboard, not something
 the scanner decides (spec §8.1).
 
-## The Azure cases (added 2026-09-22)
+## The Azure cases (added 2026-09-22; relabelled 2026-09-23)
+
+**Relabelled when KICS replaced Trivy on ARM and Bicep** (`multi-iac-spec`
+§6.2). Every `trivy:AZU-*` label on an ARM case is gone, because Trivy no
+longer scans the language; the KICS query covering the same control takes its
+place. Re-measured through the scanner afterwards: **155 of 157 labelled
+pairs fire across the whole 83-case corpus**, the two misses being the
+long-standing `CKV_AWS_60` and `CKV_SECRET_6` tool gaps documented below. By
+source: KICS 13/13, Trivy 57/57, checkov 85/87.
+
+Two things the relabelling turned up.
+
+**`arm-storage-no-infrastructure-encryption` detects nothing any more**, and
+is kept as a labelled coverage gap rather than deleted. CIS Azure 4.2 was
+raised on ARM only by Trivy's `AZU-0061`, and neither remaining tool has an
+infrastructure-encryption query for ARM. The template genuinely lacks the
+setting and no tool now says so. Deleting the case would have deleted the
+only record of that.
+
+**Both tools gate the trusted-services check the same way.** KICS's
+`Trusted Microsoft Services Not Enabled` was labelled on the two
+`default-allow` cases and does not fire there -- for exactly the reason
+checkov's `CKV_AZURE_36` does not, which was the correction logged in the
+first run: both require `defaultAction` to be Deny before asking about the
+bypass list, and with Allow there is nothing to bypass. Two independent
+tools agreeing makes that the rule rather than a quirk of one.
+
+## The Azure cases: what they cover
 
 14 cases: six ARM, six Bicep, and a clean control for each. They were labelled
 a priori from what each rule is for, then confirmed by running the pinned
@@ -170,7 +197,20 @@ compared directly rather than each being tested on whatever was convenient.
 guard rather than for detection, since a Bicep `module` deploys a whole
 sub-template and deleting one has to be caught.
 
-### Bicep is covered, and is checkov-only
+### Bicep is covered, and had one source for a day
+
+*Rewritten 2026-09-23.* What follows described Bicep as checkov-only, which
+was true of the two scanners this project had at the time and stopped being
+true when KICS arrived: it parses `.bicep` natively, so every Bicep case now
+has two sources and the self-check compares two tools. The original reasoning
+is kept below because OpenTofu still needs it.
+
+The clearest sign of the change is `bicep-storage-network-default-allow`,
+which used to expect one rule where its ARM twin expected three: CIS Azure
+4.8 was reachable only through Trivy, and Trivy has no Bicep scanner. KICS
+covers 4.8 on both languages, so the asymmetry is gone.
+
+### The single-source caveat, which is now OpenTofu's alone
 
 The mirror of OpenTofu above, with the tools reversed: Trivy has no Bicep
 scanner at all (`multi-iac-spec` §2), so every Bicep case is labelled with
@@ -279,7 +319,9 @@ tolerating that unknown block, the second case goes red.
 **Measured the same day, and worth knowing: checkov does not open `.tofu`.**
 Zero checkov findings on either case, where the identical `.tf`
 (`s3-no-encryption`) raises `CKV_AWS_145` and six more. So OpenTofu files
-have Trivy-only coverage — the mirror of Bicep being checkov-only — which
+have Trivy-only coverage — described here as the mirror of Bicep being
+checkov-only until KICS gave Bicep a second source on 2026-09-23, leaving
+OpenTofu the only single-source target — which
 also means a single-source self-check for them. Labelled in both cases
 rather than counted as a miss.
 

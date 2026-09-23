@@ -3,16 +3,8 @@
   "category": "encryption-at-rest-and-in-transit",
   "expected": [
     {
-      "source": "trivy",
-      "rule_id": "AZU-0008"
-    },
-    {
-      "source": "trivy",
-      "rule_id": "AZU-0011"
-    },
-    {
-      "source": "trivy",
-      "rule_id": "AZU-0059"
+      "source": "kics",
+      "rule_id": "1367dd13-2c90-4020-80b7-e4339a3dc2c4"
     },
     {
       "source": "checkov",
@@ -23,5 +15,5 @@
       "rule_id": "CKV_AZURE_44"
     }
   ],
-  "note": "CIS Azure 4.1 and 4.15. A storage account that answers over plain HTTP and accepts TLS 1.0 -- the two halves of the same mistake, which is why AZU-0059 raises for both."
+  "note": "CIS Azure 4.1 and 4.15. A storage account that answers over plain HTTP and accepts TLS 1.0. Relabelled 2026-09-23 when KICS replaced Trivy on ARM and Bicep: Trivy's ARM adapter could not satisfy four of its own checks (docs/trivy-azure-arm-adapter-gap.md), so the trivy:AZU-* labels here are gone and the KICS query that covers the same control takes their place. Note the halves split between tools now: KICS covers the plain-HTTP half (4.1) and checkov the TLS-version half (4.15), where Trivy's AZU-0059 had raised for both at once."
 }

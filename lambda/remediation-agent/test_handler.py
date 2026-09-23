@@ -230,6 +230,11 @@ def test_detects_the_real_suppression_diff_from_pugetscope():
     # ARM: strict JSON has no comments, so checkov's structured skip is the
     # only dialect there is and it carries none of the comment markers.
     '"checkov": { "skip": [ { "id": "CKV_AZURE_3", "comment": "accepted" } ] }',
+    # KICS. Not honoured on Bicep or ARM as of v2.1.20, and caught anyway:
+    # the set is a union so that a language added to a scanner is never
+    # missing from here.
+    "// kics-scan ignore-line",
+    "// kics-scan disable=1367dd13-0ee9-4c8a-8a2b-2b2b6c2ba1ba",
 ])
 def test_every_suppression_dialect_is_caught(marker):
     diff = f"--- a/main.tf\n+++ b/main.tf\n@@ -1 +1,2 @@\n {marker.upper()}\n+  {marker}\n"

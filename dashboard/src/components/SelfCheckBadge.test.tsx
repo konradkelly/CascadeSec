@@ -148,16 +148,22 @@ describe('coverage caveat', () => {
   }
 
   it('says which scanner ran when only one covers the language', () => {
-    // Trivy has no Bicep scanner; checkov will not open a .tofu file.
-    expect(badges('bicep')).toHaveTextContent('checkov only')
+    // checkov will not open a .tofu file, so Trivy carries OpenTofu alone.
     expect(badges('opentofu')).toHaveTextContent('Trivy only')
   })
 
-  it('says nothing extra for a language both scanners parse', () => {
+  it('says nothing extra for a language more than one scanner parses', () => {
     expect(badges('terraform')).toBeNull()
     expect(badges('arm')).toBeNull()
     expect(badges('kubernetes')).toBeNull()
     expect(badges(undefined)).toBeNull()
+  })
+
+  it('stopped flagging bicep once KICS gave it a second source', () => {
+    // Bicep was checkov-only while Trivy was the other tool, and Trivy has
+    // no Bicep scanner. KICS parses .bicep natively (2026-09-23), so the
+    // self-check compares two tools and the caveat would now be false.
+    expect(badges('bicep')).toBeNull()
   })
 
   it('adds to the verdict and never replaces it', () => {
@@ -168,21 +174,21 @@ describe('coverage caveat', () => {
     render(
       <SelfCheckBadge
         proposedFix={{ self_check_passed: false, cleared: false, self_check_new_findings: [] }}
-        targetType="bicep"
+        targetType="opentofu"
       />,
     )
 
     expect(screen.getByText('Self-check failed')).toBeInTheDocument()
-    expect(screen.getByText('checkov only')).toBeInTheDocument()
+    expect(screen.getByText('Trivy only')).toBeInTheDocument()
   })
 
   it('explains the caveat on hover rather than only labelling it', () => {
     cleanup()
-    render(<SelfCheckBadge proposedFix={{ self_check_passed: true }} targetType="bicep" />)
+    render(<SelfCheckBadge proposedFix={{ self_check_passed: true }} targetType="opentofu" />)
 
-    expect(screen.getByText('checkov only')).toHaveAttribute(
+    expect(screen.getByText('Trivy only')).toHaveAttribute(
       'title',
-      "Trivy and checkov do not both parse bicep, so the rescan compared checkov's findings alone. " +
+      "Trivy and checkov do not both parse opentofu, so the rescan compared Trivy's findings alone. " +
         'Weaker than a two-tool check, not absent.',
     )
   })

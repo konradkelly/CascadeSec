@@ -27,9 +27,11 @@ CORPUS = pathlib.Path(__file__).parent
 FRAMEWORKS = sorted((CORPUS / "frameworks").glob("*.json"))
 EVAL_CASES = sorted(p for p in (CORPUS / "eval" / "cases").iterdir() if p.is_dir())
 
-# What a finding's `source` may be. Both scanners, and nothing else: an
-# eval label naming a third would be a typo, not a new tool.
-KNOWN_SOURCES = {"trivy", "checkov"}
+# What a finding's `source` may be. The three scanners, and nothing else:
+# an eval label naming a fourth would be a typo, not a new tool. kics
+# joined 2026-09-23 for ARM and Bicep, where Trivy's adapter cannot
+# satisfy its own checks (docs/trivy-azure-arm-adapter-gap.md).
+KNOWN_SOURCES = {"trivy", "checkov", "kics"}
 
 # What a candidate's optional `target_type` scope may say. Must stay in step
 # with iac-scanner's SUFFIX_TARGET_TYPES and the types the tools report

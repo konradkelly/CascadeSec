@@ -110,14 +110,14 @@ CI runs the Lambda test suites (pytest, 217 tests) and the dashboard lint + type
 
 - [x] v1 — Terraform scanning, mapping, remediation, review dashboard (manual trigger, no GitHub write-back)
 - [~] v2 — Kubernetes manifest scanning (**built 2026-09-20**); Helm charts held back, see [`docs/multi-iac-spec.md`](docs/multi-iac-spec.md) §6
-- [~] v2 — Azure ARM templates and Bicep (**built 2026-09-22**), with CIS Azure 3.0; Bicep is checkov-only and says so on the badge
+- [~] v2 — Azure ARM templates and Bicep (**built 2026-09-22**), with CIS Azure 3.0; KICS scans both since 2026-09-23, after Trivy's ARM adapter was measured unable to satisfy four of its own checks
 - [ ] v3 — GitHub App / PR-triggered CI integration
 - [ ] v4 — Approved-fix write-back to PR branch
 
 ## Tech stack
 
 - **Infra:** AWS Lambda (zip and container-image), Step Functions, API Gateway, DynamoDB, S3, ECR, Cognito, CloudFront, Secrets Manager, CloudWatch (EMF metrics, alarms), X-Ray, SNS — all in Terraform
-- **Scanning:** Trivy, Checkov, custom Trivy checks in Rego — Terraform, OpenTofu, Kubernetes manifests, Azure ARM templates and Bicep
+- **Scanning:** Trivy, Checkov, KICS, custom Trivy checks in Rego — Terraform, OpenTofu, Kubernetes manifests, Azure ARM templates and Bicep
 - **Agents:** Anthropic API, strict JSON-schema-constrained outputs
 - **Frontend:** React, Vite, TypeScript
 - **CI:** GitHub Actions — pytest per Lambda, oxlint + `tsc` for the dashboard

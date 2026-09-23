@@ -98,22 +98,22 @@ describe('FixGroups', () => {
     expect(screen.getByText('Waits on an earlier fix')).toBeInTheDocument()
   })
 
-  it('warns on a bicep group that only one scanner verified it', async () => {
+  it('warns on a group that only one scanner verified', async () => {
     // A group is the cheapest decision on the page: one approval covers
     // every fix in it. So the single-source caveat (multi-iac-spec §4) has
     // to reach the group header, not just the fixes inside it.
     renderGroups([
-      finding({ finding_id: 'a', file: 'main.bicep', target_type: 'bicep',
-                control_mappings: [{ framework: 'CIS-Azure-3.0', control_id: '4.1' }] }),
-      finding({ finding_id: 'b', file: 'storage.bicep', target_type: 'bicep',
-                control_mappings: [{ framework: 'CIS-Azure-3.0', control_id: '4.1' }] }),
+      finding({ finding_id: 'a', file: 'main.tofu', target_type: 'opentofu',
+                control_mappings: [{ framework: 'CIS-AWS-1.4', control_id: '2.1.1' }] }),
+      finding({ finding_id: 'b', file: 'net.tofu', target_type: 'opentofu',
+                control_mappings: [{ framework: 'CIS-AWS-1.4', control_id: '2.1.1' }] }),
     ])
 
     // Both the header and each fix inside carry it, which is intended -- so
     // the header badge is addressed by its own class rather than by text.
     const header = document.querySelector('.fix-group__target')
-    expect(header).toHaveTextContent('bicep · checkov only')
-    expect(header).toHaveAttribute('title', expect.stringContaining('do not both parse bicep'))
+    expect(header).toHaveTextContent('opentofu · Trivy only')
+    expect(header).toHaveAttribute('title', expect.stringContaining('do not both parse opentofu'))
   })
 
   it('says nothing extra on a group both scanners verified', async () => {

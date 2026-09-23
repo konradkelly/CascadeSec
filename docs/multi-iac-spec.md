@@ -43,7 +43,7 @@ Measured, not inferred:
 | **Helm** | ✅ renders charts natively | ✅ | not yet measured |
 | **CloudFormation** | ✅ 8 rules on a bare bucket | ✅ 6 failed checks | same template, both tools |
 | **ARM** | ✅ `azure-arm`, ids `AZU-nnnn` | ✅ `arm` | Measured 2026-09-22 on `azure-quickstart-templates` (175 templates): Trivy **264 findings, 30 rules**; checkov **640**. Four Trivy rules cannot pass on ARM at all and are dropped for that target -- see `docs/trivy-azure-arm-adapter-gap.md` |
-| **Bicep** | ❌ not a Trivy scanner | ✅ `bicep` | 4 Azure findings (`CKV_AZURE_3/35/44/206`) on a storage account with `supportsHttpsTrafficOnly: false`. At scale (107 files): **366 findings**. The runner loads in the stripped image -- `pycep-parser` survives the numpy strip, verified 2026-09-22 |
+| **Bicep** | ❌ not a Trivy scanner; **KICS parses it natively** | ✅ `bicep` | 4 Azure findings (`CKV_AZURE_3/35/44/206`) on a storage account with `supportsHttpsTrafficOnly: false`. At scale (107 files): **366 findings**. The runner loads in the stripped image -- `pycep-parser` survives the numpy strip, verified 2026-09-22 |
 | **Pulumi** | ❌ | ❌ | no runner in either; see §7 |
 | **CDK** | ❌ | ~ `cdk` runner, but SAST over TypeScript/Python, not a resource graph | out of scope with Pulumi |
 
@@ -59,6 +59,13 @@ re-testing on each Trivy bump, because it is incidental rather than promised.
 **Bicep is checkov-only.** That is the first time the two scanners will not
 be interchangeable for a language, and §4 has to say what a self-check means
 when only one tool covers the file.
+
+*Superseded 2026-09-23.* It stopped being true when a third scanner arrived:
+KICS parses `.bicep` natively, so Bicep has two sources and the single-source
+caveat is retired. The paragraph is kept because the reasoning it forced --
+what a self-check means with one tool -- is still what OpenTofu needs, and
+because "this language has one source" turned out to be a fact about the
+tools we had chosen rather than about the language. §6.2 has the swap.
 
 ## 3. The architecture: one scanner, many `iac_type`s
 
@@ -269,7 +276,8 @@ ARM and Bicep do not need this — checkov reports `parsing_errors` for both —
 but ARM gets it anyway when it is admitted, since the `$schema` sniff has to
 parse the file to classify it at all.
 
-**And where only one tool covers the language** (Bicep), the self-check has
+**And where only one tool covers the language** (OpenTofu; Bicep until
+2026-09-23, see §6.2), the self-check has
 one source rather than two. That is weaker but not broken — the comparison is
 per `(source, rule_id)`, so it degrades to checkov alone. It should be said
 in the UI, not discovered.
@@ -514,6 +522,59 @@ By cost, and each step earns the next:
    `corpus/README.md`.
 6. **Pulumi/CDK.** §7.
 
+### 6.2 Trivy gives up ARM to KICS, 2026-09-23
+
+Step 5 shipped with Trivy and checkov on ARM and checkov alone on Bicep. A
+day later four of Trivy's own Azure rules turned out to be unsatisfiable on
+an ARM template -- its adapter reads `properties` and not its sibling `sku`,
+nor the child resources -- and they were a third of its ARM output
+(`docs/trivy-azure-arm-adapter-gap.md`). Dropping them was a filter over a
+tool that was the wrong tool for the input.
+
+So a third scanner, scoped to the two languages that need it. Measured on the
+same 175 ARM templates and 107 Bicep files:
+
+| | Trivy `azure-arm` | checkov | KICS |
+|---|---|---|---|
+| findings | 264, of which 87 unusable | 1006 | 329 |
+| hardened template | 3 false positives | clean | clean |
+| NSG open to the internet | silent | catches | catches |
+| Bicep | none | yes | **yes, natively** |
+| severity | yes | **none** | yes, all five levels |
+| names the files it could not parse | no | yes | **no** |
+
+Three consequences, and the first two are the reason this was worth doing
+rather than living with the filter.
+
+**Bicep is no longer single-source.** KICS parses it natively, so §4's caveat
+and the badge built for it in `dashboard/src/review/coverage.ts` apply to
+OpenTofu alone now. The §9 decision that enabled Bicep on a weaker check
+stands, but the weakness it accepted is gone.
+
+**§5.1's fact 1 is narrower than it looked.** "A severity floor is Trivy-only
+in practice, because checkov reports no severity" was true of the two tools
+we had. KICS reports a severity on every finding -- 1 CRITICAL, 106 HIGH, 165
+MEDIUM, 55 LOW, 2 INFO on the corpus -- so on ARM and Bicep a floor is
+available. The decision not to have one was made on other grounds (the cost
+is repetition, not severity) and does not change; the stated reason for it
+does.
+
+**Trivy keeps its Azure rules, because it keeps Terraform.** `AZU-0056`,
+`AZU-0057` and `AZU-0013` were unmapped on 2026-09-22 for being unsatisfiable
+on ARM. Trivy no longer sees ARM, and on Terraform's azurerm resources those
+rules are correct -- measured -- so their mappings are restored. The
+scanner-side filter is deleted rather than kept: with `azure-arm` off the
+list there is nothing left for it to filter, and a filter that no longer
+fires is one nobody will remember to remove.
+
+*What KICS does not do:* it will not name a file it could not parse. It
+reports `files_failed_to_scan: 0` while silently dropping one, and the only
+signal is the gap between `files_scanned` and `files_parsed` -- a count
+without names, which cannot join `scan_errors`. That is the fail-open shape
+§4 exists to prevent, so KICS is deliberately not the sole source for either
+language: the scanner's own `_arm_verdict` and checkov's `parsing_errors`
+both name the file, and between them ARM and Bicep are covered.
+
 ### 6.1 Azure volume, measured 2026-09-22
 
 §5 asks what a new language does to remediation volume before it is enabled.
@@ -631,6 +692,10 @@ to find out whether the schema mapping holds.**
       the findings table, and on the fix group, which is where a bulk
       approval is decided (`dashboard/src/review/coverage.ts`). The badge
       adds to the verdict and never softens it.
+      **Moot for Bicep since 2026-09-23** (§6.2): KICS parses `.bicep`,
+      so it has two sources and the badge is OpenTofu's alone. The
+      decision was still the right one -- it shipped the language a week
+      earlier than waiting for a second tool would have.
 - [x] Which CIS benchmark editions to vendor, and their licensing. Decided
       2026-09-19 for Kubernetes: v2.0.0, the current edition (Kubernetes
       1.34-1.35), section 5 only. Ids and titles are verified against

@@ -161,7 +161,7 @@ only thing keeping 239 Kubernetes findings out of remediation was the
 repository would each be drafted at full price, so the deliberate volume
 filter in that section is now due, not deferred.
 
-### Azure: ARM and Bicep (added 2026-09-22)
+### Azure: ARM and Bicep (added 2026-09-22; scanners changed 2026-09-23)
 
 `cis-azure-3.0.json` is the part of the CIS Microsoft Azure Foundations
 Benchmark v3.0.0 that a deployment template can satisfy or violate: 3.3 (Key
@@ -212,6 +212,47 @@ which is that path working as intended.
 **checkov reports no severity on Azure either.** All 1006 checkov findings carry
 `severity: None`, as all 250 Kubernetes ones did. The §5.1 conclusion that a
 severity floor is Trivy-only in practice holds unchanged for a second cloud.
+
+#### KICS replaced Trivy on ARM and Bicep, 2026-09-23
+
+A day after the section above was written, the four rules it describes were
+dealt with at the root rather than filtered: Trivy stopped scanning ARM, and
+KICS took over ARM and Bicep. Trivy keeps Terraform and Kubernetes, where it
+is the better of the tools. `docs/multi-iac-spec.md` §6.2 has the comparison
+and `docs/trivy-azure-arm-adapter-gap.md` the bug.
+
+**18 new candidates, keyed `kics:<query-uuid>`.** The uuid rather than the
+query name, because the name is prose and has been reworded upstream, where
+the id is what KICS treats as the rule's identity. The name rides along as
+the finding's title so a reviewer and the remediation prompt still get words.
+Grounded the same way as everything else here: every id was raised by the
+pinned KICS v2.1.20 on `azure-quickstart-templates`, through iac-scanner's
+own normalisation. That scan gave **329 findings over 25 queries -- 189 on
+ARM and 140 on Bicep**, with a severity on every one.
+
+**Three Trivy mappings came back.** `AZU-0056`, `AZU-0057` and `AZU-0013`
+were unmapped the day before for being unsatisfiable on ARM. Trivy no longer
+sees ARM, and on Terraform's azurerm resources those rules are correct, so
+the mappings are restored and the scanner-side filter is deleted. This is
+worth pausing on: the rules were never broken, the pairing of rule and
+*input* was. Unmapping them was the right call for the situation and the
+wrong one to keep once the situation changed.
+
+**Seven of the 25 KICS queries are unmapped**, and for the reasons the
+section below already gives: `Azure Instance Using Basic Authentication`
+(31 findings) is the same SSH-keys-vs-password gap in the benchmark;
+`SQL Server Database With Alerts Disabled` (27) and `SQL Alert Policy Without
+Emails` are Defender and notification settings, which live in the section 3.1
+this file deliberately does not vendor; `Website with Client Certificate Auth
+Disabled`, `Http20Enabled Disabled`, `AKS With Authorized IP Ranges Disabled`
+and `Account Admins Not Notified By Email` have no CIS Azure control at all.
+
+**One control lost its only source.** CIS Azure 4.2 (infrastructure
+encryption) was detected on ARM only by Trivy's `AZU-0061`. Neither KICS nor
+checkov has an equivalent query for ARM, so 4.2 is now reachable from
+Terraform alone. The eval case that exercised it is kept as a labelled
+coverage gap rather than deleted, so the hole is recorded where somebody will
+trip over it.
 
 #### Four Trivy rules that an ARM template cannot satisfy
 
