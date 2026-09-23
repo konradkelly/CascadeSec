@@ -230,6 +230,14 @@ def test_detects_the_real_suppression_diff_from_pugetscope():
     # ARM: strict JSON has no comments, so checkov's structured skip is the
     # only dialect there is and it carries none of the comment markers.
     '"checkov": { "skip": [ { "id": "CKV_AZURE_3", "comment": "accepted" } ] }',
+    # CloudFormation YAML: checkov's skip is a Metadata block whose key sits
+    # alone on its line, so `checkov:skip` matches nothing and ARM's quoted
+    # `"checkov"` does not reach an unquoted YAML key either.
+    "checkov:",
+    # cfn_nag, both keys: a template that already carries the block gets only
+    # the inner line added.
+    "cfn_nag:",
+    "rules_to_suppress:",
     # KICS. Not honoured on Bicep or ARM as of v2.1.20, and caught anyway:
     # the set is a union so that a language added to a scanner is never
     # missing from here.
@@ -238,6 +246,23 @@ def test_detects_the_real_suppression_diff_from_pugetscope():
 ])
 def test_every_suppression_dialect_is_caught(marker):
     diff = f"--- a/main.tf\n+++ b/main.tf\n@@ -1 +1,2 @@\n {marker.upper()}\n+  {marker}\n"
+
+    assert handler._find_added_suppressions(diff)
+
+
+def test_a_cfn_metadata_block_is_caught_line_by_line():
+    """The realistic diff: the agent adds the whole block. Every line of it
+    is an added line, and the gate only has to match one -- but the key line
+    is the one that is always there, whichever of the two systems it is."""
+    diff = """--- a/template.yaml
++++ b/template.yaml
+@@ -1 +1,5 @@
++    Metadata:
++      checkov:
++        skip:
++          - id: CKV_AWS_18
++            comment: accepted
+"""
 
     assert handler._find_added_suppressions(diff)
 
@@ -531,8 +556,8 @@ def test_unknown_target_type_is_refused_rather_than_passed():
     """multi-iac-spec §4: a language with no structural guard must not reach
     remediation. Refusing here is what makes the scanner's admission list
     the only place a language can be enabled."""
-    with pytest.raises(ValueError, match="cloudformation"):
-        handler._find_dropped_resources("a", "b", "cloudformation")
+    with pytest.raises(ValueError, match="dockerfile"):
+        handler._find_dropped_resources("a", "b", "dockerfile")
 
 
 # ---------- deletion gate: ARM ----------
@@ -725,6 +750,206 @@ def test_bicep_reader_holds_on_crlf_files():
     crlf = BICEP_ORIGINAL.replace("\n", "\r\n")
 
     assert handler._bicep_resources(crlf) == handler._bicep_resources(BICEP_ORIGINAL)
+
+
+# ---------- deletion gate: CloudFormation ----------
+
+# A bucket and a security group, in the YAML syntax and with the short-form
+# intrinsics a hand-written template actually uses. The listener is the shape
+# the reader has to NOT count: its `DefaultActions` carries a nested `Type:`
+# that is not a resource type.
+CFN_YAML_ORIGINAL = """AWSTemplateFormatVersion: '2010-09-09'
+Description: sample
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+Resources:
+  LogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-logs'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+
+  OpenGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: open
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  BucketArn:
+    Value: !GetAtt LogsBucket.Arn
+"""
+
+
+def test_cfn_yaml_resources_are_read_by_type_and_logical_id():
+    assert handler._cfn_resources(CFN_YAML_ORIGINAL) == [
+        ("AWS::S3::Bucket", "LogsBucket"),
+        ("AWS::EC2::SecurityGroup", "OpenGroup"),
+        ("AWS::ElasticLoadBalancingV2::Listener", "Listener"),
+    ]
+
+
+def test_cfn_a_nested_type_property_is_not_a_resource():
+    """`DefaultActions: - Type: forward` is a property of the listener, not a
+    fourth resource. A reader matching `Type:` at any depth would count it,
+    and the inflated before-count would then make an unrelated fix look like
+    a deletion."""
+    types = [t for t, _ in handler._cfn_resources(CFN_YAML_ORIGINAL)]
+
+    assert "forward" not in types
+    assert len(types) == 3
+
+
+def test_cfn_sections_other_than_resources_are_not_resources():
+    """`Parameters:` holds a `Type: AWS::EC2::VPC::Id` at the same shape a
+    resource has, and `Outputs:` follows the block. Only the top-level
+    `Resources:` mapping counts."""
+    ids = [n for _, n in handler._cfn_resources(CFN_YAML_ORIGINAL)]
+
+    assert "VpcId" not in ids
+    assert "BucketArn" not in ids
+
+
+def test_cfn_yaml_deleting_a_resource_is_reported():
+    corrected = CFN_YAML_ORIGINAL.replace("""  OpenGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: open
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+""", "")
+
+    assert handler._find_dropped_resources(CFN_YAML_ORIGINAL, corrected,
+                                           "cloudformation") == [
+        "AWS::EC2::SecurityGroup/OpenGroup"]
+
+
+def test_cfn_yaml_tightening_a_property_in_place_is_not_a_deletion():
+    """The fix this gate must let through: the CIDR is scoped, every resource
+    still stands."""
+    corrected = CFN_YAML_ORIGINAL.replace("CidrIp: 0.0.0.0/0",
+                                          "CidrIp: 10.0.0.0/8")
+
+    assert handler._find_dropped_resources(CFN_YAML_ORIGINAL, corrected,
+                                           "cloudformation") == []
+
+
+def test_cfn_renaming_a_resource_is_not_a_deletion():
+    """Same as Terraform's and Bicep's: the comparison is per type, so a
+    rename is a delete plus an add and nets to nothing."""
+    corrected = CFN_YAML_ORIGINAL.replace("OpenGroup:", "AdminGroup:")
+
+    assert handler._find_dropped_resources(CFN_YAML_ORIGINAL, corrected,
+                                           "cloudformation") == []
+
+
+def test_cfn_reader_holds_on_crlf_templates():
+    """Same reason as every other reader here: a snapshot is the file as the
+    repository holds it."""
+    crlf = CFN_YAML_ORIGINAL.replace("\n", "\r\n")
+
+    assert handler._cfn_resources(crlf) == handler._cfn_resources(CFN_YAML_ORIGINAL)
+
+
+def test_cfn_a_resource_with_no_readable_type_still_counts():
+    """Under an empty type, as the Kubernetes reader counts a document whose
+    name it cannot read. The alternative is that deleting a malformed
+    resource is free."""
+    template = "Resources:\n  Mystery:\n    Properties:\n      Foo: bar\n"
+
+    assert handler._cfn_resources(template) == [("", "Mystery")]
+
+
+def test_cfn_flow_style_resources_raises_rather_than_reading_none():
+    """A line-based reader cannot see into `Resources: {A: {Type: ...}}`, and
+    "no resources found" is indistinguishable from "this fix deletes
+    nothing". Rare, valid, and exactly the shape that would make the gate
+    pass on a template it never read."""
+    with pytest.raises(ValueError, match="flow style"):
+        handler._cfn_resources("Resources: {Bucket: {Type: AWS::S3::Bucket}}\n")
+
+
+def test_cfn_a_template_with_no_resources_section_is_not_an_error():
+    """Distinct from the flow-style case: there is nothing to see, rather
+    than something this reader cannot see. Both versions return nothing, so
+    no deletion can hide here."""
+    assert handler._cfn_resources("Outputs:\n  A:\n    Value: 1\n") == []
+
+
+CFN_JSON_ORIGINAL = json.dumps({
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Resources": {
+        "LogsBucket": {"Type": "AWS::S3::Bucket",
+                       "Properties": {"BucketName": "logs"}},
+        "OpenGroup": {"Type": "AWS::EC2::SecurityGroup",
+                      "Properties": {"GroupDescription": "open"}},
+    },
+    "Outputs": {"BucketArn": {"Value": {"Ref": "LogsBucket"}}},
+}, indent=2)
+
+
+def test_cfn_json_syntax_is_read_by_the_same_reader():
+    """A template is YAML or JSON and both are target_type `cloudformation`,
+    so the reader sniffs the content rather than being told."""
+    assert handler._cfn_resources(CFN_JSON_ORIGINAL) == [
+        ("AWS::S3::Bucket", "LogsBucket"),
+        ("AWS::EC2::SecurityGroup", "OpenGroup"),
+    ]
+
+
+def test_cfn_json_deleting_a_resource_is_reported():
+    doc = json.loads(CFN_JSON_ORIGINAL)
+    del doc["Resources"]["OpenGroup"]
+
+    assert handler._find_dropped_resources(
+        CFN_JSON_ORIGINAL, json.dumps(doc, indent=2), "cloudformation") == [
+        "AWS::EC2::SecurityGroup/OpenGroup"]
+
+
+def test_cfn_json_that_does_not_parse_raises_rather_than_passing():
+    """ARM's reasoning exactly: an empty list means "this fix deletes
+    nothing", and handing that verdict to a file nobody could read is the
+    gate failing open."""
+    with pytest.raises(ValueError, match="did not parse"):
+        handler._cfn_resources('{"Resources": {')
+
+
+def test_cfn_sam_transform_is_read_without_expanding_it():
+    """A SAM function is one declaration under the same `Resources:` key, so
+    the reader needs nothing added -- and must not count what the transform
+    would expand it into, or every SAM fix would look like a deletion."""
+    template = """Transform: AWS::Serverless-2016-10-31
+Resources:
+  Api:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.13
+"""
+
+    assert handler._cfn_resources(template) == [
+        ("AWS::Serverless::Function", "Api")]
 
 
 def _run_one_finding(mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, payload,
