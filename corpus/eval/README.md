@@ -18,7 +18,7 @@ Needs `boto3`, AWS credentials for the dev account, and the `terraform` CLI on
 
 **98.9% — 178 of 180 expected findings, across 84 positive cases and 6 clean
 controls.** Run 2026-09-23 against the **deployed** scanner (image
-`6d19e30`): checkov 3.3.16, Trivy 0.74.0 and KICS 2.1.20 plus the project's
+`3b74055`): checkov 3.3.16, Trivy 0.74.0 and KICS 2.1.20 plus the project's
 own check `IACP-0001`, as packaged in the `iac-scanner` image.
 
 By source: **Trivy 63/63, KICS 22/22, checkov 93/95.** All six clean
@@ -29,14 +29,20 @@ cases. The CloudFormation cases fold in here: all 23 of their labelled
 pairs fired on the deployed scanner, matching the local labelling exactly.
 The run before this one was 98.7% (155/157), the same day, before them.
 
-**What this number does not check is `target_type`, and that let a bug
-through.** Recall compares `(source, rule_id)` pairs, so a finding that
-fires under the wrong target type counts as a hit. A targeted scan after
-this run found KICS findings on a YAML CloudFormation template coming back
-`unknown` -- all ten on one file -- which remediation-agent refuses outright.
-Detection was right and the language was unremediable. Fixed in iac-scanner
-(KICS's per-query platform is now its reported type); the JSON syntax was
-already correct.
+**And every one of the 517 findings the run produced carries the target_type
+its file declares** -- checked since 2026-09-23, because recall alone did not.
+It compares `(source, rule_id)`, so a finding filed under the wrong language
+counted as a hit. The first deployed CloudFormation run scored every
+labelled pair while all ten KICS findings on a YAML template came back
+`unknown`, which remediation-agent refuses outright: detected, and
+unremediable. `run_eval.py` now checks each finding's `target_type` against
+the language its file's name declares (`CASE_FILE_TARGET_TYPES`), and its
+first run found three more, all on YAML -- checkov's `CKV_SECRET_6` on a
+Kubernetes manifest and on a CloudFormation template, live on manifests
+since `.yaml` was admitted on 2026-09-20, and a KICS secrets query filed
+under its platform name `Common`. The scanner now classifies a `.yaml` by
+its content, as it already did a `.json`. This run is the one after that fix
+was deployed (image `3b74055`).
 
 This is now one number over the whole corpus rather than the AWS-and-OpenTofu
 subset. The previous headline was 97.3% (73/75) on 2026-09-16, before the
@@ -552,6 +558,11 @@ cases/<name>/main.tf          # one clear injected vulnerability, self-contained
                               #  template.yaml/.json per language)
 cases/<name>/expected.json    # {description, category, expected: [{source, rule_id}], note?}
 ```
+
+Use one of the file names in `run_eval.py`'s `CASE_FILE_TARGET_TYPES`, or add
+yours there with the language it should scan as: every finding's
+`target_type` is checked against it, and a name the table does not know
+stops the run (and fails `test_corpus.py` in CI).
 
 Keep `main.tf` minimal and valid — `terraform fmt -check -recursive cases/`
 must pass, which also proves every case parses. Verify a checkov id against
