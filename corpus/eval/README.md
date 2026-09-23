@@ -16,16 +16,21 @@ Needs `boto3`, AWS credentials for the dev account, and the `terraform` CLI on
 
 ## Result
 
-**97.3% — 73 of 75 expected findings, across 45 positive cases and 2 clean
-controls.** Run 2026-09-16 against checkov 3.3.16 and Trivy 0.74.0 plus the
-project's own check `IACP-0001`, as packaged in the `iac-scanner` image.
+**98.7% — 155 of 157 expected findings, across 78 positive cases and 5 clean
+controls.** Run 2026-09-23 against the **deployed** scanner: checkov 3.3.16,
+Trivy 0.74.0 and KICS 2.1.20 plus the project's own check `IACP-0001`, as
+packaged in the `iac-scanner` image.
 
-*This is the AWS Terraform and OpenTofu corpus only.* The directory now holds
-83 cases: the Kubernetes ones (2026-09-20) and the Azure ones (2026-09-22)
-each report their own number, measured locally against the same pinned tools,
-in their sections below. Folding them into one headline needs a rebuild and a
-deployed `run_eval.py` run, and until that happens saying so is more useful
-than a blended figure nobody measured.
+By source: **Trivy 57/57, KICS 13/13, checkov 85/87.** All five clean
+controls raised nothing. Both misses are the long-standing labelled tool
+gaps below (`CKV_AWS_60` on a bare `"*"` principal, `CKV_SECRET_6` on a
+password containing `!`), so this is the ceiling for these tools on these
+cases.
+
+This is now one number over the whole corpus rather than the AWS-and-OpenTofu
+subset. The previous headline was 97.3% (73/75) on 2026-09-16, before the
+Kubernetes cases (2026-09-20) and the Azure ones (2026-09-22); each reported
+its own locally measured figure in its section until this run folded them in.
 Both misses are labelled tool gaps (`CKV_AWS_60` on a bare `"*"` principal;
 `CKV_SECRET_6` on a password with a `!` in it), so this is the ceiling for
 these tools on these cases.
