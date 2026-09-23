@@ -45,6 +45,7 @@ import sys
 import time
 
 import boto3
+from botocore.config import Config
 
 HERE = pathlib.Path(__file__).resolve().parent
 CASES = HERE / "cases"
@@ -76,6 +77,17 @@ def is_snapshot_file(path):
         return bool(ARM_SCHEMA_RE.search(path.read_text(encoding="utf-8")))
     except (OSError, UnicodeDecodeError):
         return False
+# The scanner's own timeout is 300s (terraform/lambda_iac_scanner.tf), and a
+# cold start of the container image is most of a minute before the scan even
+# begins -- 92s end to end, measured 2026-09-23 with three scanners in the
+# image. boto3's default read timeout is 60s with retries on, which means the
+# client gives up mid-scan and then starts a *second* scan of the same prefix:
+# double the cost, and two sets of findings racing to be the answer. So: no
+# retries, and a read timeout past the function's own. run_external.py has
+# carried this config and this reasoning since it was written; run_eval.py
+# did not, and got away with it only while scans were short.
+LAMBDA_CONFIG = Config(read_timeout=330, connect_timeout=10, retries={"max_attempts": 0})
+
 RULE_MAPPINGS = HERE.parent / "rule_mappings.json"
 
 
@@ -310,7 +322,7 @@ def main():
     prefix = f"scans/{run_id}/"
 
     s3 = boto3.client("s3")
-    lam = boto3.client("lambda")
+    lam = boto3.client("lambda", config=LAMBDA_CONFIG)
 
     print(f"{len(cases)} cases -> s3://{bucket}/{prefix}")
     upload(s3, bucket, prefix, cases)

@@ -276,6 +276,17 @@ ARM and Bicep do not need this — checkov reports `parsing_errors` for both —
 but ARM gets it anyway when it is admitted, since the `$schema` sniff has to
 parse the file to classify it at all.
 
+**Found in the wild on the first deployed run, 2026-09-23.** The external
+corpus scan of `argocd-example-apps` reported one scan error:
+`kustomize-guestbook/guestbook-ui-svc.yaml`, a perfectly ordinary Kubernetes
+Service whose lines carry trailing tab characters. YAML forbids tabs, so
+PyYAML rejects it — and Trivy returns zero findings on it while checkov emits
+no report at all, neither of them saying anything. Before this check that file
+scanned as clean, and a remediation touching it could have earned a
+scanner-verified badge for free. It is the exact failure this was written for,
+and it turned up in a real repository rather than a fixture on the first run
+that could have found it.
+
 **And where only one tool covers the language** (OpenTofu; Bicep until
 2026-09-23, see §6.2), the self-check has
 one source rather than two. That is weaker but not broken — the comparison is

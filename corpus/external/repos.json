@@ -62,7 +62,14 @@
       "url": "https://github.com/Azure/azure-quickstart-templates",
       "sha": "17d3abdd0c664c734e47dae9b6972a32180c9b30",
       "subdir": "quickstarts/microsoft.storage",
-      "why": "Microsoft's own ARM and Bicep samples, and the only target carrying both languages in one tree. Plays two roles at once: it is where the CIS Azure corpus was grounded (2026-09-22, see corpus/README.md), and it is a precision target rather than a goat repo -- these templates are published as reference material, so a finding here is a claim that Microsoft's own sample is misconfigured. Pinned to one service's quickstarts because the whole tree does not finish in the scanner's 240s. It is also the sharpest test of ARM discovery: the full tree holds 519 .json files of which only 175 are deployment templates, and 159 of the rest are azuredeploy.parameters.json -- files a filename convention would have admitted and the $schema sniff does not."
+      "why": "Microsoft's own ARM and Bicep samples, and the only target carrying both languages in one tree. Plays two roles at once: it is where the CIS Azure corpus was grounded (2026-09-22, see corpus/README.md), and it is a precision target rather than a goat repo -- these templates are published as reference material, so a finding here is a claim that Microsoft's own sample is misconfigured. Pinned to one service's quickstarts because the whole tree does not finish in the scanner's 240s. It is also the sharpest test of ARM discovery: the full tree holds 519 .json files of which only 175 are deployment templates, and 159 of the rest are azuredeploy.parameters.json -- files a filename convention would have admitted and the $schema sniff does not.",
+      "baseline": {
+        "files": 24,
+        "findings": 204,
+        "distinct_ids": 204,
+        "distinct_rules": 20,
+        "scan_errors": 0
+      }
     }
   ]
 }

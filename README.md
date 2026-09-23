@@ -79,9 +79,9 @@ Full technical spec (data model, agent JSON contracts, eval plan, build phases):
 
 ## Evaluation
 
-Detection recall is measured, not assumed: a labelled corpus of Terraform cases with known injected vulnerabilities, scanned by the **deployed** scanner.
+Detection recall is measured, not assumed: a labelled corpus of Terraform, OpenTofu, Kubernetes, ARM and Bicep cases with known injected vulnerabilities, scanned by the **deployed** scanner.
 
-**97.3% — 71 of 73 expected findings across 43 positive cases and 2 clean controls** (2026-09-13, Trivy 0.74.0 + Checkov 3.3.16 + `IACP-0001`). Both misses are documented upstream tool gaps, not relabelled. The full method, the corrections log, and what the number does *not* measure are in [`corpus/eval/README.md`](./corpus/eval/README.md).
+**98.7% — 155 of 157 expected findings across 78 positive cases and 5 clean controls** (2026-09-23, Trivy 0.74.0 + Checkov 3.3.16 + KICS 2.1.20 + `IACP-0001`). By source: Trivy 57/57, KICS 13/13, Checkov 85/87. Both misses are documented upstream tool gaps, not relabelled. The full method, the corrections log, and what the number does *not* measure are in [`corpus/eval/README.md`](./corpus/eval/README.md).
 
 ## Running it
 
