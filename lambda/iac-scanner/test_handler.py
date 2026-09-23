@@ -485,6 +485,37 @@ def test_kics_findings_normalize_to_the_record_shape():
     assert finding["resource"] == "stgevalinsecure"
 
 
+def test_a_kics_finding_on_a_yaml_template_takes_the_platform_kics_names():
+    """Found on the first deployed run, 2026-09-23. A .yaml is claimed by no
+    suffix and classified by no sniff -- Trivy and checkov name their own
+    type, but _normalize_kics passed none -- so every KICS finding on a
+    CloudFormation template in YAML came back target_type "unknown", which
+    remediation-agent's structural guard refuses outright. Ten findings on
+    one template. KICS names a platform per query, and that is the reported
+    type now."""
+    query = {**KICS_STORAGE_QUERY, "platform": "CloudFormation",
+             "files": [{**KICS_STORAGE_QUERY["files"][0], "file_name": "template.yaml"}]}
+
+    [finding] = handler._normalize_kics(_kics_report([query]), ".", "pr-1")
+
+    assert finding["target_type"] == "cloudformation"
+
+
+def test_the_kics_platform_never_outranks_the_suffix_or_the_sniff():
+    """AzureResourceManager covers Bicep as well as ARM, so it maps to "arm"
+    only as a fallback. A .bicep is claimed by its suffix and a .json by the
+    sniff before the platform is read."""
+    bicep = {**KICS_STORAGE_QUERY, "platform": "AzureResourceManager"}
+    [finding] = handler._normalize_kics(_kics_report([bicep]), ".", "pr-1")
+    assert finding["target_type"] == "bicep"
+
+    cfn_json = {**KICS_STORAGE_QUERY, "platform": "AzureResourceManager",
+                "files": [{**KICS_STORAGE_QUERY["files"][0], "file_name": "stack.json"}]}
+    [finding] = handler._normalize_kics(_kics_report([cfn_json]), ".", "pr-1",
+                                        {"stack.json": "cloudformation"})
+    assert finding["target_type"] == "cloudformation"
+
+
 def test_kics_reports_a_severity_where_checkov_reports_none():
     """The reason a severity floor was ruled out for Azure (multi-iac-spec
     §5.1 fact 1) was that checkov reports no severity and Trivy was the only
