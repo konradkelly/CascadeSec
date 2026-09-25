@@ -10,6 +10,7 @@ locals {
     context_agent     = "${var.project}-${var.environment}-context-agent"
     review_api        = "${var.project}-${var.environment}-review-api"
     webhook_receiver  = "${var.project}-${var.environment}-webhook-receiver"
+    github_gateway    = "${var.project}-${var.environment}-github-gateway"
   }
 }
 

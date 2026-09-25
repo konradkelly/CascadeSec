@@ -34,6 +34,7 @@ locals {
     context_agent     = aws_lambda_function.context_agent.function_name
     review_api        = aws_lambda_function.review_api.function_name
     webhook_receiver  = aws_lambda_function.webhook_receiver.function_name
+    github_gateway    = aws_lambda_function.github_gateway.function_name
   }
 }
 

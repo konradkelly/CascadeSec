@@ -22,6 +22,7 @@ output "lambda_role_arns" {
     context_agent     = aws_iam_role.context_agent.arn
     review_api        = aws_iam_role.review_api.arn
     webhook_receiver  = aws_iam_role.webhook_receiver.arn
+    github_gateway    = aws_iam_role.github_gateway.arn
   }
 }
 
@@ -59,6 +60,10 @@ output "review_api_function_name" {
 
 output "webhook_receiver_function_name" {
   value = aws_lambda_function.webhook_receiver.function_name
+}
+
+output "github_gateway_function_name" {
+  value = aws_lambda_function.github_gateway.function_name
 }
 
 # Base URL the dashboard talks to, e.g.
@@ -110,8 +115,4 @@ output "github_webhook_url" {
 # Targets for `aws secretsmanager put-secret-value` (secrets.tf).
 output "github_webhook_secret_name" {
   value = aws_secretsmanager_secret.github_webhook_secret.name
-}
-
-output "github_app_private_key_secret_name" {
-  value = aws_secretsmanager_secret.github_app_private_key.name
 }

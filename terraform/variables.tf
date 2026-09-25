@@ -57,3 +57,14 @@ variable "max_drafts_per_file" {
   type        = number
   default     = 8
 }
+
+variable "github_app_id" {
+  description = "The CascadeSec GitHub App's App ID (App settings -> General -> About). The issuer of the JWT github-gateway signs with KMS. Not a secret -- it is useless without the private key -- but the App is private to its account, so it cannot be looked up and must be given, e.g. `terraform apply -var github_app_id=123456`."
+  type        = string
+}
+
+variable "github_app_key_alias" {
+  description = "KMS alias of the App's private key, as created by scripts/import_github_app_key.py. Terraform only looks the key up: the provider cannot create a key with imported material, and the material should not pass through state (docs/ci-integration-spec.md §4.1)."
+  type        = string
+  default     = "alias/iacposture-dev-github-app"
+}

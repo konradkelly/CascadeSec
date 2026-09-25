@@ -13,6 +13,8 @@ Event shape:
 { "pr_id": "manual-test-1" }
 -- or, continuing a pass that yielded (see `remaining` below) --
 { "pr_id": "manual-test-1", "mapped_count": 38, "files": ["ec2.tf"] }
+-- and on a GitHub run, limited to the PR's changed files --
+{ "pr_id": "gh-1-2", "only_files": ["ec2.tf", "k8s/app.yaml"] }
 
 Returns {pr_id, mapped_count, skipped_count, error_count, files, remaining}.
 skipped is a decision -- no candidate, or an answer refused by the checks
@@ -98,6 +100,16 @@ def handler(event, context):
     pr_id = event["pr_id"]
 
     raw_findings = _query_raw_findings(pr_id)
+    # A GitHub run maps only the files its PR changed (docs/ci-integration-
+    # spec.md §6.1): the rest of the repository is scanned and counted, but
+    # one model call per finding in files nobody touched is the cost a PR
+    # from outside must not be able to run up. Absent or null -- a manual
+    # run -- maps everything, as before. Findings left raw here stay raw
+    # for the dashboard and for a later PR that touches their file.
+    only_files = event.get("only_files")
+    if only_files is not None:
+        scope = set(only_files)
+        raw_findings = [f for f in raw_findings if f["file"] in scope]
     rule_mappings = _load_rule_mappings()
 
     # Carried over from the pass that yielded, if this is a continuation.

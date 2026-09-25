@@ -1,13 +1,13 @@
-# CI integration (v3) — spec (draft)
+# CI integration (v3) — spec
 
 A GitHub App that scans a pull request when it is opened or pushed to, and
 reports back on the PR itself: a check run with annotations, and — when the
 reviewer asks for them — fixes posted as suggested changes.
 
-Written before building, 2026-09-23. The pipeline claims below were checked
-against the code on branch `v3-ci-integration`; the GitHub API claims are
-from GitHub's documentation and are marked **(verify)** where one needs a real
-App before anything is built on it.
+Written before building, 2026-09-23, and revised as it was built,
+2026-09-24–25; where the build departed from the draft, the section says so
+and why. §9 is the status. The GitHub API claims are from GitHub's
+documentation and are marked **(verify)** until a deployed run has shown them.
 
 ## 1. What changed since the spec's v3 was written
 
@@ -42,8 +42,8 @@ inside its permanent free tier either way.
 Two directions of trust carry a PR through, and the first diagram is about
 them. The **webhook secret** (symmetric, shared with GitHub) proves a
 delivery came **from** GitHub; the **App key** (asymmetric, private half in
-KMS) proves a call **to** GitHub comes from the App. The shaded part is not
-built yet.
+KMS) proves a call **to** GitHub comes from the App. The shaded part is built
+and tested but not yet deployed.
 
 ```mermaid
 sequenceDiagram
@@ -77,7 +77,7 @@ sequenceDiagram
 ```
 
 What one execution does between `fetch` and `report`. Solid arrows are the
-state machine's order; dotted ones are data. Dashed boxes are not built yet.
+state machine's order; dotted ones are data. Dashed boxes are built but not yet deployed.
 
 ```mermaid
 flowchart TB
@@ -154,15 +154,26 @@ as the App and gain nothing.
    base64-encoded when `isBase64Encoded` is set; decode first, and never
    re-serialise parsed JSON to check it. Reject with 401 before parsing.
 2. Accept `pull_request` with action `opened`, `synchronize`, `reopened`,
-   `ready_for_review`, and `check_run` with action `requested_action` or
-   `rerequested` (§5). Anything else: 204.
+   `ready_for_review`, and `check_run` with action `requested_action` (the
+   Draft fixes button, §5) or `rerequested` (GitHub's Re-run). Anything else:
+   204. A `check_run` counts only if it is **ours** — named `CascadeSec`, and
+   for `requested_action` carrying the `draft_fixes` identifier — because an
+   App subscribed to `check_run` receives every check run on the repository:
+   about 25 per push on PugetScope, from its own CI. A `check_run` with an
+   empty `pull_requests` (GitHub's shape for a PR from a fork) is ignored;
+   the push that opened the PR already ran.
 3. Skip draft PRs until `ready_for_review` (decision D4).
 4. `StartExecution` with a **deterministic name** built from `pr_id`, the head
-   SHA and the trigger (`push`, `fixes`, `rerun-<n>`). GitHub redelivers with
-   the same payload; `ExecutionAlreadyExists` makes that idempotent for free,
-   so a redelivery returns 200 and starts nothing. Names reuse `scan.py`'s
-   `execution_name` sanitising, moved into a shared copy with a test
-   asserting the copies agree — the pattern `CFN_MARKER_RE` already uses.
+   SHA and the trigger: `push`, `fixes`, or `rerun-<delivery>`. GitHub
+   redelivers with the same payload; `ExecutionAlreadyExists` makes that
+   idempotent for free, so a redelivery returns 200 and starts nothing. A
+   second click on Draft fixes for the same commit is the same name, and
+   starts nothing either; each Re-run click is its own delivery, and so its
+   own name. The alphabet and length limit match `scan.py`'s
+   `execution_name`, whose names carry a timestamp and cannot collide with
+   these. *Not shared code, as the draft proposed:* the two build different
+   strings, so the agreement worth testing is the Step Functions rule, which
+   the receiver's tests assert.
 5. Return 202. Nothing in this function waits on GitHub or S3.
 
 `pr_id` is `gh-<repository id>-<number>`. It must be stable across pushes
@@ -228,11 +239,23 @@ in v3; write is v4's scope and is requested when v4 needs it.
    `patch` to `github/<pr_id>/<head_sha>/files.json`. `report` needs the
    hunks to know which lines a comment may attach to (§4.3).
 
-**Limits.** A cap on tarball bytes and on kept-file count, set after
-measuring one real repo. Over the cap, the check run completes as `neutral`
-with "too large to scan", and **no partial scan runs**: a partial scan looks
-exactly like a clean one for the files it skipped, which is the failure mode
-this project exists to prevent.
+5. Return the IaC files among the PR's changed files, `changed_files`. It
+   rides in the execution state, so it scopes mapping (§6.1) and Draft fixes
+   (§5) without another call.
+
+**Limits.** 200MB of tarball read, 3,000 kept files, 50MB of kept content,
+1,000 changed IaC files (the last because `changed_files` rides in the
+256KB execution state). Generous on purpose: PugetScope's whole tarball is
+about 2MB. Over any of them the check completes as `neutral`, "too large to
+scan", and **no partial scan runs**: a partial scan looks exactly like a
+clean one for the files it skipped, which is the failure mode this project
+exists to prevent. A commit with no IaC at all completes the same way,
+"nothing to scan", instead of failing the scanner.
+
+**The redirect.** The tarball endpoint answers with a redirect to codeload
+whose URL carries its own short-lived authorisation. urllib would follow it
+with the installation token still attached, so the redirect is refused and
+followed bare.
 
 The whole repository is snapshotted, not only the changed files. The scanner
 resolves modules and variables across files, and `context-agent` answers a
@@ -255,19 +278,40 @@ Reads the PR's findings from DynamoDB and the stored hunks, then:
   it misses a finding that a change *enables* on an untouched line (a
   variable default that flips a resource elsewhere), and the summary still
   counts every finding in the repo. A base-commit scan is deferred (§7).
-- **Suggestions**, only when fixes exist (§5). One PR review, event
-  `COMMENT`, with one comment per `fix-proposed` finding whose diff
-  touches **only** lines inside the PR's right-side hunks, as a
-  ```` ```suggestion ```` block spanning `start_line`..`line`. A fix that
-  reaches outside the diff cannot be a suggestion — GitHub rejects the
-  comment **(verify: whole review or one comment)** — so it is listed in the
-  summary with a dashboard link instead. Fixes are chained (`applies_after`):
-  post a chain's fixes only when every earlier link in it is also postable,
-  or the second suggestion applies to text the first already changed.
-  `needs-human-only` findings are never posted as suggestions.
-- **Idempotency.** A re-run on the same SHA must not post the review twice.
-  Before posting, list the App's own reviews on the PR and skip if one with
-  the same execution marker exists (an HTML comment in the body).
+- **Suggestions**, on a Draft fixes run (§5). One PR review, event
+  `COMMENT`, commit `head_sha`. *Revised from the draft, which had one
+  comment per fix:* fixes are chained (`applies_after`), each drafted on the
+  file as the previous verified fix left it, so one fix's diff is in the line
+  numbers of an intermediate file nobody has, and only the chain's **last**
+  corrected file (`fixes/<pr_id>/<tip>/<file>`) was self-checked with every
+  earlier fix in it. So, per file:
+  1. the **tip** is the `fix-proposed`, self-check-passed fix whose chain
+     covers every other such fix on the file, with each link's recorded
+     `diff_sha256` still matching — an edited link means no tip;
+  2. the chain's root diff must apply to the current snapshot, or the fix was
+     drafted on an earlier commit and is held ("run Draft fixes again");
+  3. the tip's corrected file is diffed against the PR head, and each hunk
+     becomes one ```` ```suggestion ```` comment on its `start_line`..`line`
+     (a pure insertion is anchored to the line before it);
+  4. **all of a file's hunks or none**: if any hunk touches a line outside the
+     PR's right-side diff, GitHub cannot take it as a suggestion, and a
+     subset of the hunks was never verified — so the whole file is held and
+     the summary says why, with the dashboard link.
+
+  `needs-human-only` findings and failed self-checks are never posted, and
+  neither is any model prose: the comment body is the rule ids, the file and
+  the suggestion. If GitHub still rejects the review (422), the files are
+  reported as held rather than the execution failing.
+- **Idempotency.** A retried `report` must not post the review twice.
+  Before posting, the PR's reviews are listed and the post is skipped if one
+  carries this execution's marker (`<!-- cascadesec:<execution name> -->`).
+- **Draft fixes remediates the changed files only.** A fixes run follows the
+  push that mapped everything, so its own mapping pass maps nothing and
+  mapping-agent's `files` is empty. `select_files` (a gateway action before
+  the Remediate Map) lists the changed files still holding a `mapped`
+  finding, and those are what is remediated — not every mapped finding in
+  the repository, which on PugetScope would be hundreds of model calls for
+  a handful of postable suggestions.
 
 **Conclusion** is `neutral` in v3 regardless of findings (decision D1). The
 check is advisory until §7's fix-acceptance rate exists to say its
@@ -308,10 +352,15 @@ A PR from a fork is attacker-controlled input. What that allows:
   reaches a public PR thread — and one limit: `report` posts only fields
   code produced (diffs that passed self-check, rule ids, counts). It never
   posts free text from a model: not `explanation`, not `assumptions`.
-- **Cost.** Covered by §5: scan and map only, until a maintainer clicks.
-  Mapping is one model call per finding, so a fork PR that adds a thousand
-  findings costs a thousand calls. Cap mapped findings per execution; over the
-  cap, map the ones in changed files first.
+- **Cost.** Remediation waits for a maintainer (§5). Mapping is one model call
+  per finding, so it is **scoped to the PR's changed IaC files**
+  (mapping-agent's `only_files`, from `fetch`'s `changed_files`): the rest of
+  the repository is scanned and counted, but a finding in a file the PR did
+  not touch costs nothing and stays `raw`. *This replaces the draft's "cap
+  mapped findings per execution":* a cap bounds the cost of a hostile PR but
+  still spends it on files nobody changed; the scope spends nothing there,
+  and a PR's cost now follows what it changed. A PR that changes one huge
+  file can still run one up — bounded by `fetch`'s limits, not by a count.
 
 ### 6.2 Two pushes, one PR
 
@@ -331,15 +380,26 @@ The full fix is a snapshot prefix per SHA (`scans/<pr_id>/<sha>/`). It is not
 free: `remediation-agent` (`handler.py:742`, `:758`) and `review-api`
 (`handler.py:391`) build `scans/{pr_id}/` themselves rather than reading
 `s3_prefix`. Deferred until the race is observed, and noted here so the
-hard-coded prefix is not copied into a new place in the meantime.
+hard-coded prefix is not copied into a new place in the meantime. *Neither
+fix is built:* the StopExecution proposal would give the receiver — the
+internet-facing function — DynamoDB writes and StopExecution, which is a
+larger grant than the race has earned yet.
 
 ### 6.3 A check stuck `in_progress`
 
-Every state gets a `Catch` that routes to `report` with the error. `report`
-completes the run as `neutral` with the error and the execution link. If
-`report` itself fails, the run stays `in_progress`; an EventBridge rule on
-execution `FAILED`/`TIMED_OUT` can be the backstop, since it needs no state
-from the execution beyond its input.
+*Revised from the draft, which had a `Catch` on every state routing to
+`report`, with EventBridge as a backstop for `report` itself failing.* Built
+as the backstop alone: an EventBridge rule on execution `FAILED`,
+`TIMED_OUT` or `ABORTED` for this state machine invokes the gateway, which
+finds the check run whose `external_id` is the execution's name and
+completes it as `neutral`, "Scan did not finish". If `fetch` failed before
+creating one, it creates a completed one, so the failure is still on the PR.
+One mechanism covers every way an execution can end badly — a `Catch`
+cannot cover the state it routes to, nor a timeout or a manual stop — and
+the execution still ends `FAILED`, so the pipeline-failure alarm still
+fires. The event carries the execution's input, which holds everything the
+gateway needs; it does not carry the state, which is why the check run is
+found by name rather than by id.
 
 ## 7. Not in v3
 
@@ -350,30 +410,37 @@ from the execution beyond its input.
 - **GitHub Enterprise Server and GitLab.**
 - **Blocking merges.** See D1.
 
-## 8. Decisions needed before building
+## 8. Decisions
 
-| # | Decision | Recommendation |
+| # | Decision | Outcome |
 |---|---|---|
-| D1 | Check conclusion when findings exist | `neutral` always in v3 |
-| D2 | Drop SQS (§1) — loses a DVA-C02 rep | **Decided 2026-09-24: dropped** |
-| D3 | Remediation on push, or behind the button (§5) | Button |
-| D4 | Scan draft PRs | No; start at `ready_for_review` |
-| D5 | Which repo is the first installation | One the project owns, never a fork target, until §6.1's caps are in |
-| D6 | Ownership | **Decided 2026-09-24: Konrad owns all of v3** |
+| D1 | Check conclusion when findings exist | `neutral` always in v3 — built |
+| D2 | Drop SQS (§1) — loses a DVA-C02 rep | Decided 2026-09-24: dropped |
+| D3 | Remediation on push, or behind the button (§5) | Button — built |
+| D4 | Scan draft PRs | No; start at `ready_for_review` — built |
+| D5 | Which repos the App is installed on | **Open.** All of the account's repositories as of 2026-09-25; §6.1's scoping is in, so the remaining reason to narrow it is noise, not cost |
+| D6 | Ownership | Decided 2026-09-24: Konrad owns all of v3 |
+| D7 | Where the App key lives (§4.1) | Decided 2026-09-24: KMS, imported |
 
-## 9. Build order
+## 9. Build order and status
 
-1. **Register the App by hand** and settle every **(verify)** above against it:
-   annotation batch size, how a review with one out-of-diff suggestion fails,
-   who sees action buttons. Record answers here before code depends on them.
-2. Secrets, `webhook-receiver`, the API route. Done when a real delivery
-   starts an execution that `scan.py` would also have started, and a
-   redelivery starts nothing.
-3. `fetch`, with tests on hostile tarballs (symlink, `..`, absolute path,
-   oversize) — the guards are code, so they get unit tests, not a prompt.
-4. `report`: check run and annotations only.
-5. The **Draft fixes** button and suggestions.
-6. `Catch` routing and the stuck-check backstop.
-7. Metrics: executions by trigger, suggestions posted vs. held back as
-   out-of-diff. The second number says whether the added-lines rule is
-   costing more fixes than it should.
+1. **Register the App by hand** — done 2026-09-24. Still **(verify)**, to be
+   settled by the first deployed Draft fixes run: whether a review with one
+   out-of-diff suggestion fails whole (the code assumes it does, and holds
+   such files back rather than find out), and who sees action buttons.
+2. **Secrets, `webhook-receiver`, the API route** — built and deployed
+   2026-09-24. Verified on PugetScope PR #9 and on this repository's own PR:
+   a real push was delivered, verified, and started its execution.
+3. **`fetch`**, with tests on hostile tarballs (symlink, hardlink, `..`,
+   absolute path, backslash, oversize) — built 2026-09-25.
+4. **`report`**: check run, summary and annotations — built 2026-09-25.
+5. **The Draft fixes button and suggestions** — built 2026-09-25, with
+   `select_files` and mapping's `only_files`.
+6. **The stuck-check backstop** — built 2026-09-25 (§6.3).
+7. **Metrics** — built 2026-09-25: `AnnotationsPosted`, `SuggestionsPosted`,
+   `FilesHeldFromSuggestions` and `ExecutionsReportedFailed`, as EMF from the
+   gateway. The ratio of held to posted files says whether the added-lines
+   rule is costing more fixes than it should.
+
+Steps 3–7 are unit-tested and not yet deployed: they need the App key in
+KMS (`scripts/import_github_app_key.py`) before the first apply.

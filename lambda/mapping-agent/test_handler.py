@@ -651,3 +651,55 @@ def test_the_prompt_carries_the_scanner_s_words_for_the_rule_when_the_record_has
     prompt = mock_get_client.return_value.messages.create.call_args.kwargs["messages"][0]["content"]
     assert "  rule_id: AWS-0091\n  severity: HIGH\n" in prompt
     assert "title: S3 Access" not in prompt
+
+
+# ---------- only_files (docs/ci-integration-spec.md §6.1) ----------
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_only_files_maps_nothing_outside_the_prs_changed_files(mock_dynamodb, mock_s3, mock_client):
+    """A GitHub run scopes mapping to the files the PR changed: a finding
+    elsewhere costs no model call and stays raw."""
+    findings = [_finding("f1", file="changed.tf"), _finding("f2", file="untouched.tf")]
+
+    result, table, create = _run(
+        mock_dynamodb, mock_s3, mock_client, findings, MAPPINGS, [_mapping("f1")],
+        event={"pr_id": "pr-1", "only_files": ["changed.tf"]},
+    )
+
+    assert create.call_count == 1
+    assert result["files"] == ["changed.tf"]
+    assert table.update_item.call_count == 1
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_only_files_null_maps_everything(mock_dynamodb, mock_s3, mock_client):
+    """The manual path passes null: no scope, the behaviour before v3."""
+    findings = [_finding("f1", file="a.tf"), _finding("f2", file="b.tf")]
+
+    result, _, create = _run(
+        mock_dynamodb, mock_s3, mock_client, findings, MAPPINGS,
+        [_mapping("f1"), _mapping("f2")],
+        event={"pr_id": "pr-1", "only_files": None},
+    )
+
+    assert create.call_count == 2
+    assert result["files"] == ["a.tf", "b.tf"]
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_only_files_empty_maps_nothing(mock_dynamodb, mock_s3, mock_client):
+    """A PR that changed no IaC file maps nothing -- not everything."""
+    result, _, create = _run(
+        mock_dynamodb, mock_s3, mock_client, [_finding("f1")], MAPPINGS, [],
+        event={"pr_id": "pr-1", "only_files": []},
+    )
+
+    assert create.call_count == 0
+    assert result["mapped_count"] == 0
