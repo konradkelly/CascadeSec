@@ -21,6 +21,7 @@ output "lambda_role_arns" {
     remediation_agent = aws_iam_role.remediation_agent.arn
     context_agent     = aws_iam_role.context_agent.arn
     review_api        = aws_iam_role.review_api.arn
+    webhook_receiver  = aws_iam_role.webhook_receiver.arn
   }
 }
 
@@ -54,6 +55,10 @@ output "context_agent_function_name" {
 
 output "review_api_function_name" {
   value = aws_lambda_function.review_api.function_name
+}
+
+output "webhook_receiver_function_name" {
+  value = aws_lambda_function.webhook_receiver.function_name
 }
 
 # Base URL the dashboard talks to, e.g.
@@ -95,4 +100,18 @@ output "cognito_user_pool_id" {
 #   aws cognito-idp admin-initiate-auth --auth-flow ADMIN_USER_PASSWORD_AUTH #     --user-pool-id "$(terraform output -raw cognito_user_pool_id)" #     --client-id "$(terraform output -raw cognito_cli_client_id)" #     --auth-parameters "USERNAME=$EMAIL,PASSWORD=$PASSWORD"
 output "cognito_cli_client_id" {
   value = aws_cognito_user_pool_client.cli.id
+}
+
+# Paste into the GitHub App's settings as the Webhook URL.
+output "github_webhook_url" {
+  value = "${trimsuffix(aws_apigatewayv2_stage.review.invoke_url, "/")}/github/webhook"
+}
+
+# Targets for `aws secretsmanager put-secret-value` (secrets.tf).
+output "github_webhook_secret_name" {
+  value = aws_secretsmanager_secret.github_webhook_secret.name
+}
+
+output "github_app_private_key_secret_name" {
+  value = aws_secretsmanager_secret.github_app_private_key.name
 }

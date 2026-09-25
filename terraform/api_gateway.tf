@@ -3,10 +3,13 @@
 # HTTP API rather than REST: the spec leaves the choice open, and nothing here
 # needs REST's extra surface (request validators, usage plans, API keys).
 #
-# Every route requires a Cognito ID token, validated by API Gateway's native
-# JWT authorizer before the Lambda is invoked (see cognito.tf for why this is
-# in v1 rather than v1.1). The handler reads the caller's identity from the
-# verified claims, so no route trusts a caller-supplied actor.
+# Every dashboard route requires a Cognito ID token, validated by API Gateway's
+# native JWT authorizer before the Lambda is invoked (see cognito.tf for why
+# this is in v1 rather than v1.1). The handler reads the caller's identity from
+# the verified claims, so no route trusts a caller-supplied actor.
+#
+# The one exception is POST /github/webhook (lambda_webhook_receiver.tf), which
+# GitHub calls and which is authenticated by HMAC signature instead.
 
 resource "aws_apigatewayv2_api" "review" {
   name          = "${var.project}-${var.environment}-review-api"
@@ -81,6 +84,16 @@ resource "aws_apigatewayv2_stage" "review" {
   api_id      = aws_apigatewayv2_api.review.id
   name        = "$default"
   auto_deploy = true
+
+  # The unauthenticated route gets a throttle the JWT routes don't need: anyone
+  # can POST to it, and every request costs a Lambda invocation and a Secrets
+  # Manager read before the signature rejects it. GitHub's real rate for one
+  # testbed repo is a few deliveries a minute.
+  route_settings {
+    route_key              = aws_apigatewayv2_route.github_webhook.route_key
+    throttling_burst_limit = 10
+    throttling_rate_limit  = 5
+  }
 
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.review_api_gateway.arn
