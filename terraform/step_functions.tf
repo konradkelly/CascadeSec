@@ -18,6 +18,11 @@
 # Input:  { "pr_id": "...", "s3_prefix": "scans/<pr_id>/", "remediate": true }
 #         remediate is optional; false stops after map. There is no type
 #         parameter: the scanner reports what it finds, per file.
+#         A GitHub run (v3, docs/ci-integration-spec.md §2) adds a "github"
+#         object -- installation, repository, PR, head sha, trigger -- and
+#         with it three states around the unchanged stages: Fetch before
+#         Scan, SelectFiles before Remediate, Report at the end. Without it
+#         (scripts/scan.py) the execution is what it always was.
 # Output: the input plus "scan" (finding_count, scan_errors, preserved_count,
 #         no_longer_detected_count), "map"
 #         (mapped_count, skipped_count, error_count, files) and "remediation" (one entry
@@ -46,9 +51,64 @@ locals {
   }
 
   pipeline_definition = {
-    Comment = "IaCPosture v1 pipeline: scan a Terraform snapshot, map findings to controls, remediate one file at a time."
-    StartAt = "Scan"
+    Comment = "IaCPosture pipeline: scan an IaC snapshot, map findings to controls, remediate one file at a time; on a GitHub run, fetch the PR head first and report back to it last."
+    StartAt = "FromGitHub"
     States = {
+      FromGitHub = {
+        Type = "Choice"
+        Choices = [
+          { Variable = "$.github", IsPresent = true, Next = "Fetch" },
+        ]
+        Default = "ManualRun"
+      }
+
+      # scan.py uploaded the snapshot itself. $.fetch exists on every path so
+      # later states can read it without a Choice of their own; a null
+      # changed_files tells mapping-agent to map everything, as before v3.
+      ManualRun = {
+        Type       = "Pass"
+        Result     = { status = "ok", changed_files = null }
+        ResultPath = "$.fetch"
+        Next       = "Scan"
+      }
+
+      # Opens the in-progress check run and replaces scans/<pr_id>/ with the
+      # PR head. Transient Lambda errors only: a GitHub error here is a
+      # failed execution, and the EventBridge backstop completes the check.
+      Fetch = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+        Parameters = {
+          FunctionName = aws_lambda_function.github_gateway.arn
+          Payload = {
+            action             = "fetch"
+            "pr_id.$"          = "$.pr_id"
+            "github.$"         = "$.github"
+            "execution_name.$" = "$$.Execution.Name"
+          }
+        }
+        ResultSelector = {
+          "status.$"        = "$.Payload.status"
+          "check_run_id.$"  = "$.Payload.check_run_id"
+          "kept_count.$"    = "$.Payload.kept_count"
+          "changed_files.$" = "$.Payload.changed_files"
+          "reason.$"        = "$.Payload.reason"
+        }
+        ResultPath = "$.fetch"
+        Retry      = [local.transient_retry]
+        Next       = "SnapshotUsable"
+      }
+
+      # Too large or no IaC at all: say so on the check and scan nothing.
+      # A partial snapshot would read as clean for everything it left out.
+      SnapshotUsable = {
+        Type = "Choice"
+        Choices = [
+          { Variable = "$.fetch.status", StringEquals = "ok", Next = "Scan" },
+        ]
+        Default = "Report"
+      }
+
       Scan = {
         Type     = "Task"
         Resource = "arn:aws:states:::lambda:invoke"
@@ -105,6 +165,9 @@ locals {
             "pr_id.$"        = "$.pr_id"
             "mapped_count.$" = "$.map.mapped_count"
             "files.$"        = "$.map.files"
+            # null on a manual run (map everything); the PR's changed IaC
+            # files on a GitHub run (spec §6.1).
+            "only_files.$" = "$.fetch.changed_files"
           }
         }
         ResultSelector = {
@@ -147,11 +210,46 @@ locals {
             ]
             Next = "SkipRemediation"
           },
-          {
-            Variable      = "$.map.mapped_count"
-            NumericEquals = 0
-            Next          = "SkipRemediation"
-          },
+          { Variable = "$.github", IsPresent = true, Next = "SelectFiles" },
+        ]
+        Default = "AnyFilesToRemediate"
+      }
+
+      # A Draft fixes run follows the push that mapped everything, so this
+      # pass mapped nothing and $.map.files is empty. The files to remediate
+      # are the changed ones still holding a mapped finding; the gateway reads
+      # them from the table and returns $.map with only `files` replaced.
+      SelectFiles = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+        Parameters = {
+          FunctionName = aws_lambda_function.github_gateway.arn
+          Payload = {
+            action            = "select_files"
+            "pr_id.$"         = "$.pr_id"
+            "changed_files.$" = "$.fetch.changed_files"
+            "map.$"           = "$.map"
+          }
+        }
+        ResultSelector = {
+          "mapped_count.$"  = "$.Payload.mapped_count"
+          "skipped_count.$" = "$.Payload.skipped_count"
+          "error_count.$"   = "$.Payload.error_count"
+          "files.$"         = "$.Payload.files"
+          "remaining.$"     = "$.Payload.remaining"
+        }
+        ResultPath = "$.map"
+        Retry      = [local.transient_retry]
+        Next       = "AnyFilesToRemediate"
+      }
+
+      # Was mapped_count == 0. The same test on the manual path -- a file is
+      # listed only once a finding on it is mapped -- and the right one after
+      # SelectFiles, which lists files without mapping anything.
+      AnyFilesToRemediate = {
+        Type = "Choice"
+        Choices = [
+          { Variable = "$.map.files[0]", IsPresent = false, Next = "SkipRemediation" },
         ]
         Default = "Remediate"
       }
@@ -160,7 +258,7 @@ locals {
         Type       = "Pass"
         Result     = []
         ResultPath = "$.remediation"
-        End        = true
+        Next       = "ReportIfGitHub"
       }
 
       # One iteration per file. Files are independent of each other -- a fix
@@ -215,6 +313,39 @@ locals {
           }
         }
         ResultPath = "$.remediation"
+        Next       = "ReportIfGitHub"
+      }
+
+      ReportIfGitHub = {
+        Type = "Choice"
+        Choices = [
+          { Variable = "$.github", IsPresent = true, Next = "Report" },
+        ]
+        Default = "Done"
+      }
+
+      Done = {
+        Type = "Succeed"
+      }
+
+      # The whole state goes in: which of scan, map and remediation ran
+      # depends on the path, and the gateway reads what is there.
+      Report = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+        Parameters = {
+          FunctionName = aws_lambda_function.github_gateway.arn
+          Payload = {
+            action             = "report"
+            "execution_name.$" = "$$.Execution.Name"
+            "state.$"          = "$"
+          }
+        }
+        ResultSelector = {
+          "result.$" = "$.Payload"
+        }
+        ResultPath = "$.report"
+        Retry      = [local.transient_retry]
         End        = true
       }
     }
@@ -239,8 +370,9 @@ resource "aws_iam_role" "pipeline" {
 }
 
 data "aws_iam_policy_document" "pipeline" {
-  # The three stages, and nothing else -- not review-api, and not the
-  # scanner's self-check path (remediation-agent's own role holds that).
+  # The stages, and nothing else -- not review-api, and not the scanner's
+  # self-check path (remediation-agent's own role holds that). github-gateway
+  # for a GitHub run's Fetch, SelectFiles and Report.
   statement {
     sid     = "InvokeStages"
     actions = ["lambda:InvokeFunction"]
@@ -248,6 +380,7 @@ data "aws_iam_policy_document" "pipeline" {
       aws_lambda_function.iac_scanner.arn,
       aws_lambda_function.mapping_agent.arn,
       aws_lambda_function.remediation_agent.arn,
+      aws_lambda_function.github_gateway.arn,
     ]
   }
   # Step Functions delivers its logs through a CloudWatch Logs "log

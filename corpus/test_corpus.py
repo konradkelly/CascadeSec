@@ -201,7 +201,11 @@ def test_every_copy_of_the_snapshot_predicate_says_the_same_thing():
                 "scripts/scan.py",
                 "corpus/eval/run_eval.py",
                 "corpus/external/run_external.py",
-                "lambda/context-agent/handler.py"):
+                "lambda/context-agent/handler.py",
+                # v3: the GitHub App's uploader. It keeps what the scanner
+                # opens out of a repository tarball, so a drift here loses
+                # files from every PR scan with nothing to say so.
+                "lambda/github-gateway/handler.py"):
         source = (CORPUS.parent / rel).read_text(encoding="utf-8")
         schema = re.search(r"^ARM_SCHEMA_RE = re\.compile\((r'[^']*')\)$", source, re.M)
         assert schema, f"{rel}: no ARM_SCHEMA_RE"
@@ -220,7 +224,7 @@ def test_every_copy_of_the_snapshot_predicate_says_the_same_thing():
         if suffixes:
             suffix_copies[rel] = ast.literal_eval(suffixes.group(1))
 
-    assert len(suffix_copies) == 4, sorted(suffix_copies)
+    assert len(suffix_copies) == 5, sorted(suffix_copies)
 
     assert len(set(suffix_copies.values())) == 1, (
         "SNAPSHOT_SUFFIXES has drifted:\n  "
@@ -305,7 +309,8 @@ def test_both_uploaders_skip_the_same_directories_including_cdk_out():
     list would have generated templates scanned and remediated as if someone
     wrote them."""
     copies = {}
-    for rel in ("scripts/scan.py", "corpus/external/run_external.py"):
+    for rel in ("scripts/scan.py", "corpus/external/run_external.py",
+                "lambda/github-gateway/handler.py"):
         source = (CORPUS.parent / rel).read_text(encoding="utf-8")
         found = re.search(r"^SKIP_DIRS = (\{.*?\})$", source, re.S | re.M)
         assert found, f"{rel}: no SKIP_DIRS"
@@ -313,3 +318,18 @@ def test_both_uploaders_skip_the_same_directories_including_cdk_out():
 
     assert len({frozenset(v) for v in copies.values()}) == 1, copies
     assert all("cdk.out" in v for v in copies.values())
+
+
+def test_the_receiver_and_the_gateway_agree_on_the_check_run():
+    """github-gateway names the check run and its Draft fixes button;
+    webhook-receiver recognises a click by the same two strings. A drift
+    would not fail anything visibly: the button would be on the PR, and a
+    click would be ignored as some other app's check run."""
+    values = {}
+    for rel in ("lambda/webhook-receiver/handler.py", "lambda/github-gateway/handler.py"):
+        source = (CORPUS.parent / rel).read_text(encoding="utf-8")
+        values[rel] = tuple(
+            re.search(rf'^{name} = "([^"]+)"$', source, re.M).group(1)
+            for name in ("CHECK_NAME", "DRAFT_FIXES_ACTION")
+        )
+    assert len(set(values.values())) == 1, values

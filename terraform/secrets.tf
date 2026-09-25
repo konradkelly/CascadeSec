@@ -17,16 +17,15 @@ resource "aws_secretsmanager_secret_version" "anthropic_api_key" {
 
 # ---------- GitHub App (v3, docs/ci-integration-spec.md §2.1, §4.1) ----------
 #
-# Unlike the Anthropic key above, these get NO placeholder version. The repo is
+# Unlike the Anthropic key above, this gets NO placeholder version. The repo is
 # public, so a webhook secret of "REPLACE_ME" would be a known HMAC key: anyone
 # could sign a delivery that verifies. With no version at all, GetSecretValue
 # fails and webhook-receiver rejects every request until the real value is set
-# -- it fails closed instead of open. Set both out-of-band after apply:
+# -- it fails closed instead of open. Set it out-of-band after apply:
 #
 #   aws secretsmanager put-secret-value --secret-id <webhook secret name> --secret-string <hex>
-#   aws secretsmanager put-secret-value --secret-id <private key name> --secret-string file://<app>.pem
 #
-# Never through Terraform, so neither value is in state or a plan diff.
+# Never through Terraform, so the value is in neither state nor a plan diff.
 
 # Shared with GitHub; signs every delivery (X-Hub-Signature-256). Read only by
 # webhook-receiver.
@@ -35,10 +34,8 @@ resource "aws_secretsmanager_secret" "github_webhook_secret" {
   description = "GitHub App webhook secret, used by webhook-receiver to verify delivery signatures"
 }
 
-# Signs the App's JWT, which mints installation tokens that can act on every
-# repository the App is installed on. Read only by github-gateway (not yet
-# built), never by anything API Gateway can reach.
-resource "aws_secretsmanager_secret" "github_app_private_key" {
-  name        = "${var.project}/${var.environment}/github-app-private-key"
-  description = "GitHub App private key (PEM), used by github-gateway to mint installation tokens"
-}
+# The App's private key is not here. It was, briefly (2026-09-24), before it
+# moved to KMS, where github-gateway can sign with it but nothing can read it
+# (lambda_github_gateway.tf, docs/ci-integration-spec.md §4.1). Removing the
+# resource schedules the old secret for deletion with Secrets Manager's
+# default 30-day recovery window, during which it cannot be read either.

@@ -300,3 +300,101 @@ def test_execution_names_follow_step_functions_rules(pr_id):
     name = handler.execution_name(pr_id, HEAD_SHA, "push")
 
     assert re.fullmatch(r"[A-Za-z0-9_-]{1,80}", name)
+
+
+# ---------- check_run: Draft fixes and Re-run (spec §5) ----------
+
+def _check_run_payload(action="requested_action", identifier="draft_fixes", name="CascadeSec",
+                       pull_requests=True, head_sha=HEAD_SHA):
+    payload = {
+        "action": action,
+        "check_run": {
+            "id": 55, "name": name, "head_sha": head_sha,
+            "pull_requests": [{"number": 7, "head": {"sha": "c" * 40}, "base": {"sha": BASE_SHA}}]
+            if pull_requests else [],
+        },
+        "repository": {"id": 123456, "full_name": "konradkelly/cascadesec-testbed"},
+        "installation": {"id": 987},
+    }
+    if action == "requested_action":
+        payload["requested_action"] = {"identifier": identifier}
+    return payload
+
+
+def test_draft_fixes_starts_a_remediating_execution_on_the_check_runs_commit(aws):
+    _, sfn = aws
+    response = handler.handler(_event(_check_run_payload(), gh_event="check_run"), None)
+
+    assert response["statusCode"] == 202
+    kwargs = sfn.start_execution.call_args.kwargs
+    execution_input = json.loads(kwargs["input"])
+    assert execution_input["remediate"] is True
+    # The commit the button was on, not the PR's newer head.
+    assert execution_input["github"]["head_sha"] == HEAD_SHA
+    assert execution_input["github"]["trigger"] == "fixes"
+    assert kwargs["name"] == "gh-123456-7-aaaaaaaaaaaa-fixes"
+
+
+def test_second_click_on_draft_fixes_starts_nothing(aws):
+    _, sfn = aws
+    sfn.start_execution.side_effect = ExecutionAlreadyExists("same")
+
+    assert handler.handler(_event(_check_run_payload(), gh_event="check_run"), None)["statusCode"] == 200
+
+
+def test_rerun_is_a_plain_rescan_named_by_its_delivery(aws):
+    _, sfn = aws
+    first = _event(_check_run_payload(action="rerequested"), gh_event="check_run")
+    second = _event(_check_run_payload(action="rerequested"), gh_event="check_run")
+    second["headers"]["X-GitHub-Delivery"] = "other-delivery"
+    handler.handler(first, None)
+    handler.handler(second, None)
+
+    names = [c.kwargs["name"] for c in sfn.start_execution.call_args_list]
+    inputs = [json.loads(c.kwargs["input"]) for c in sfn.start_execution.call_args_list]
+    assert names[0] != names[1]
+    assert all(i["remediate"] is False for i in inputs)
+    assert names[0] == "gh-123456-7-aaaaaaaaaaaa-rerun-delivery"
+
+
+def test_other_apps_check_runs_are_ignored(aws):
+    # CI's own check runs arrive too; only ours has a button.
+    _, sfn = aws
+    event = _event(_check_run_payload(action="rerequested", name="build"), gh_event="check_run")
+
+    assert handler.handler(event, None)["statusCode"] == 204
+    sfn.start_execution.assert_not_called()
+
+
+def test_unknown_button_is_ignored(aws):
+    _, sfn = aws
+    event = _event(_check_run_payload(identifier="something_else"), gh_event="check_run")
+
+    assert handler.handler(event, None)["statusCode"] == 204
+    sfn.start_execution.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["created", "completed"])
+def test_check_run_lifecycle_events_are_ignored(aws, action):
+    # Every check run's created/completed arrives too: ~25 per push on a repo
+    # with busy CI. None of them starts anything.
+    _, sfn = aws
+    payload = _check_run_payload(action=action)
+
+    assert handler.handler(_event(payload, gh_event="check_run"), None)["statusCode"] == 204
+    sfn.start_execution.assert_not_called()
+
+
+def test_check_run_without_a_pull_request_is_ignored(aws):
+    # GitHub leaves pull_requests empty for a PR from a fork.
+    _, sfn = aws
+    event = _event(_check_run_payload(pull_requests=False), gh_event="check_run")
+
+    assert handler.handler(event, None)["statusCode"] == 204
+    sfn.start_execution.assert_not_called()
+
+
+def test_check_run_with_a_bad_sha_is_a_400(aws):
+    event = _event(_check_run_payload(head_sha="../x"), gh_event="check_run")
+
+    assert handler.handler(event, None)["statusCode"] == 400
