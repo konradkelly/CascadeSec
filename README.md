@@ -117,7 +117,8 @@ CI runs the Lambda test suites (pytest, 440 tests) and the dashboard lint + type
 
 ## Tech stack
 
-- **Infra:** AWS Lambda (zip and container-image), Step Functions, API Gateway, DynamoDB, S3, ECR, Cognito, CloudFront, Secrets Manager, CloudWatch (EMF metrics, alarms), X-Ray, SNS — all in Terraform
+- **Infra:** AWS Lambda (zip and container-image), Step Functions, API Gateway, DynamoDB, S3, ECR, Cognito, CloudFront, Secrets Manager, KMS (the GitHub App's signing key), EventBridge, CloudWatch (EMF metrics, alarms), X-Ray, SNS — all in Terraform
+- **GitHub:** a GitHub App — webhooks, the Checks API (annotations and an action button), and PR reviews with suggested changes
 - **Scanning:** Trivy, Checkov, KICS, custom Trivy checks in Rego — Terraform, OpenTofu, Kubernetes manifests, CloudFormation (YAML and JSON), Azure ARM templates and Bicep
 - **Agents:** Anthropic API, strict JSON-schema-constrained outputs
 - **Frontend:** React, Vite, TypeScript
