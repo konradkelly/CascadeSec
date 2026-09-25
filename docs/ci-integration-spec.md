@@ -42,8 +42,8 @@ inside its permanent free tier either way.
 Two directions of trust carry a PR through, and the first diagram is about
 them. The **webhook secret** (symmetric, shared with GitHub) proves a
 delivery came **from** GitHub; the **App key** (asymmetric, private half in
-KMS) proves a call **to** GitHub comes from the App. The shaded part is built
-and tested but not yet deployed.
+KMS) proves a call **to** GitHub comes from the App. The shaded part is what
+v3 added on the way out.
 
 ```mermaid
 sequenceDiagram
@@ -77,7 +77,7 @@ sequenceDiagram
 ```
 
 What one execution does between `fetch` and `report`. Solid arrows are the
-state machine's order; dotted ones are data. Dashed boxes are built but not yet deployed.
+state machine's order; dotted ones are data. Dashed boxes are v3's.
 
 ```mermaid
 flowchart TB
@@ -103,8 +103,8 @@ flowchart TB
     rem -.-> ddb
     ddb -.->|"findings and fixes"| report
 
-    classDef planned stroke-dasharray: 6 4
-    class fetch,report planned
+    classDef v3 stroke-dasharray: 6 4
+    class fetch,report v3
 ```
 
 The same, as the state machine sees it:
@@ -424,23 +424,47 @@ found by name rather than by id.
 
 ## 9. Build order and status
 
-1. **Register the App by hand** — done 2026-09-24. Still **(verify)**, to be
-   settled by the first deployed Draft fixes run: whether a review with one
-   out-of-diff suggestion fails whole (the code assumes it does, and holds
-   such files back rather than find out), and who sees action buttons.
-2. **Secrets, `webhook-receiver`, the API route** — built and deployed
-   2026-09-24. Verified on PugetScope PR #9 and on this repository's own PR:
-   a real push was delivered, verified, and started its execution.
-3. **`fetch`**, with tests on hostile tarballs (symlink, hardlink, `..`,
-   absolute path, backslash, oversize) — built 2026-09-25.
-4. **`report`**: check run, summary and annotations — built 2026-09-25.
-5. **The Draft fixes button and suggestions** — built 2026-09-25, with
-   `select_files` and mapping's `only_files`.
-6. **The stuck-check backstop** — built 2026-09-25 (§6.3).
-7. **Metrics** — built 2026-09-25: `AnnotationsPosted`, `SuggestionsPosted`,
-   `FilesHeldFromSuggestions` and `ExecutionsReportedFailed`, as EMF from the
-   gateway. The ratio of held to posted files says whether the added-lines
-   rule is costing more fixes than it should.
+**Deployed and verified end to end, 2026-09-25**, on PugetScope PR #10: a
+test PR adding a deliberately misconfigured Terraform file to a repository of
+58 IaC files and 566 findings.
 
-Steps 3–7 are unit-tested and not yet deployed: they need the App key in
-KMS (`scripts/import_github_app_key.py`) before the first apply.
+1. **Register the App by hand** — done 2026-09-24.
+2. **Secrets, `webhook-receiver`, the API route** — deployed 2026-09-24. A
+   real push is delivered, verified and started; a redelivery starts nothing.
+3. **`fetch`** — deployed. 58 files snapshotted, the one changed file found.
+4. **`report`** — deployed. 18 annotations, all on the fixture's added lines
+   and none on the 57 untouched files; 566 findings counted.
+5. **Draft fixes and suggestions** — deployed. Mapping stayed on the changed
+   file (12 mapped, 554 left raw at no cost). Three Draft fixes runs:
+   - the S3 bucket and security group: every fix cleared its finding and
+     introduced another, or rested on an assumption (which CIDR may SSH), so
+     all went to a human and nothing was suggested;
+   - an EBS volume: the right one-line fix, held for its assumption that
+     replacing the volume loses no data — flipping `encrypted` recreates it;
+   - a KMS key without rotation: `enable_key_rotation = true`, self-check
+     passed, no assumption, **posted as a suggestion** by `cascadesec[bot]`,
+     anchored to the line above the insertion.
+
+   Holding four of five fixes is the design working, not a shortfall: a
+   suggestion is one click from being committed, so it is only offered for a
+   change that is verified and has nothing for a person to decide.
+6. **The stuck-check backstop** — deployed; exercised by the first run, which
+   failed at Scan and was completed on the PR as "Scan did not finish".
+7. **Metrics** — deployed: `AnnotationsPosted`, `SuggestionsPosted`,
+   `FilesHeldFromSuggestions`, `ExecutionsReportedFailed`.
+
+**What the deployed runs changed**, each a commit of its own:
+- Scan returned every finding, and a whole repository's are past Step
+  Functions' 256KB task-result limit — which is checked before a
+  ResultSelector can trim anything. The scanner takes `return_findings`,
+  and the pipeline sends false.
+- A finding about a whole file has a `line_range` of `[None, None]`; `report`
+  counts such findings and annotates only those with lines.
+- `report` had left out `superseded` findings, which are still in the code
+  until a fix is committed.
+- The PR page's Re-run sends `check_suite.rerequested`, not
+  `check_run.rerequested`; both are now a rescan.
+
+**Still (verify):** whether a review with one out-of-diff suggestion fails
+whole (the code holds such files back rather than find out), and whether
+Draft fixes is hidden from users without write access.
