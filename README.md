@@ -112,7 +112,7 @@ CI runs the Lambda test suites (pytest, 217 tests) and the dashboard lint + type
 - [~] v2 — Kubernetes manifest scanning (**built 2026-09-20**); Helm charts held back, see [`docs/multi-iac-spec.md`](docs/multi-iac-spec.md) §6
 - [~] v2 — Azure ARM templates and Bicep (**built 2026-09-22**), with CIS Azure 3.0; KICS scans both since 2026-09-23, after Trivy's ARM adapter was measured unable to satisfy four of its own checks
 - [~] v2 — CloudFormation, both syntaxes (**built 2026-09-23**); all three scanners read it, so it needs no single-source caveat. CDK is deliberately out of scope: its synth output is CloudFormation, but a fix written into a generated template is overwritten by the next synth, so `cdk.out` is skipped — [`docs/multi-iac-spec.md`](docs/multi-iac-spec.md) §7.1
-- [ ] v3 — GitHub App / PR-triggered CI integration
+- [ ] v3 — GitHub App / PR-triggered CI integration — spec drafted 2026-09-23, [`docs/ci-integration-spec.md`](docs/ci-integration-spec.md)
 - [ ] v4 — Approved-fix write-back to PR branch
 
 ## Tech stack

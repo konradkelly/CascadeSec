@@ -24,7 +24,7 @@ jobs:
       # One red suite shouldn't hide the state of the others.
       fail-fast: false
       matrix:
-        suite: [review-api, remediation-agent, iac-scanner, context-agent, mapping-agent]
+        suite: [review-api, remediation-agent, iac-scanner, context-agent, mapping-agent, webhook-receiver]
     steps:
       - uses: actions/checkout@v4
 

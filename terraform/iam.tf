@@ -1,7 +1,7 @@
 # Roles for the v1 Lambdas (spec §4.1, §4.4). Function names are fixed here so
 # permissions can be scoped ahead of the Lambda resources themselves, which are
-# created in a later pass. webhook-receiver/SQS roles are deferred to v3 (GitHub
-# CI integration) since v1 uses a manual trigger, not a webhook.
+# created in a later pass. webhook-receiver is v3's (docs/ci-integration-spec.md);
+# there is no SQS role because v3 dropped the queue (spec §1).
 locals {
   lambda_function_names = {
     iac_scanner       = "${var.project}-${var.environment}-iac-scanner"
@@ -9,6 +9,7 @@ locals {
     remediation_agent = "${var.project}-${var.environment}-remediation-agent"
     context_agent     = "${var.project}-${var.environment}-context-agent"
     review_api        = "${var.project}-${var.environment}-review-api"
+    webhook_receiver  = "${var.project}-${var.environment}-webhook-receiver"
   }
 }
 
@@ -301,4 +302,54 @@ resource "aws_iam_role_policy" "review_api" {
   name   = "${local.lambda_function_names.review_api}-policy"
   role   = aws_iam_role.review_api.id
   policy = data.aws_iam_policy_document.review_api.json
+}
+
+# ---------- webhook-receiver ----------
+# The only unauthenticated, internet-facing function: it verifies a GitHub
+# delivery's signature and starts one pipeline execution. So it gets the
+# webhook secret and StartExecution on the one state machine, and nothing
+# else -- no S3, no DynamoDB, and above all not the App private key. A forged
+# request that got past it could start an execution, and nothing more
+# (docs/ci-integration-spec.md §2.1).
+
+resource "aws_iam_role" "webhook_receiver" {
+  name               = "${local.lambda_function_names.webhook_receiver}-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+data "aws_iam_policy_document" "webhook_receiver" {
+  statement {
+    sid       = "Logs"
+    actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.lambda_function_names.webhook_receiver}:*"]
+  }
+
+  statement {
+    sid       = "WebhookSecretRead"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.github_webhook_secret.arn]
+  }
+
+  # StartExecution only. A redelivery is made idempotent by the execution
+  # name (ExecutionAlreadyExists), so the function never needs to list or
+  # describe executions to find out what already ran.
+  statement {
+    sid       = "StartPipeline"
+    actions   = ["states:StartExecution"]
+    resources = [aws_sfn_state_machine.pipeline.arn]
+  }
+
+  # Active tracing needs the function to be able to ship its segments.
+  # Region-scoped resource ARNs don't exist for these two actions.
+  statement {
+    sid       = "XRayWrite"
+    actions   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "webhook_receiver" {
+  name   = "${local.lambda_function_names.webhook_receiver}-policy"
+  role   = aws_iam_role.webhook_receiver.id
+  policy = data.aws_iam_policy_document.webhook_receiver.json
 }
