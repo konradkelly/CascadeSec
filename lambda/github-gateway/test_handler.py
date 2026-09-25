@@ -411,11 +411,19 @@ def test_report_annotates_only_findings_on_added_lines():
     assert body["output"]["annotations"][0]["annotation_level"] == "failure"
 
 
-def test_report_ignores_superseded_and_no_longer_detected():
+def test_report_ignores_findings_the_scan_no_longer_reports():
     gone = _finding("2", 2)
     gone["no_longer_detected"] = "t"
-    _, request, _ = _report([_finding("1", 2, status="superseded"), gone])
+    _, request, _ = _report([gone])
     assert "annotations" not in request.call_args.args[3]["output"]
+
+
+@pytest.mark.parametrize("status", ["superseded", "needs-human-only", "fix-proposed", "resolved"])
+def test_report_annotates_a_finding_whatever_became_of_its_fix(status):
+    # A fix is not applied until someone commits it; the line is still wrong.
+    # Leaving superseded out dropped 6 of 18 annotations on PugetScope #10.
+    _, request, _ = _report([_finding("1", 2, status=status)])
+    assert len(request.call_args.args[3]["output"]["annotations"]) == 1
 
 
 def test_report_sends_annotations_in_batches_of_fifty():

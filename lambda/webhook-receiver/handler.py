@@ -116,6 +116,14 @@ def handler(event, context):
             # there is no number to scan; the push that opened it already ran.
             logger.info("delivery %s: check_run with no pull request (a fork?)", delivery)
             return _response(204)
+    elif gh_event == "check_suite" and action == "rerequested":
+        # The PR page's Re-run re-runs the App's whole suite, and arrives as
+        # this rather than check_run.rerequested (found on PugetScope #10,
+        # 2026-09-25). GitHub sends it only to the App that owns the suite,
+        # so there is no name to check -- it is ours by construction.
+        if not (payload.get("check_suite") or {}).get("pull_requests"):
+            logger.info("delivery %s: check_suite with no pull request (a fork?)", delivery)
+            return _response(204)
     else:
         logger.info("delivery %s: ignored %s.%s", delivery, gh_event, action)
         return _response(204)
@@ -228,7 +236,9 @@ def build_check_run_input(payload, delivery):
     delivery: each click is its own delivery, and a redelivery of one click
     is the same name again.
     """
-    check_run = payload["check_run"]
+    # A check_suite.rerequested has the same two fields where this reads
+    # them, on the suite instead of the run.
+    check_run = payload.get("check_run") or payload["check_suite"]
     pr = check_run["pull_requests"][0]
     repo = payload["repository"]
     pr_id = make_pr_id(repo["id"], pr["number"])
