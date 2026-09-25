@@ -285,9 +285,14 @@ Reads the PR's findings from DynamoDB and the stored hunks, then:
   numbers of an intermediate file nobody has, and only the chain's **last**
   corrected file (`fixes/<pr_id>/<tip>/<file>`) was self-checked with every
   earlier fix in it. So, per file:
-  1. the **tip** is the `fix-proposed`, self-check-passed fix whose chain
-     covers every other such fix on the file, with each link's recorded
-     `diff_sha256` still matching — an edited link means no tip;
+  1. the **tip** is the end of the longest chain made only of
+     `fix-proposed`, self-check-passed fixes, each link's recorded
+     `diff_sha256` still matching. remediation-agent drafts on top of held
+     fixes too, so a fix whose chain passes through a held one carries that
+     held change and is never the tip; a verified fix left outside the tip's
+     chain is named in the summary. *Was: the tip had to cover every verified
+     fix on the file, which held back KMS rotation and database encryption on
+     cascadesec-testbed #2 because a later fix was built on a held one;*
   2. the chain's root diff must apply to the current snapshot, or the fix was
      drafted on an earlier commit and is held ("run Draft fixes again");
   3. the tip's corrected file is diffed against the PR head, and each hunk
@@ -464,6 +469,15 @@ test PR adding a deliberately misconfigured Terraform file to a repository of
   until a fix is committed.
 - The PR page's Re-run sends `check_suite.rerequested`, not
   `check_run.rerequested`; both are now a rescan.
+- A file with several verified fixes posted none when any later fix was
+  drafted on a held one (§4.3 step 1). Now the longest all-verified chain
+  is posted: on cascadesec-testbed #2, KMS rotation and database
+  encryption, with the SSH fix named as left out and the Deployment held.
+
+The demos now run on [cascadesec-testbed](https://github.com/konradkelly/cascadesec-testbed),
+a mock production environment built for it, rather than on a portfolio
+project; its PR #2 shows every outcome: annotations, suggestions, a fix left
+out of a chain, and a file held whole.
 
 **Still (verify):** whether a review with one out-of-diff suggestion fails
 whole (the code holds such files back rather than find out), and whether
