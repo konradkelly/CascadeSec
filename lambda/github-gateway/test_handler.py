@@ -510,3 +510,22 @@ def test_manual_run_failure_is_not_githubs_business():
 def test_unknown_action_is_an_error():
     with pytest.raises(ValueError):
         handler.handler({"action": "nope"}, None)
+
+
+@pytest.mark.parametrize("line_range", [[None, None], [], None, ["x", "y"]])
+def test_a_finding_without_lines_is_counted_not_annotated(line_range):
+    # Trivy's KSV-0117 came back as [None, None] on the first PugetScope run,
+    # and report died on it.
+    lineless = _finding("9", 2)
+    lineless["line_range"] = line_range
+    result, request, _ = _report([_finding("1", 2), lineless])
+
+    body = request.call_args.args[3]
+    assert [a["title"] for a in body["output"]["annotations"]] == ["R1 (high)"]
+    assert "of **2** in the repository" in body["output"]["summary"]
+    assert result["annotations"] == 1
+
+
+def test_annotation_title_leaves_out_a_severity_the_scanner_did_not_give():
+    assert handler.annotation(_finding("1", 2, severity="UNKNOWN"))["title"] == "R1"
+    assert handler.annotation(_finding("1", 2, severity="HIGH"))["title"] == "R1 (high)"

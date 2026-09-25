@@ -512,15 +512,32 @@ def _complete(check_path, token, title, summary, annotations=(), actions=()):
     })
 
 
+def _span(finding):
+    """(start, end) as ints, or None for a finding about the whole file.
+
+    Some rules have no line: Trivy's KSV-0117 on a Kubernetes manifest came
+    back as [None, None] on the first PugetScope run, and report died on it.
+    Such a finding is counted in the summary but never annotated -- it cannot
+    be placed on a line the PR added.
+    """
+    line_range = finding.get("line_range") or []
+    if len(line_range) != 2 or None in line_range:
+        return None
+    try:
+        return int(line_range[0]), int(line_range[1])
+    except (TypeError, ValueError):
+        return None
+
+
 def _lines(finding):
-    start, end = (int(x) for x in finding["line_range"])
-    return set(range(start, end + 1))
+    span = _span(finding)
+    return set(range(span[0], span[1] + 1)) if span else set()
 
 
 def _sort_key(finding):
     severity = str(finding.get("severity", "UNKNOWN")).upper()
     rank = SEVERITY_ORDER.index(severity) if severity in SEVERITY_ORDER else len(SEVERITY_ORDER)
-    return (rank, finding["file"], int(finding["line_range"][0]))
+    return (rank, finding["file"], (_span(finding) or (0, 0))[0])
 
 
 def diff_lines(pr_files):
@@ -551,7 +568,8 @@ def diff_lines(pr_files):
 
 
 def annotation(finding):
-    start, end = (int(x) for x in finding["line_range"])
+    # Only called for findings on added lines, which have a span.
+    start, end = _span(finding)
     severity = str(finding.get("severity", "UNKNOWN")).upper()
     controls = sorted({m.get("control_id") for m in finding.get("control_mappings") or []
                        if m.get("control_id")})
@@ -565,7 +583,10 @@ def annotation(finding):
         "start_line": start,
         "end_line": end,
         "annotation_level": ANNOTATION_LEVEL.get(severity, "notice"),
-        "title": f"{finding['rule_id']} ({severity.lower()})"[:255],
+        # checkov reports no severity; "(unknown)" on half the annotations
+        # said nothing a reader could use.
+        "title": (finding["rule_id"] if severity == "UNKNOWN"
+                  else f"{finding['rule_id']} ({severity.lower()})")[:255],
         "message": message[:60000],
     }
 
