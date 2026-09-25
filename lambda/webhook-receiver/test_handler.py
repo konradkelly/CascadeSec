@@ -398,3 +398,46 @@ def test_check_run_with_a_bad_sha_is_a_400(aws):
     event = _event(_check_run_payload(head_sha="../x"), gh_event="check_run")
 
     assert handler.handler(event, None)["statusCode"] == 400
+
+
+def _check_suite_payload(action="rerequested", pull_requests=True):
+    return {
+        "action": action,
+        "check_suite": {
+            "id": 77, "head_sha": HEAD_SHA,
+            "pull_requests": [{"number": 7, "head": {"sha": HEAD_SHA}, "base": {"sha": BASE_SHA}}]
+            if pull_requests else [],
+        },
+        "repository": {"id": 123456, "full_name": "konradkelly/cascadesec-testbed"},
+        "installation": {"id": 987},
+    }
+
+
+def test_suite_rerun_from_the_pr_page_is_a_rescan(aws):
+    # The PR page's Re-run sends check_suite.rerequested, not check_run --
+    # the first real click on PugetScope #10 was ignored for it.
+    _, sfn = aws
+    response = handler.handler(_event(_check_suite_payload(), gh_event="check_suite"), None)
+
+    assert response["statusCode"] == 202
+    kwargs = sfn.start_execution.call_args.kwargs
+    execution_input = json.loads(kwargs["input"])
+    assert execution_input["remediate"] is False
+    assert execution_input["github"]["trigger"].startswith("rerun-")
+    assert kwargs["name"] == "gh-123456-7-aaaaaaaaaaaa-rerun-delivery"
+
+
+@pytest.mark.parametrize("action", ["requested", "completed"])
+def test_other_check_suite_actions_are_ignored(aws, action):
+    _, sfn = aws
+
+    assert handler.handler(_event(_check_suite_payload(action=action), gh_event="check_suite"), None)["statusCode"] == 204
+    sfn.start_execution.assert_not_called()
+
+
+def test_suite_rerun_without_a_pull_request_is_ignored(aws):
+    _, sfn = aws
+    event = _event(_check_suite_payload(pull_requests=False), gh_event="check_suite")
+
+    assert handler.handler(event, None)["statusCode"] == 204
+    sfn.start_execution.assert_not_called()

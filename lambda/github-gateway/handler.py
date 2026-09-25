@@ -452,8 +452,12 @@ def report(event):
         _complete(check_path, token, "Not scanned", fetched.get("reason") or "Nothing to scan.")
         return {"status": fetched.get("status")}
 
-    findings = [f for f in query_findings(pr_id)
-                if not f.get("no_longer_detected") and f.get("status") != "superseded"]
+    # Every finding the scan still reports. Not only the open ones: a
+    # "superseded" finding is covered by another finding's fix, which is a
+    # statement about the fix, not the code -- until the fix is applied the
+    # misconfiguration is still on the line. Leaving them out dropped six of
+    # eighteen annotations from PugetScope #10 once Draft fixes had run.
+    findings = [f for f in query_findings(pr_id) if not f.get("no_longer_detected")]
     pr_files = json.loads(s3.get_object(
         Bucket=ARTIFACTS_BUCKET, Key=files_key(pr_id, github["head_sha"]))["Body"].read())
     added, visible = diff_lines(pr_files)
