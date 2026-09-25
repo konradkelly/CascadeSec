@@ -1471,3 +1471,45 @@ def test_findings_that_collide_on_one_id_are_written_once(mock_dynamodb):
     assert mock_table.update_item.call_count == 2
     assert preserved == 2  # distinct findings, not the three reported
     assert stale == 0
+
+
+@patch.object(handler, "_write_findings", return_value=(0, 0))
+@patch.object(handler, "_run_kics", new=_no_kics)
+@patch.object(handler, "_run_checkov")
+@patch.object(handler, "_run_trivy")
+@patch.object(handler, "_download_snapshot")
+def test_return_findings_false_keeps_only_the_counts(
+    mock_download, mock_trivy, mock_checkov, mock_write
+):
+    """The pipeline's Scan state asks for counts only: a Step Functions task
+    result is capped at 256KB before a ResultSelector can trim it, and a whole
+    repository's findings exceeded it on PugetScope. The findings are still
+    written; only the response omits them."""
+    mock_download.return_value = (["main.tf"], [], {})
+    mock_trivy.return_value = ([{
+        "ID": "AWS-0132", "Target": "main.tf", "Severity": "HIGH",
+        "CauseMetadata": {"StartLine": 1, "EndLine": 3},
+    }], [])
+    mock_checkov.return_value = _checkov_report()
+
+    result = handler.handler(
+        {"pr_id": "pr-1", "s3_prefix": "scans/pr-1/", "return_findings": False}, None)
+
+    assert "findings" not in result
+    assert result["finding_count"] == 1
+    mock_write.assert_called_once()
+
+
+@patch.object(handler, "_write_findings", return_value=(0, 0))
+@patch.object(handler, "_run_kics", new=_no_kics)
+@patch.object(handler, "_run_checkov")
+@patch.object(handler, "_run_trivy")
+@patch.object(handler, "_download_snapshot")
+def test_findings_are_returned_by_default(mock_download, mock_trivy, mock_checkov, mock_write):
+    """remediation-agent's self-check, the eval and the external runner read
+    the list; the default must not change under them."""
+    mock_download.return_value = (["main.tf"], [], {})
+    mock_trivy.return_value = ([], [])
+    mock_checkov.return_value = _checkov_report()
+
+    assert "findings" in handler.handler({"pr_id": "pr-1", "s3_prefix": "scans/pr-1/"}, None)

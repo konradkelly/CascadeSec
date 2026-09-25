@@ -118,11 +118,13 @@ locals {
             "pr_id.$"     = "$.pr_id"
             "s3_prefix.$" = "$.s3_prefix"
             persist       = true
+            # Counts only. The findings are in DynamoDB already, and the
+            # ResultSelector below cannot help: a task result is checked
+            # against the 256KB limit before it is selected from, and a whole
+            # repository's findings exceed it (PugetScope, 2026-09-25).
+            return_findings = false
           }
         }
-        # The scanner also returns every finding. They are in DynamoDB
-        # already; carrying them in execution state would only push a large
-        # PR toward the 256KB state limit.
         ResultSelector = {
           "finding_count.$"            = "$.Payload.finding_count"
           "scan_errors.$"              = "$.Payload.scan_errors"

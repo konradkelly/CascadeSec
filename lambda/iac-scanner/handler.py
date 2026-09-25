@@ -31,8 +31,17 @@ Event shape:
 {
   "pr_id": "manual-1",
   "s3_prefix": "scans/manual-1/",   # snapshot under ARTIFACTS_BUCKET (see SNAPSHOT_SUFFIXES)
-  "persist": true                    # optional, default true
+  "persist": true,                   # optional, default true
+  "return_findings": true            # optional, default true
 }
+
+return_findings=false leaves the findings list out of the response and
+keeps only the counts. The pipeline's Scan state sets it: a Step Functions
+task result is capped at 256KB before any ResultSelector can trim it, and a
+whole repository's findings are past that -- PugetScope's were, on the first
+v3 run (2026-09-25). Everything else that invokes the scanner reads the list
+(remediation-agent's self-check, the eval, the external runner), so the
+default stays.
 
 There is no type parameter: the caller uploads a snapshot and the scanner
 reports what it finds, per file. It took one until 2026-09-16, when it could
@@ -491,7 +500,7 @@ def handler(event, context):
                 pr_id=pr_id, event="scan_complete",
             )
 
-        return {
+        response = {
             "pr_id": pr_id,
             "finding_count": len(findings),
             "findings": findings,
@@ -504,6 +513,9 @@ def handler(event, context):
             "preserved_count": preserved,
             "no_longer_detected_count": stale,
         }
+        if not event.get("return_findings", True):
+            del response["findings"]
+        return response
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
