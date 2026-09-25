@@ -39,6 +39,76 @@ inside its permanent free tier either way.
 
 ## 2. Flow
 
+Two directions of trust carry a PR through, and the first diagram is about
+them. The **webhook secret** (symmetric, shared with GitHub) proves a
+delivery came **from** GitHub; the **App key** (asymmetric, private half in
+KMS) proves a call **to** GitHub comes from the App. The shaded part is not
+built yet.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant GH as GitHub
+    participant GW as API Gateway
+    participant R as webhook-receiver
+    participant SM as Secrets Manager
+    participant SF as Step Functions
+    participant G as github-gateway
+    participant K as KMS
+
+    GH->>GW: POST /github/webhook, X-Hub-Signature-256
+    GW->>R: invoke (no JWT authorizer, throttled)
+    R->>SM: GetSecretValue (cached 5 min)
+    R->>R: HMAC-SHA256 over the raw body, constant-time compare
+    R->>SF: StartExecution, name = PR + head sha + trigger
+    R-->>GH: 202 started (200 redelivery, 204 ignored, 401 forged)
+
+    rect rgba(128, 128, 128, 0.15)
+    SF->>G: fetch
+    G->>K: Sign(JWT header and claims), RS256
+    K-->>G: signature (the key never leaves KMS)
+    G->>GH: POST access_tokens with the JWT
+    GH-->>G: installation token, valid 1 hour
+    G->>GH: tarball at head sha, PR changed files
+    Note over SF: scan, map, remediate
+    SF->>G: report
+    G->>GH: check run, annotations, suggestions
+    end
+```
+
+What one execution does between `fetch` and `report`. Solid arrows are the
+state machine's order; dotted ones are data. Dashed boxes are not built yet.
+
+```mermaid
+flowchart TB
+    start(["StartExecution from webhook-receiver"])
+    fetch["fetch · github-gateway<br/>snapshot the PR head"]
+    scan["scan · iac-scanner<br/>Trivy, Checkov, KICS"]
+    map["map · mapping-agent<br/>findings to CIS controls"]
+    rem["remediate · remediation-agent<br/>only after Draft fixes"]
+    report["report · github-gateway<br/>results back to the PR"]
+
+    s3[("S3<br/>scans/pr_id/")]
+    ddb[("DynamoDB<br/>findings")]
+    llm["Anthropic API"]
+
+    start --> fetch --> scan --> map --> rem --> report
+
+    fetch -.->|"write snapshot"| s3
+    s3 -.->|"read snapshot"| scan
+    scan -.->|"raw findings"| ddb
+    map -.->|"model calls"| llm
+    rem -.-> llm
+    map -.->|"read and update"| ddb
+    rem -.-> ddb
+    ddb -.->|"findings and fixes"| report
+
+    classDef planned stroke-dasharray: 6 4
+    class fetch,report planned
+```
+
+The same, as the state machine sees it:
+
 ```
 PR opened / synchronize / reopened
   → API Gateway  POST /github/webhook      (no JWT authorizer; the HMAC is the auth)
@@ -57,23 +127,25 @@ PR opened / synchronize / reopened
 the input carries a `github` object, chosen by a `Choice` state, so a manual
 run is the existing execution with two states skipped.
 
-### 2.1 Two Lambdas, split by the secret each one holds
+### 2.1 Two Lambdas, split by the credential each one can use
 
 | Lambda | Holds | Can do |
 |---|---|---|
 | `webhook-receiver` | webhook secret only | `states:StartExecution` on the one state machine |
-| `github-gateway` | App private key | `s3:PutObject`/`DeleteObject` on `scans/*`, read of the finding table, GitHub API as the installation |
+| `github-gateway` | `kms:Sign` on the App key — never the key itself | `s3:PutObject`/`DeleteObject` on `scans/*`, read of the finding table, GitHub API as the installation |
 
 The receiver is the only internet-facing code that parses untrusted input
 before authentication, so it gets nothing worth stealing: a forged request
 that got past it could start an execution, and nothing else. The private key,
-which can act on every repository the App is installed on, lives only in a
-function that API Gateway cannot reach. Same least-privilege argument as
+which can act on every repository the App is installed on, is not held by
+any function: it lives in KMS, and the one role allowed to sign with it
+belongs to a function API Gateway cannot reach (§4.1). Same least-privilege argument as
 §4.1's per-Lambda roles, which is the point of the project.
 
 `github-gateway` has two entry points (`fetch`, `report`) rather than being
-two Lambdas, because both need the same key and the same installation-token
-code; splitting them would double where the key is readable and gain nothing.
+two Lambdas, because both need the same signing grant and the same
+installation-token code; splitting them would double the roles that can act
+as the App and gain nothing.
 
 ## 3. `webhook-receiver`
 
@@ -110,9 +182,29 @@ JWT signed RS256 with the App's private key (`iss` = App id, `exp` ≤ 10
 minutes) → `POST /app/installations/{id}/access_tokens` → a token valid for
 an hour, scoped to the installation. Mint one per invocation; an execution is
 shorter than an hour but a cached token is one more thing to expire at the
-wrong moment. Private key and webhook secret are two new Secrets Manager
-entries, placeholder-valued with `ignore_changes`, like the Anthropic key in
-`secrets.tf`.
+wrong moment.
+
+**The private key is in KMS, not Secrets Manager** (decided 2026-09-24). The
+JWT's header and claims are built with the standard library and the RS256
+signature is `kms:Sign` with `RSASSA_PKCS1_V1_5_SHA_256`, so no function can
+read the key, only use it, and every use is a CloudTrail event. A key in
+Secrets Manager is readable by any role granted `GetSecretValue`, and readable
+for good once copied out. It is imported rather than generated because GitHub
+generates App keys and accepts no uploaded public key; so the guarantee holds
+from the import onward, once the downloaded `.pem` and the interim Secrets
+Manager copy are deleted. `scripts/import_github_app_key.py` creates the key
+(`Origin=EXTERNAL`, alias `alias/iacposture-dev-github-app`), wraps and
+imports the material locally, and proves it by verifying a KMS signature
+against the local public key. Terraform looks the key up by alias: provider
+5.x cannot create a key with imported material, and the material should not
+pass through state anyway.
+
+The webhook secret stays in Secrets Manager for now. It is symmetric, and
+GitHub holds a readable copy regardless, so moving it gains less than moving
+the App key did. A KMS HMAC key with imported material could still verify
+deliveries without the receiver reading it (`VerifyMac`); whether KMS accepts
+that import has not been checked. It has no placeholder value (`secrets.tf`
+says why).
 
 App permissions: Metadata read, Contents **read**, Pull requests write,
 Checks write. Events: `pull_request`, `check_run`. Contents stays read-only

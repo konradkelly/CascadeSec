@@ -23,6 +23,10 @@
 
 anthropic==1.5.0
 boto3==1.43.92
+# Not for any suite: scripts/import_github_app_key.py wraps the GitHub App
+# key for KMS import with it, locally. Nothing deployed uses it -- that is
+# the point of putting the key in KMS.
+cryptography==50.0.1
 pytest==9.1.1
 # PyYAML is NOT a runtime dependency added here -- the scanner reads it from
 # /opt/python, where checkov already ships it (the image's strip removes only
