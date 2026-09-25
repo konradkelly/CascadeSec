@@ -628,6 +628,11 @@ def build_summary(*, state, findings, on_added, posted, held, remediate, offer_f
                          "apply all of a file's suggestions, or none.")
         elif not held:
             lines.append("No fix passed its self-check on the files this PR changes.")
+        for p in posted:
+            if p.get("left_out"):
+                rules = ", ".join(f"`{r}`" for r in p["left_out"])
+                lines.append(f"- `{p['file']}`: {rules} not posted -- drafted on top of a fix "
+                             "held for review, so the suggestion would carry the held change")
         for h in held:
             lines.append(f"- `{h['file']}`: fix not posted -- {h['reason']}")
         lines.append("")
@@ -710,7 +715,8 @@ def plan_file(pr_id, path, file_findings, visible_lines):
 
     tip = chain_tip(fixes)
     if tip is None:
-        return {"file": path, "reason": "its fixes do not form one verified chain"}
+        return {"file": path, "reason": "every verified fix was drafted on top of one held for "
+                                        "review; see the dashboard"}
 
     head = _s3_text(f"scans/{pr_id}/{path}")
     chain = [a["finding_id"] for a in tip["proposed_fix"].get("applies_after") or []] + [tip["finding_id"]]
@@ -736,13 +742,29 @@ def plan_file(pr_id, path, file_findings, visible_lines):
         if h["start"] != h["end"]:
             comment.update(start_line=h["start"], start_side="RIGHT")
         comments.append(comment)
-    return {"file": path, "hunks": hunks, "comments": comments, "chain": chain}
+    left_out = sorted(fixes[i]["rule_id"] for i in set(fixes) - set(chain))
+    return {"file": path, "hunks": hunks, "comments": comments, "chain": chain,
+            "left_out": left_out}
 
 
 def chain_tip(fixes):
-    """The fix whose chain covers every other fix on the file, with each link
-    unchanged since the chain was built (applies_after records each link's
-    diff hash). None if there is no such fix."""
+    """The end of the longest chain made only of verified fixes, or None.
+
+    `fixes` is the file's fix-proposed, self-checked fixes. A chain is valid
+    if every link is one of them and unchanged since the chain was built
+    (applies_after records each link's diff hash). remediation-agent drafts
+    on top of held fixes too -- a fix held for an assumption still cleared
+    its finding, so the next is drafted on it -- and such a fix's corrected
+    file contains the held change. Its chain has a link outside `fixes`, so
+    it is not valid, and posting it would have slipped an unreviewed change
+    into a suggestion. The longest valid chain is safe to post whole: its tip
+    was self-checked with every earlier link applied.
+
+    *Was: the tip had to cover every verified fix, or nothing was posted.*
+    On cascadesec-testbed #2 that held back KMS rotation and database
+    encryption because a later fix on the same file was built on a held one.
+    Verified fixes the tip does not cover are now reported as left out.
+    """
     def valid(fix):
         for link in fix["proposed_fix"].get("applies_after") or []:
             prior = fixes.get(link["finding_id"])
@@ -753,9 +775,8 @@ def chain_tip(fixes):
     candidates = [f for f in fixes.values() if valid(f)]
     if not candidates:
         return None
-    tip = max(candidates, key=lambda f: len(f["proposed_fix"].get("applies_after") or []))
-    covered = {a["finding_id"] for a in tip["proposed_fix"].get("applies_after") or []} | {tip["finding_id"]}
-    return tip if covered == set(fixes) else None
+    return max(candidates, key=lambda f: (len(f["proposed_fix"].get("applies_after") or []),
+                                          f["finding_id"]))
 
 
 def _sha256(text):

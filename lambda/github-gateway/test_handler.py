@@ -324,14 +324,48 @@ def test_chain_tip_is_the_fix_covering_all_others():
     assert handler.chain_tip({"1": first, "2": second})["finding_id"] == "2"
 
 
-def test_chain_with_an_edited_link_has_no_tip():
+def test_a_fix_built_on_an_edited_link_is_not_the_tip():
+    # 2 was drafted on 1 as it was; 1 has changed since, so 2's corrected
+    # file no longer follows from anything posted. 1 still stands alone.
     first = _fix("1", "d1-edited-since")
     second = _fix("2", "d2", [("1", _h("d1"))])
-    assert handler.chain_tip({"1": first, "2": second}) is None
+    assert handler.chain_tip({"1": first, "2": second})["finding_id"] == "1"
 
 
-def test_fix_outside_the_chain_means_no_tip():
-    assert handler.chain_tip({"1": _fix("1", "d1"), "2": _fix("2", "d2")}) is None
+def test_fix_built_on_a_held_fix_is_not_the_tip():
+    # cascadesec-testbed #2: KMS rotation (1) then RDS encryption (2), both
+    # verified; the SSH fix (4) was drafted on a held fix (3), so its file
+    # carries the held change. The tip is 2, not 4.
+    fixes = {
+        "1": _fix("1", "d1"),
+        "2": _fix("2", "d2", [("1", _h("d1"))]),
+        "4": _fix("4", "d4", [("1", _h("d1")), ("2", _h("d2")), ("3", _h("d3-held"))]),
+    }
+    assert handler.chain_tip(fixes)["finding_id"] == "2"
+
+
+def test_every_fix_built_on_a_held_one_means_no_tip():
+    # The ledger Deployment: its first fix was held, and every later one is
+    # drafted on it.
+    fixes = {"2": _fix("2", "d2", [("1", _h("d1-held"))]),
+             "3": _fix("3", "d3", [("1", _h("d1-held")), ("2", _h("d2"))])}
+    assert handler.chain_tip(fixes) is None
+
+
+def test_plan_reports_the_verified_fixes_it_leaves_out():
+    root = _fix("1", DIFF)
+    on_held = _fix("4", "d4", [("1", _h(DIFF)), ("3", _h("held"))])
+    plan = _plan([root, on_held], visible={2, 3, 4})
+    assert plan["chain"] == ["1"]
+    assert plan["left_out"] == ["R-4"]
+
+
+def test_summary_says_why_a_verified_fix_was_left_out():
+    state = {"pr_id": "p", "github": GITHUB, "fetch": {"kept_count": 1}, "scan": {}}
+    posted = [{"file": "f.tf", "hunks": [{}], "left_out": ["CKV_AWS_24"]}]
+    summary = handler.build_summary(state=state, findings=[], on_added=[], posted=posted, held=[],
+                                    remediate=True, offer_fixes=False, trigger="fixes")
+    assert "`CKV_AWS_24` not posted -- drafted on top of a fix held for review" in summary
 
 
 HEAD_FILE = "a\nb\nc\nd\n"
