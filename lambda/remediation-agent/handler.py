@@ -66,6 +66,7 @@ from datetime import datetime, timezone
 
 import anthropic
 import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -266,15 +267,33 @@ def handler(event, context):
     remaining = 0
     resume_at = None
 
-    for file_path, findings in _group_by_file(mapped_findings):
+    groups = list(_group_by_file(mapped_findings))
+    # A file can have nothing mapped and still need drafting: a fix on it may
+    # be stale, which only the file's own records can say (below). The
+    # pipeline asks for such a file by name (github-gateway's select_files).
+    if only_file and not groups:
+        groups = [(only_file, [])]
+
+    for file_path, findings in groups:
         if remaining:
             # Out of time on an earlier file (whole-PR mode only; per-file
             # mode has one file). Counted so the caller knows work is left.
             remaining += len(findings)
             continue
         try:
+            on_file = _query_findings_on_file(pr_id, file_path)
+            # Before the root is chosen, so a reopened accepted fix is not
+            # chosen as it, and its findings are drafted in this run. Not on
+            # a continuation: the first invocation already did it, and the
+            # chain it resumes was drafted on the snapshot this run read. A
+            # push landing meanwhile replaces the snapshot, and reopening
+            # the resume root then would unpick the chain mid-run.
+            reopened = [] if resume_from else _reopen_stale_fixes(pr_id, file_path, on_file)
+            findings = sorted(findings + reopened, key=_remediation_order)
+            if not findings:
+                continue
             base_content, baseline_counts, baseline_triples, applies_after, base_sha256 = _chain_root(
-                pr_id, file_path, resume_from,
+                pr_id, file_path, resume_from, on_file=on_file,
             )
             # The scanner's line numbers refer to this, not to the chain's
             # content -- see _flagged_lines.
@@ -601,7 +620,7 @@ def _query_all(table, **kwargs):
         kwargs["ExclusiveStartKey"] = last_key
 
 
-def _chain_root(pr_id, file_path, resume_from=None):
+def _chain_root(pr_id, file_path, resume_from=None, on_file=None):
     """Where this file's chain starts: (content, finding counts, finding
     triples, applies_after, base_sha256).
 
@@ -626,6 +645,13 @@ def _chain_root(pr_id, file_path, resume_from=None):
     file the last is the one with the longest chain: applies_after is
     cumulative, so the longest one has every other applied already.
 
+    Two accepted fixes are not roots (write-back-spec §7). A committed one:
+    its content is on the branch, so the snapshot already has it, and
+    rooting on the stored copy would redraft on a file without whatever was
+    pushed after it. And a stale one, whose base is not the snapshot: the
+    handler reopens those before calling this (_reopen_stale_fixes), so
+    they are no longer "resolved" here.
+
     resume_from overrides that: it names the fix a previous invocation of
     this same run stopped after (see handler), and the chain roots there
     regardless of its status. A fix drafted ten minutes ago and not yet
@@ -640,7 +666,8 @@ def _chain_root(pr_id, file_path, resume_from=None):
     it, and the difference is exactly the case this exists for, so it is not
     worth the two code paths to skip the invoke when it would be safe.
     """
-    on_file = _query_findings_on_file(pr_id, file_path)
+    if on_file is None:
+        on_file = _query_findings_on_file(pr_id, file_path)
     if resume_from:
         root = next((f for f in on_file if f["finding_id"] == resume_from), None)
         if root is None or not (root.get("proposed_fix") or {}).get("diff"):
@@ -649,6 +676,7 @@ def _chain_root(pr_id, file_path, resume_from=None):
         accepted = [
             f for f in on_file
             if f.get("status") == "resolved" and (f.get("proposed_fix") or {}).get("diff")
+            and not f["proposed_fix"].get("committed")
         ]
         if not accepted:
             # The original scan's counts, across every status. Counts rather
@@ -696,6 +724,127 @@ def _query_findings_on_file(pr_id, file_path):
             ":file": file_path,
         },
     )
+
+
+def _stale_reason(finding, snapshot_sha256):
+    """Why this finding's fix can no longer land or be built on, or None.
+
+    Must stay identical to github-gateway's copy (corpus/test_corpus.py):
+    the gateway offers Draft fixes, and selects a file for it, exactly when
+    this would reopen something there. A fix only a person can move on
+    (needs-human-only, which a rejection also sets) is left alone, and so
+    are a committed fix and one the scan no longer reports.
+    """
+    fix = finding.get("proposed_fix") or {}
+    if (finding.get("status") not in ("fix-proposed", "resolved") or not fix.get("diff")
+            or fix.get("committed") or finding.get("no_longer_detected")):
+        return None
+    if not fix.get("base_sha256"):
+        return "it was drafted before fixes recorded the file they were drafted on"
+    if fix["base_sha256"] != snapshot_sha256:
+        return "the file has changed since it was drafted"
+    return None
+
+
+def _reopen_stale_fixes(pr_id, file_path, on_file):
+    """Send this file's stale fixes back to mapped, and return every finding
+    that is now there to be drafted.
+
+    A fix's corrected file is a whole file, so it may only replace the
+    version it was drafted on (write-back-spec §5.3). Once the PR's head has
+    moved under it, it can be neither posted nor committed, and a chain
+    rooted on it would carry the old file forward. Before this, a stale fix
+    stayed fix-proposed or resolved for good: Draft fixes drafts only mapped
+    findings, so "run Draft fixes again" -- the hold message's advice --
+    did nothing (write-back-spec §8). The whole chain goes together, since
+    every link records the same base.
+
+    A finding one of these fixes superseded goes back too, as review-api's
+    _reopen_dependents does after an edit: the redraft has to clear its rule
+    again for it to stay superseded.
+
+    Each reopen is conditional on the status it was read with, so a
+    reviewer's decision made meanwhile is not overwritten, and writes a
+    system ReviewEvent: a machine is undoing what a person may have
+    approved, and that does not happen off the books. `on_file` is updated
+    in place, so the chain root that follows sees the new statuses.
+    """
+    candidates = [f for f in on_file if f.get("status") in ("fix-proposed", "resolved")]
+    if not candidates:
+        return []
+    snapshot_sha256 = _content_sha256(_fetch_original_content(pr_id, file_path))
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    now = datetime.now(timezone.utc).isoformat()
+    reopened = []
+
+    for finding in candidates:
+        reason = _stale_reason(finding, snapshot_sha256)
+        if reason is None:
+            continue
+        because = (f"This fix is stale: {reason}. A fix is a whole corrected file, so it can "
+                   "only replace the version it was drafted on; over any other it would revert "
+                   "what changed. Returned to mapped to be redrafted on the file as it is now.")
+        if _conditional_reopen(table, finding, "SET #status = :mapped, "
+                               "proposed_fix.stale_reason = :reason, updated_at = :now",
+                               {":reason": because}, now):
+            _write_system_event(table, pr_id, finding["finding_id"], now, because)
+            reopened.append(finding)
+
+    stale_ids = {f["finding_id"] for f in reopened}
+    for finding in on_file:
+        if finding.get("status") != "superseded" or finding.get("superseded_by") not in stale_ids:
+            continue
+        because = (f"The fix that had cleared this finding, {finding['superseded_by']}, is "
+                   "stale and is being redrafted. Whether the redraft still clears it is not "
+                   "yet known. Returned to mapped for a fix of its own.")
+        if _conditional_reopen(table, finding, "SET #status = :mapped, updated_at = :now "
+                               "REMOVE superseded_by", {}, now):
+            _write_system_event(table, pr_id, finding["finding_id"], now, because)
+            reopened.append(finding)
+
+    if reopened:
+        logger.info("reopened stale fixes on %s: %s", file_path,
+                    [f["finding_id"] for f in reopened])
+    return reopened
+
+
+def _conditional_reopen(table, finding, update_expression, values, now):
+    """Move one finding to mapped if its status is still what was read.
+    Returns whether it moved; updates the record in place if so."""
+    try:
+        table.update_item(
+            Key={"pk": finding["pk"], "sk": finding["sk"]},
+            UpdateExpression=update_expression,
+            ConditionExpression="#status = :was",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":mapped": "mapped", ":was": finding["status"],
+                                       ":now": now, **values},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        logger.info("finding %s changed while being reopened; left as it is", finding["finding_id"])
+        return False
+    finding["status"] = "mapped"
+    if "REMOVE superseded_by" in update_expression:
+        finding.pop("superseded_by", None)
+    return True
+
+
+def _write_system_event(table, pr_id, finding_id, now, notes):
+    """The ReviewEvent for a reopen. Same shape and key as review-api's
+    _write_system_event, so the audit trail reads it like any other."""
+    table.put_item(Item={
+        "pk": f"PR#{pr_id}#FINDING#{finding_id}",
+        "sk": f"EVENT#{now}#system",
+        "finding_id": finding_id,
+        "pr_id": pr_id,
+        "actor": "system",
+        "action": "reopened",
+        "notes": notes,
+        "edited_diff": None,
+        "created_at": now,
+    })
 
 
 def _query_mapped_findings(pr_id, only_file=None):

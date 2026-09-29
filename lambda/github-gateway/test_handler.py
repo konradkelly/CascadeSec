@@ -254,6 +254,37 @@ def test_select_files_takes_changed_files_with_mapped_findings():
     assert result["mapped_count"] == 0
 
 
+def _stale_fix(file, base_text, status="fix-proposed"):
+    return {"finding_id": file, "file": file, "status": status,
+            "proposed_fix": {"diff": "d", "base_sha256": _h(base_text) if base_text else None}}
+
+
+def test_select_files_takes_a_changed_file_whose_only_fix_is_stale():
+    """cascadesec-testbed #3 without the bastion: the KMS fix was drafted on
+    commit A, nothing on the file is mapped, and "run Draft fixes again"
+    must still reach it, or it is never redrafted (write-back-spec §8)."""
+    findings = [
+        _stale_fix("stale.tf", "commit A"),
+        _stale_fix("legacy.tf", None, status="resolved"),   # drafted before bases
+        _stale_fix("current.tf", "current.tf now"),
+        _stale_fix("held.tf", "commit A", status="needs-human-only"),
+        {**_stale_fix("done.tf", "commit A", status="resolved"),
+         "proposed_fix": {"diff": "d", "base_sha256": _h("commit A"), "committed": {"sha": "c"}}},
+    ]
+    snapshots = {f"scans/p/{f['file']}": f"{f['file']} now" for f in findings}
+    with patch.object(handler, "query_findings", return_value=findings), \
+            patch.object(handler, "_s3_text", side_effect=snapshots.__getitem__):
+        result = handler.handler({"action": "select_files", "pr_id": "p",
+                                  "changed_files": [f["file"] for f in findings], "map": {}}, None)
+    assert result["files"] == ["legacy.tf", "stale.tf"]
+
+
+def test_a_stale_fix_on_a_file_the_pr_deleted_is_not_selected():
+    missing = handler.ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+    with patch.object(handler, "_s3_text", side_effect=missing):
+        assert handler.stale_files("p", [_stale_fix("gone.tf", "commit A")]) == set()
+
+
 # ======================================================================
 # report: diff geometry
 # ======================================================================
@@ -512,6 +543,16 @@ def test_report_offers_draft_fixes_when_changed_files_have_mapped_findings():
 def test_report_does_not_offer_draft_fixes_without_mapped_findings():
     _, request, _ = _report([_finding("1", 2, status="raw")])
     assert "actions" not in request.call_args.args[3]
+
+
+def test_report_offers_draft_fixes_for_a_stale_fix():
+    stale = {**_finding("1", 2, status="fix-proposed"),
+             "proposed_fix": {"diff": "d", "base_sha256": _h("the file at an earlier commit")}}
+    with patch.object(handler, "_s3_text", return_value="the file now"):
+        _, request, _ = _report([stale])
+    body = request.call_args.args[3]
+    assert body["actions"][0]["identifier"] == "draft_fixes"
+    assert "redrafts any fix whose file has changed" in body["output"]["summary"]
 
 
 def test_fixes_run_posts_suggestions_and_offers_no_button():

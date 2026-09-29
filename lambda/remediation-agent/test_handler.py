@@ -1855,11 +1855,16 @@ ACCEPTED_DIFF = "--- a/main.tf\n+++ b/main.tf\n@@ -1 +1 @@\n-old\n+accepted\n"
 ACCEPTED_CONTENT = "accepted\n"
 
 
-def _accepted(finding_id, applies_after=(), status="resolved"):
+def _accepted(finding_id, applies_after=(), status="resolved", base=ACCEPTED_CONTENT):
+    """An accepted fix drafted on `base`. The tests below return
+    ACCEPTED_CONTENT for every S3 read, the snapshot included, so by default
+    the fix is current; a fix drafted on anything else is stale and is
+    reopened rather than rooted on."""
     return {
         **_mapped("AWS-0132", 1, finding_id),
         "status": status,
-        "proposed_fix": {"diff": ACCEPTED_DIFF, "applies_after": list(applies_after)},
+        "proposed_fix": {"diff": ACCEPTED_DIFF, "applies_after": list(applies_after),
+                         "base_sha256": handler._content_sha256(base) if base else None},
     }
 
 
@@ -2037,7 +2042,7 @@ def test_a_chain_rooted_at_a_fix_from_before_base_hashes_has_none():
     with patch.object(handler, "dynamodb") as mock_dynamodb, \
             patch.object(handler, "s3") as mock_s3, \
             patch.object(handler, "_invoke_self_check", return_value=([], [])):
-        mock_dynamodb.Table.return_value.query.return_value = {"Items": [_accepted("f1")]}
+        mock_dynamodb.Table.return_value.query.return_value = {"Items": [_accepted("f1", base=None)]}
         mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: b"x")}
 
         *_, base_sha256 = handler._chain_root("chain-1", "main.tf")
@@ -2062,7 +2067,7 @@ def test_an_accepted_fix_that_does_not_parse_fails_the_whole_file(
     mock_table = MagicMock()
     mock_table.query.side_effect = [
         {"Items": to_redraft},
-        {"Items": before["findings"] + [_accepted("f1")] + to_redraft},
+        {"Items": before["findings"] + [_accepted("f1", base="broken {")] + to_redraft},
     ]
     mock_dynamodb.Table.return_value = mock_table
     mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: b"broken {")}
@@ -2659,3 +2664,212 @@ def test_a_baseline_that_names_no_resources_never_supersedes_by_resource(
 
     assert result["superseded_count"] == 0
     assert mock_get_client.return_value.messages.create.call_count == 3
+
+
+# ---------- stale fixes: a base the PR head has moved away from ----------
+#
+# write-back-spec §7 and §8. A fix is a whole corrected file, so it can only
+# replace the version it was drafted on. cascadesec-testbed #3: the KMS
+# rotation fix was drafted on commit A, commit B appended an alias below the
+# key, and the fix stayed fix-proposed -- Draft fixes never redrafted it,
+# because it only drafts mapped findings.
+
+KEY_AT_A = 'resource "aws_kms_key" "k" {\n  description = "reports"\n}\n'
+ALIAS = 'resource "aws_kms_alias" "a" {\n  name = "alias/reports"\n}\n'
+ROTATED_AT_B = ('resource "aws_kms_key" "k" {\n  description = "reports"\n'
+                '  enable_key_rotation = true\n}\n' + ALIAS)
+
+
+def _kms_fix(status="fix-proposed", base=KEY_AT_A, **extra):
+    return {**_mapped("CKV_AWS_7", 1, "kms", source="checkov"), "status": status,
+            "proposed_fix": {"diff": ACCEPTED_DIFF, "applies_after": [],
+                             "base_sha256": handler._content_sha256(base) if base else None,
+                             "self_check_passed": True, **extra}}
+
+
+def _snapshot(content):
+    return {"Body": SimpleNamespace(read=lambda: content.encode())}
+
+
+def _events(mock_table):
+    return [c.kwargs["Item"] for c in mock_table.put_item.call_args_list]
+
+
+@pytest.mark.parametrize("status", ["fix-proposed", "resolved"])
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_fix_drafted_before_the_file_changed_is_redrafted_on_it(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client, status
+):
+    """Nothing on the file is mapped, and the pipeline asks for it anyway
+    (select_files). The stale fix goes back to mapped with a system event,
+    and is redrafted from the snapshot -- the file as it is now, alias and
+    all -- not rooted on, which would carry commit A's file forward."""
+    stale = _kms_fix(status=status)
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": []}, {"Items": [stale]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = _snapshot(KEY_AT_A + ALIAS)
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response({
+        "corrected_file_content": ROTATED_AT_B, "rationale": "Rotate.", "assumptions": [],
+    })
+    mock_lambda_client.invoke.return_value = _scan_reply({"findings": []})
+
+    result = handler.handler({"pr_id": "chain-1", "file": "main.tf"}, None)
+
+    reopen = mock_table.update_item.call_args_list[0].kwargs
+    assert reopen["ExpressionAttributeValues"][":mapped"] == "mapped"
+    # Conditional on what was read: a decision made meanwhile is not undone.
+    assert reopen["ConditionExpression"] == "#status = :was"
+    assert reopen["ExpressionAttributeValues"][":was"] == status
+    assert "has changed since" in reopen["ExpressionAttributeValues"][":reason"]
+    [event] = _events(mock_table)
+    assert (event["actor"], event["action"]) == ("system", "reopened")
+    assert event["pk"] == "PR#chain-1#FINDING#kms"
+
+    # Drafted on the snapshot, and records the snapshot as its base.
+    assert "aws_kms_alias" in _prompt_of(mock_get_client, 0)
+    redraft = _written(mock_table, 1)[":pf"]
+    assert redraft["applies_after"] == []
+    assert redraft["base_sha256"] == handler._content_sha256(KEY_AT_A + ALIAS)
+    assert result["fix_proposed_count"] == 1
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_fix_with_no_recorded_base_is_redrafted_too(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """Drafted before fixes recorded their base, so it can never be posted
+    or committed (it fails closed there). Redrafting is the only way on."""
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": []}, {"Items": [_kms_fix(base=None)]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = _snapshot(KEY_AT_A)
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response({
+        "corrected_file_content": ROTATED_AT_B, "rationale": "Rotate.", "assumptions": [],
+    })
+    mock_lambda_client.invoke.return_value = _scan_reply({"findings": []})
+
+    handler.handler({"pr_id": "chain-1", "file": "main.tf"}, None)
+
+    assert "before fixes recorded" in _written(mock_table, 0)[":reason"]
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_current_fix_leaves_a_file_with_nothing_mapped_alone(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": []}, {"Items": [_kms_fix(base=KEY_AT_A)]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = _snapshot(KEY_AT_A)
+
+    result = handler.handler({"pr_id": "chain-1", "file": "main.tf"}, None)
+
+    mock_table.update_item.assert_not_called()
+    mock_lambda_client.invoke.assert_not_called()
+    mock_get_client.assert_not_called()
+    assert result["fix_proposed_count"] == 0 and result["error_count"] == 0
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_continuation_does_not_reopen_the_chain_it_resumes(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """A push landing mid-run replaces the snapshot, and the resume root's
+    base stops matching it. Reopening it then would unpick the chain; the
+    next Draft fixes run is where the push is caught."""
+    root = _kms_fix()
+    to_continue = _mapped(LOGGING_RULE, 2, "f2")
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": [to_continue]}, {"Items": [root, to_continue]}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = _snapshot(KEY_AT_A + ALIAS)
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response({
+        "corrected_file_content": ROTATED_AT_B, "rationale": "Log.", "assumptions": [],
+    })
+    mock_lambda_client.invoke.return_value = _scan_reply({"findings": []})
+
+    handler.handler({"pr_id": "chain-1", "file": "main.tf", "resume_from": "kms"}, None)
+
+    assert all(":mapped" not in c.kwargs["ExpressionAttributeValues"]
+               for c in mock_table.update_item.call_args_list)
+    mock_table.put_item.assert_not_called()
+
+
+def test_a_committed_fix_is_neither_reopened_nor_a_root():
+    """Its content is on the branch: the snapshot now has it, so its base no
+    longer matches, and that is not staleness. Rooting on its stored copy
+    would redraft on a file without whatever was pushed after it."""
+    committed = _kms_fix(status="resolved", committed={"sha": "c" * 40, "request_id": "r1", "at": "t"})
+    table = MagicMock()
+    table.query.return_value = {"Items": [committed]}
+    with patch.object(handler, "dynamodb") as mock_dynamodb, patch.object(handler, "s3") as mock_s3, \
+            patch.object(handler, "_invoke_self_check") as rescan:
+        mock_dynamodb.Table.return_value = table
+        mock_s3.get_object.return_value = _snapshot(ROTATED_AT_B)
+
+        assert handler._reopen_stale_fixes("chain-1", "main.tf", [committed]) == []
+        content, _, _, chain, base = handler._chain_root("chain-1", "main.tf")
+
+    table.update_item.assert_not_called()
+    rescan.assert_not_called()
+    assert (content, chain) == (ROTATED_AT_B, [])
+    assert base == handler._content_sha256(ROTATED_AT_B)
+
+
+@pytest.mark.parametrize("finding", [
+    _kms_fix(status="needs-human-only"),
+    {**_kms_fix(), "no_longer_detected": "t"},
+    _mapped("CKV_AWS_7", 1, "kms"),
+], ids=["held-or-rejected", "no-longer-detected", "no-fix"])
+def test_only_a_proposed_or_accepted_fix_is_ever_stale(finding):
+    assert handler._stale_reason(finding, "some-other-hash") is None
+
+
+def test_a_finding_the_stale_fix_superseded_is_reopened_with_it():
+    """The redraft has to clear its rule again for it to stay superseded,
+    as after an edit (review-api's _reopen_dependents)."""
+    stale = _kms_fix()
+    by_it = {**_mapped("CKV_AWS_8", 2, "s1"), "status": "superseded", "superseded_by": "kms"}
+    by_other = {**_mapped("CKV_AWS_9", 3, "s2"), "status": "superseded", "superseded_by": "x"}
+    table = MagicMock()
+    with patch.object(handler, "dynamodb") as mock_dynamodb, patch.object(handler, "s3") as mock_s3:
+        mock_dynamodb.Table.return_value = table
+        mock_s3.get_object.return_value = _snapshot(KEY_AT_A + ALIAS)
+
+        reopened = handler._reopen_stale_fixes("chain-1", "main.tf", [stale, by_it, by_other])
+
+    assert [f["finding_id"] for f in reopened] == ["kms", "s1"]
+    assert by_it["status"] == "mapped" and "superseded_by" not in by_it
+    assert "REMOVE superseded_by" in table.update_item.call_args_list[1].kwargs["UpdateExpression"]
+    assert by_other["status"] == "superseded"
+    assert len(_events(table)) == 2
+
+
+def test_a_fix_decided_while_being_reopened_is_left_as_decided():
+    from botocore.exceptions import ClientError
+
+    stale = _kms_fix()
+    table = MagicMock()
+    table.update_item.side_effect = ClientError(
+        {"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+    with patch.object(handler, "dynamodb") as mock_dynamodb, patch.object(handler, "s3") as mock_s3:
+        mock_dynamodb.Table.return_value = table
+        mock_s3.get_object.return_value = _snapshot(KEY_AT_A + ALIAS)
+
+        assert handler._reopen_stale_fixes("chain-1", "main.tf", [stale]) == []
+
+    assert stale["status"] == "fix-proposed"
+    table.put_item.assert_not_called()
