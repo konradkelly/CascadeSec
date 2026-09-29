@@ -1017,3 +1017,73 @@ textarea {
     width: 100%;
   }
 }
+
+/* Commit panel (write-back, docs/write-back-spec.md) */
+
+.commit-panel .panel__header span {
+  font-family: var(--mono);
+}
+
+.commit-files {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.commit-file {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+}
+
+.commit-file__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.commit-file__chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin: 0 0 0.5rem;
+}
+
+.commit-file__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.commit-file__diff summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.commit-outcome--commit {
+  background: var(--success-dim);
+  color: var(--success-text);
+}
+
+.commit-outcome--already {
+  background: var(--neutral-dim);
+  color: var(--neutral);
+}
+
+.commit-outcome--held {
+  background: var(--warn-dim);
+  color: var(--warn-text);
+}
+
+/* Also the system's, like reopened: github-committer landed the fix on the
+   branch. Not the approve green, so it does not read as a person's decision. */
+.audit-trail__action--committed {
+  background: var(--accent-dim);
+  color: var(--accent);
+}

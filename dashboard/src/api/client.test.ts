@@ -102,6 +102,20 @@ describe('request', () => {
     await expect(client.listFindings('pr-1')).rejects.toMatchObject({ status: 502, message: 'Request failed (502)' })
   })
 
+  it('asks for a commit with only what the reviewer confirmed', async () => {
+    // No requester: the API takes it from the token, as it does a reviewer.
+    const client = await load('https://api.example.test', 'tok')
+
+    await client.postCommit('gh-1-3', [{ file: 'a.tf', tip: 'f1', content_sha256: 'h1' }])
+
+    const [url, init] = lastCall()
+    expect(url).toBe('https://api.example.test/prs/gh-1-3/commits')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({
+      confirm: [{ file: 'a.tf', tip: 'f1', content_sha256: 'h1' }],
+    })
+  })
+
   it('posts a review as JSON with only what the API accepts', async () => {
     // No actor: the API takes the reviewer from the token. No diff: the
     // reviewer sends the whole corrected file and the API computes the diff.
