@@ -6,6 +6,11 @@ import type {
   ReviewAction,
   ReviewResponse,
 } from '../types/finding'
+import type {
+  CommitConfirmation,
+  CommitPlanResponse,
+  CommitRequest,
+} from '../types/commit'
 import { readToken } from '../auth/token'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? ''
@@ -103,6 +108,31 @@ export function postReview(
   return request<ReviewResponse>(
     `/prs/${encodeURIComponent(prId)}/findings/${encodeURIComponent(findingId)}/review`,
     { method: 'POST', body: JSON.stringify(payload) },
+  )
+}
+
+/** What committing the PR's approved fixes would do, per file. A preview:
+ *  the committer re-reads every file from GitHub before it writes. */
+export function getCommitPlan(prId: string): Promise<CommitPlanResponse> {
+  return request<CommitPlanResponse>(`/prs/${encodeURIComponent(prId)}/commit-plan`)
+}
+
+/** Ask for a commit. `confirm` is what the reviewer was shown -- per file,
+ *  the tip and its content hash -- and the API refuses the request if the
+ *  plan no longer matches it, rather than committing something unseen. */
+export function postCommit(
+  prId: string,
+  confirm: CommitConfirmation[],
+): Promise<{ request_id: string; status: string }> {
+  return request(`/prs/${encodeURIComponent(prId)}/commits`, {
+    method: 'POST',
+    body: JSON.stringify({ confirm }),
+  })
+}
+
+export function getCommitRequest(prId: string, requestId: string): Promise<CommitRequest> {
+  return request<CommitRequest>(
+    `/prs/${encodeURIComponent(prId)}/commits/${encodeURIComponent(requestId)}`,
   )
 }
 

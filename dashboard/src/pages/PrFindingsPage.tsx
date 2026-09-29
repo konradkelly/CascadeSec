@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ApiClientError, listFindings } from '../api/client'
+import { CommitPanel } from '../components/CommitPanel'
 import { FindingsTable } from '../components/FindingsTable'
 import { FixGroups } from '../components/FixGroups'
 import { DRAFTED_STATUSES } from '../review/fixGroups'
@@ -64,6 +65,11 @@ export function PrFindingsPage() {
           Refresh
         </button>
       </div>
+
+      {/* GitHub PRs only: a manual run's pr_id has no branch to commit to.
+          Outside the loading block, so reloading the findings after a
+          commit does not unmount the request it is polling. */}
+      {prId.startsWith('gh-') && <CommitPanel prId={prId} onCommitted={load} />}
 
       {loading && <p className="muted">Loading findings…</p>}
       {error && <p className="alert alert--error">{error}</p>}

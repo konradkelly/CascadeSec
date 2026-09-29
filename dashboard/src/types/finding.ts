@@ -20,11 +20,13 @@ export type FindingStatus =
 
 export type ReviewAction = 'approved' | 'edited' | 'rejected'
 
-/** What can appear in an audit trail. "reopened" is never submitted by a
- *  person: the system writes it when an edit upstream invalidates a fix that
- *  had already been accepted. Kept distinct from ReviewAction so it cannot be
- *  posted to the review endpoint by mistake. */
-export type AuditAction = ReviewAction | 'reopened'
+/** What can appear in an audit trail. "reopened" and "committed" are never
+ *  submitted by a person: the system writes "reopened" when an edit upstream,
+ *  or a push under a fix, invalidates a fix that had already been drafted or
+ *  accepted, and "committed" when github-committer lands a fix on the PR
+ *  branch. Kept distinct from ReviewAction so neither can be posted to the
+ *  review endpoint by mistake. */
+export type AuditAction = ReviewAction | 'reopened' | 'committed'
 
 export interface ControlMapping {
   framework: string
@@ -104,6 +106,14 @@ export interface ProposedFix {
    *  had been decided before. Explains why a fix the reviewer remembers
    *  resolving is open again. */
   stale_reason?: string
+  /** Hash of the snapshot file the fix's chain was drafted on. A fix is a
+   *  whole corrected file, so it can only replace that version; absent on
+   *  fixes drafted before it was recorded, which can be neither posted nor
+   *  committed. */
+  base_sha256?: string | null
+  /** Set once github-committer has landed the fix on the PR branch
+   *  (write-back-spec §7), or found it already there. */
+  committed?: { sha: string; request_id: string; at: string }
   /** Files the scanner could not parse when rescanning the fix. Non-empty means
    *  the fix was never actually verified -- an unparseable file produces no
    *  findings, which the self-check would otherwise read as the finding having
