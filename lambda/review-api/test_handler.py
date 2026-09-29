@@ -4,6 +4,7 @@ import decimal
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1098,3 +1099,187 @@ def test_a_cascade_event_cannot_collide_with_the_edit_that_caused_it(mock_table)
 
     sort_keys = [call.kwargs["Item"]["sk"] for call in mock_table.put_item.call_args_list]
     assert len(sort_keys) == len(set(sort_keys))
+
+
+# ======================================================================
+# write-back: the commit plan and commit requests (docs/write-back-spec.md)
+# ======================================================================
+
+COMMITTER = {**SIGNED_IN, "cognito:groups": ["committers"]}
+META = {"pk": "PR#gh-1-7", "sk": "GITHUB", "repository": "o/r",
+        "repository_id": decimal.Decimal(1), "pr_number": decimal.Decimal(7)}
+PLANNED = {"file": "main.tf", "outcome": "commit", "reason": None, "tip": "f1", "chain": [],
+           "left_out": [], "content": "whole file", "content_sha256": "h1", "diff": "-a\n+b\n"}
+CONFIRM = {"confirm": [{"file": "main.tf", "tip": "f1", "content_sha256": "h1"}]}
+
+
+@pytest.fixture
+def write_back():
+    """review-api with write-back deployed, a GitHub PR's meta recorded, no
+    request in flight, and a preview with one file to commit."""
+    with patch.object(handler, "COMMITTER_FUNCTION_NAME", "committer"), \
+            patch.object(handler, "_pull_request_meta", return_value=META) as meta, \
+            patch.object(handler, "_commit_requests", return_value=[]) as requests, \
+            patch.object(handler, "_preview_plan", return_value=[dict(PLANNED)]) as preview, \
+            patch.object(handler, "lambda_client") as lambda_client, \
+            patch.object(handler, "dynamodb") as mock_dynamodb:
+        table = MagicMock()
+        mock_dynamodb.Table.return_value = table
+        yield SimpleNamespace(meta=meta, requests=requests, preview=preview,
+                              lambda_client=lambda_client, table=table)
+
+
+def _commit(body=CONFIRM, claims=COMMITTER):
+    return handler.handler(_event("POST /prs/{pr_id}/commits", {"pr_id": "gh-1-7"}, body, claims), None)
+
+
+def test_the_commit_plan_is_a_preview_without_file_content(write_back):
+    response = handler.handler(_event("GET /prs/{pr_id}/commit-plan", {"pr_id": "gh-1-7"},
+                                      claims=COMMITTER), None)
+    body = _body(response)
+    assert response["statusCode"] == 200
+    assert body["preview"] is True and body["repository"] == "o/r" and body["pr_number"] == 7
+    assert body["can_commit"] is True and body["write_back_deployed"] is True
+    assert body["counts"] == {"commit": 1, "already": 0, "held": 0}
+    assert "content" not in body["files"][0] and body["files"][0]["diff"] == "-a\n+b\n"
+    assert body["latest_request"] is None
+
+
+def test_the_commit_plan_says_a_reviewer_outside_the_group_cannot_commit(write_back):
+    body = _body(handler.handler(_event("GET /prs/{pr_id}/commit-plan", {"pr_id": "gh-1-7"}), None))
+    assert body["can_commit"] is False
+
+
+def test_the_commit_plan_names_the_latest_request(write_back):
+    write_back.requests.return_value = [{"sk": "COMMIT#01A", "status": "committed"},
+                                        {"sk": "COMMIT#01B", "status": "held"}]
+    body = _body(handler.handler(_event("GET /prs/{pr_id}/commit-plan", {"pr_id": "gh-1-7"}), None))
+    assert body["latest_request"]["sk"] == "COMMIT#01B"
+
+
+def test_a_pr_github_does_not_know_has_no_commit_plan(write_back):
+    write_back.meta.return_value = None
+    response = handler.handler(_event("GET /prs/{pr_id}/commit-plan", {"pr_id": "manual-1"}), None)
+    assert response["statusCode"] == 404
+
+
+def test_a_commit_request_is_recorded_under_the_tokens_identity_and_handed_over(write_back):
+    response = _commit({**CONFIRM, "requested_by": "someone-else@example.com"})
+
+    assert response["statusCode"] == 202
+    request_id = _body(response)["request_id"]
+    item = write_back.table.put_item.call_args.kwargs["Item"]
+    assert item["sk"] == f"COMMIT#{request_id}" and item["status"] == "requested"
+    assert item["requested_by"] == "konrad@example.com"
+    assert item["confirmed"] == CONFIRM["confirm"]
+    assert write_back.table.put_item.call_args.kwargs["ConditionExpression"] == "attribute_not_exists(sk)"
+    invoke = write_back.lambda_client.invoke.call_args.kwargs
+    assert invoke["InvocationType"] == "Event" and invoke["FunctionName"] == "committer"
+    assert json.loads(invoke["Payload"]) == {"pr_id": "gh-1-7", "request_id": request_id}
+
+
+@pytest.mark.parametrize("groups", [["committers"], "[committers]", "[reviewers committers]",
+                                    "committers"])
+def test_the_group_claim_is_read_in_either_shape(write_back, groups):
+    # An HTTP API JWT authorizer passes an array claim as "[a b]".
+    assert _commit(claims={**SIGNED_IN, "cognito:groups": groups})["statusCode"] == 202
+
+
+@pytest.mark.parametrize("claims", [SIGNED_IN, {**SIGNED_IN, "cognito:groups": "[reviewers]"},
+                                    {**SIGNED_IN, "cognito:groups": "[not-committers]"}])
+def test_only_a_committer_may_commit(write_back, claims):
+    response = _commit(claims=claims)
+    assert response["statusCode"] == 403
+    write_back.table.put_item.assert_not_called()
+    write_back.lambda_client.invoke.assert_not_called()
+
+
+def test_a_commit_request_without_verified_claims_is_rejected(write_back):
+    assert _commit(claims=None)["statusCode"] == 401
+
+
+def test_a_commit_request_before_write_back_is_deployed_is_refused(write_back):
+    with patch.object(handler, "COMMITTER_FUNCTION_NAME", ""):
+        assert _commit()["statusCode"] == 503
+    write_back.table.put_item.assert_not_called()
+
+
+@pytest.mark.parametrize("body", [{}, {"confirm": []}, {"confirm": [{"file": "main.tf"}]},
+                                  {"confirm": "main.tf"}])
+def test_a_commit_request_must_say_what_was_confirmed(write_back, body):
+    assert _commit(body)["statusCode"] == 400
+
+
+def test_a_second_request_while_one_is_in_flight_is_refused(write_back):
+    write_back.requests.return_value = [{"request_id": "01A", "status": "committing"}]
+    response = _commit()
+    assert response["statusCode"] == 409 and _body(response)["request_id"] == "01A"
+    write_back.table.put_item.assert_not_called()
+
+
+def test_a_plan_that_moved_since_it_was_shown_is_not_committed(write_back):
+    # The tip was edited after the preview: same finding id, new content.
+    write_back.preview.return_value = [{**PLANNED, "content_sha256": "h2"}]
+    response = _commit()
+    assert response["statusCode"] == 409 and _body(response)["changed"] == ["main.tf"]
+    write_back.table.put_item.assert_not_called()
+
+
+def test_a_held_file_cannot_be_confirmed_into_a_commit(write_back):
+    write_back.preview.return_value = [{**PLANNED, "outcome": "held"}]
+    assert _commit()["statusCode"] == 409
+
+
+def test_a_request_the_committer_never_received_is_marked_failed(write_back):
+    write_back.lambda_client.invoke.side_effect = RuntimeError("throttled")
+    response = _commit()
+    assert response["statusCode"] == 502
+    values = write_back.table.update_item.call_args.kwargs["ExpressionAttributeValues"]
+    assert values[":failed"] == "failed"
+
+
+def test_a_commit_request_is_read_back_by_id(mock_table):
+    mock_table.get_item.return_value = {"Item": {"request_id": "01A", "status": "committed"}}
+    response = handler.handler(_event("GET /prs/{pr_id}/commits/{request_id}",
+                                      {"pr_id": "gh-1-7", "request_id": "01A"}), None)
+    assert _body(response)["status"] == "committed"
+    assert mock_table.get_item.call_args.kwargs["Key"] == {"pk": "PR#gh-1-7", "sk": "COMMIT#01A"}
+
+    mock_table.get_item.return_value = {}
+    response = handler.handler(_event("GET /prs/{pr_id}/commits/{request_id}",
+                                      {"pr_id": "gh-1-7", "request_id": "nope"}), None)
+    assert response["statusCode"] == 404
+
+
+def test_the_preview_plans_from_the_event_log_and_the_snapshot(mock_table):
+    """The real _preview_plan over a fake table: the latest event decides,
+    and the head is the S3 snapshot."""
+    head = "a\nb\n"
+    approved = {"pk": "PR#gh-1-7", "sk": "FINDING#f1", "finding_id": "f1", "file": "main.tf",
+                "rule_id": "R1", "status": "resolved",
+                "proposed_fix": {"diff": "d1", "self_check_passed": True, "applies_after": [],
+                                 "base_sha256": hashlib.sha256(head.encode()).hexdigest()}}
+    retracted = {**approved, "sk": "FINDING#f2", "finding_id": "f2", "file": "other.tf"}
+    events = {"f1": [{"sk": "EVENT#1", "action": "approved"}],
+              "f2": [{"sk": "EVENT#1", "action": "approved"}, {"sk": "EVENT#2", "action": "rejected"}]}
+
+    def query(**kwargs):
+        pk = kwargs["ExpressionAttributeValues"][":pk"]
+        if pk == "PR#gh-1-7":
+            return {"Items": [approved, retracted]}
+        return {"Items": events[pk.rsplit("#", 1)[1]]}
+
+    mock_table.query.side_effect = query
+    contents = {"scans/gh-1-7/main.tf": head, "fixes/gh-1-7/f1/main.tf": "a\nB\n"}
+    handler.s3.get_object.side_effect = lambda Bucket, Key: {"Body": _body_of(contents[Key])}
+
+    [plan] = handler._preview_plan("gh-1-7")
+
+    assert (plan["file"], plan["outcome"], plan["tip"]) == ("main.tf", "commit", "f1")
+    assert plan["content_sha256"] == hashlib.sha256(b"a\nB\n").hexdigest()
+
+
+def test_ulids_sort_by_time_and_do_not_collide():
+    earlier, later = handler._ulid(1_000), handler._ulid(2_000)
+    assert len(earlier) == 26 and earlier < later
+    assert handler._ulid(1_000) != earlier

@@ -2,7 +2,9 @@
 
 CRUD behind API Gateway for the review dashboard: list a PR's findings, fetch
 one finding with its proposed diff, record a human's approve/edit/reject
-decision, and read a finding's audit trail.
+decision, and read a finding's audit trail. And, for a GitHub PR, preview
+what committing its approved fixes would do, and record a committer's
+request to do it, which github-committer carries out (write-back-spec §3).
 
 This is the "human approves" half of the project's core principle -- the agent
 proposes, a person disposes. Every decision writes an immutable ReviewEvent
@@ -32,9 +34,16 @@ DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ARTIFACTS_BUCKET = os.environ.get("ARTIFACTS_BUCKET")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "unknown")
 METRIC_NAMESPACE = "IaCPosture"
+# Empty while write-back is not deployed (terraform: var.github_writer_app_id).
+COMMITTER_FUNCTION_NAME = os.environ.get("COMMITTER_FUNCTION_NAME", "")
+# The Cognito group whose members may commit (write-back-spec §9, W6).
+COMMITTERS_GROUP = "committers"
+# A request in one of these is still being worked on; a second is refused.
+ACTIVE_COMMIT_STATUSES = {"requested", "committing"}
 
 dynamodb = boto3.resource("dynamodb")
 s3 = boto3.client("s3")
+lambda_client = boto3.client("lambda")
 
 # Reviewer actions, per spec §5's ReviewEvent.action enum. "approved"/"edited"
 # mean the human accepted a fix, so the finding becomes "resolved". "rejected"
@@ -81,6 +90,18 @@ def handler(event, context):
                 params["pr_id"], params["finding_id"], event.get("body"), event
             )
 
+        if route_key == "GET /prs/{pr_id}/commit-plan":
+            return _get_commit_plan(params["pr_id"], event)
+
+        if route_key == "POST /prs/{pr_id}/commits":
+            return _post_commit(params["pr_id"], event.get("body"), event)
+
+        if route_key == "GET /prs/{pr_id}/commits/{request_id}":
+            request = _get_commit_request(params["pr_id"], params["request_id"])
+            if request is None:
+                return _error(404, "commit request not found")
+            return _ok(request)
+
         return _error(404, f"unknown route {route_key!r}")
     except Exception:
         # Never leak internals to an HTTP client; CloudWatch has the detail.
@@ -107,6 +128,24 @@ def _actor_from_claims(event):
 
     actor = claims.get("email") or claims.get("cognito:username") or claims.get("sub")
     return actor or None
+
+
+def _groups_from_claims(event):
+    """The caller's Cognito groups, from the same verified claims.
+
+    An HTTP API's JWT authorizer hands array claims to the function as one
+    string, "[committers reviewers]", not a list; both shapes are read, so
+    the check does not depend on which one a given API version sends.
+    """
+    claims = (
+        (event.get("requestContext") or {}).get("authorizer") or {}
+    ).get("jwt", {}).get("claims") or {}
+    raw = claims.get("cognito:groups")
+    if isinstance(raw, list):
+        return {str(g) for g in raw}
+    if isinstance(raw, str):
+        return set(raw.strip("[]").replace(",", " ").split())
+    return set()
 
 
 # ---------- routes ----------
@@ -337,6 +376,201 @@ def _post_review(pr_id, finding_id, raw_body, event):
         # queue.
         "reopened_dependents": reopened,
     })
+
+
+# ---------- write-back (docs/write-back-spec.md) ----------
+#
+# review-api records a request to commit and hands it to github-committer;
+# it never signs as the writer App itself (§2, W1). Approving stays open to
+# every reviewer. The commit is gated on the committers group, since it is a
+# write to someone's repository (§9).
+
+
+def _pull_request_meta(pr_id):
+    """PullRequestMeta: the repository and PR a gh- pr_id is, written by the
+    state machine on every GitHub run. None for a manual run's pr_id, and
+    for a GitHub PR not scanned since that state existed."""
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    return table.get_item(Key={"pk": f"PR#{pr_id}", "sk": "GITHUB"}).get("Item")
+
+
+def _latest_actions(pr_id, findings):
+    """{finding_id: its latest ReviewEvent's action}, for the findings
+    plan_commit could consider -- one events query each, and only those."""
+    latest = {}
+    for f in findings:
+        fix = f.get("proposed_fix") or {}
+        if not fix.get("diff") or fix.get("committed") or f.get("no_longer_detected"):
+            continue
+        events = _list_events(pr_id, f["finding_id"])["events"]
+        if events:
+            latest[f["finding_id"]] = max(events, key=lambda e: e["sk"])["action"]
+    return latest
+
+
+def _preview_plan(pr_id):
+    """plan_commit with the S3 snapshot as the head. The committer re-reads
+    every file from GitHub before writing, so this is a preview, and the
+    response says so."""
+    findings = _list_findings(pr_id)["findings"]
+
+    def read_fix(key):
+        try:
+            return _read_s3(key)
+        except s3.exceptions.NoSuchKey:
+            return None
+
+    def read_head(path):
+        try:
+            return _read_s3(f"scans/{pr_id}/{path}"), None
+        except s3.exceptions.NoSuchKey:
+            return None, "the file is not in the PR's latest snapshot"
+
+    return plan_commit(pr_id, findings, _latest_actions(pr_id, findings), read_fix, read_head)
+
+
+def _commit_requests(pr_id):
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    return _query_all(
+        table,
+        KeyConditionExpression="pk = :pk AND begins_with(sk, :sk_prefix)",
+        ExpressionAttributeValues={":pk": f"PR#{pr_id}", ":sk_prefix": "COMMIT#"},
+    )
+
+
+def _get_commit_request(pr_id, request_id):
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    return table.get_item(Key={"pk": f"PR#{pr_id}", "sk": f"COMMIT#{request_id}"}).get("Item")
+
+
+def _get_commit_plan(pr_id, event):
+    """What a commit would do now, per file: the head-to-tip diff, held
+    files and why, unverified links -- what the reviewer confirms (§5)."""
+    meta = _pull_request_meta(pr_id)
+    if meta is None:
+        return _error(404, "not a GitHub pull request, or not scanned since write-back was "
+                           "deployed; push to it once")
+    plans = _preview_plan(pr_id)
+    requests = _commit_requests(pr_id)
+    counts = {outcome: sum(1 for p in plans if p["outcome"] == outcome)
+              for outcome in ("commit", "already", "held")}
+    return _ok({
+        "pr_id": pr_id,
+        "repository": meta["repository"],
+        "pr_number": meta["pr_number"],
+        # The committer re-checks every file against the PR head on GitHub.
+        "preview": True,
+        "write_back_deployed": bool(COMMITTER_FUNCTION_NAME),
+        "can_commit": COMMITTERS_GROUP in _groups_from_claims(event),
+        "counts": counts,
+        # The content itself stays out: the diff is what is shown, and a
+        # module's main.tf can be large.
+        "files": [{k: v for k, v in p.items() if k != "content"} for p in plans],
+        "latest_request": max(requests, key=lambda r: r["sk"]) if requests else None,
+    })
+
+
+def _post_commit(pr_id, raw_body, event):
+    """Record a request to commit, and hand it to github-committer (§3).
+
+    The body names what the reviewer confirmed: per file, the tip and the
+    hash of its content, from the plan they were shown. If the plan has
+    moved since -- another approval, an edit, a push -- the request is
+    refused rather than committing something nobody looked at, and the
+    committer commits only content that was confirmed.
+    """
+    actor = _actor_from_claims(event)
+    if actor is None:
+        logger.error("commit POST reached the handler with no verified JWT claims")
+        return _error(401, "unauthenticated")
+    if COMMITTERS_GROUP not in _groups_from_claims(event):
+        return _error(403, f"committing needs membership of the {COMMITTERS_GROUP!r} group")
+    if not COMMITTER_FUNCTION_NAME:
+        return _error(503, "write-back is not deployed")
+
+    try:
+        body = json.loads(raw_body or "{}")
+    except json.JSONDecodeError:
+        return _error(400, "body must be valid JSON")
+    confirmed = body.get("confirm")
+    if (not isinstance(confirmed, list) or not confirmed or not all(
+            isinstance(c, dict) and isinstance(c.get("file"), str) and isinstance(c.get("tip"), str)
+            and isinstance(c.get("content_sha256"), str) for c in confirmed)):
+        return _error(400, "confirm must list the files to commit: [{file, tip, content_sha256}]")
+
+    if _pull_request_meta(pr_id) is None:
+        return _error(404, "not a GitHub pull request, or not scanned since write-back was deployed")
+
+    # Not a lock: two requests racing past this both get recorded. That is
+    # safe rather than prevented. The committer's ref update is a
+    # compare-and-swap, and whichever lands second finds the branch moved,
+    # or the files already committed (write-back-spec §6).
+    active = [r for r in _commit_requests(pr_id) if r.get("status") in ACTIVE_COMMIT_STATUSES]
+    if active:
+        return _response(409, {"error": "a commit request for this PR is still in progress",
+                               "request_id": active[0]["request_id"]})
+
+    committable = {(p["file"], p["tip"], p["content_sha256"])
+                   for p in _preview_plan(pr_id) if p["outcome"] == "commit"}
+    asked = {(c["file"], c["tip"], c["content_sha256"]) for c in confirmed}
+    if not asked <= committable:
+        return _response(409, {"error": "the commit plan has changed since it was shown; "
+                                        "review it again",
+                               "changed": sorted(f for f, _, _ in asked - committable)})
+
+    now = datetime.now(timezone.utc).isoformat()
+    request_id = _ulid()
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    table.put_item(
+        Item={
+            "pk": f"PR#{pr_id}",
+            "sk": f"COMMIT#{request_id}",
+            "request_id": request_id,
+            "pr_id": pr_id,
+            # From the verified JWT, never the body: this is who asked for a
+            # write to the repository, and the audit log's record of it.
+            "requested_by": actor,
+            "requested_at": now,
+            "updated_at": now,
+            "status": "requested",
+            "confirmed": [{"file": f, "tip": t, "content_sha256": h}
+                          for f, t, h in sorted(asked)],
+        },
+        ConditionExpression="attribute_not_exists(sk)",
+    )
+
+    try:
+        lambda_client.invoke(
+            FunctionName=COMMITTER_FUNCTION_NAME,
+            InvocationType="Event",
+            Payload=json.dumps({"pr_id": pr_id, "request_id": request_id}).encode(),
+        )
+    except Exception:
+        logger.exception("could not hand commit request %s to the committer", request_id)
+        table.update_item(
+            Key={"pk": f"PR#{pr_id}", "sk": f"COMMIT#{request_id}"},
+            UpdateExpression="SET #status = :failed, reason = :reason, updated_at = :now",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":failed": "failed", ":now": now,
+                                       ":reason": "the request could not be handed to the committer"},
+        )
+        return _error(502, "the request could not be handed to the committer")
+
+    _emit_metrics({"CommitsRequested": 1}, {"Environment": ENVIRONMENT},
+                  pr_id=pr_id, request_id=request_id, files=len(asked))
+    return _response(202, {"request_id": request_id, "status": "requested"})
+
+
+_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def _ulid(now_ms=None):
+    """A ULID: 48 bits of milliseconds, then 80 random bits, in Crockford
+    base32. Sorts by time as a string, so COMMIT# items sort by when they
+    were asked for, and cannot collide the way a timestamp could."""
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    value = (now_ms << 80) | int.from_bytes(os.urandom(10), "big")
+    return "".join(_CROCKFORD[(value >> (5 * i)) & 31] for i in reversed(range(26)))
 
 
 # ---------- helpers ----------
@@ -673,9 +907,11 @@ def plan_commit(pr_id, findings, latest_actions, read_fix, read_head):
     (write-back-spec §8). A head already equal to the tip's content is
     "already" -- a retried request, or a person who applied the suggestions.
 
-    Returns [{file, outcome, reason, tip, chain, left_out, content, diff}]
-    sorted by file. outcome is "commit", "already" or "held"; reason says
-    why a file is held. chain lists the tip's links with whether each was
+    Returns [{file, outcome, reason, tip, chain, left_out, content,
+    content_sha256, diff}] sorted by file. outcome is "commit", "already" or
+    "held"; reason says why a file is held. content_sha256 is what a
+    reviewer confirms along with the tip: an edit keeps the finding id and
+    changes the content, and the commit has to be the content they saw. chain lists the tip's links with whether each was
     verified by its self-check (an edit never is, write-back-spec §5.5).
     left_out names approved fixes the tip does not carry.
     """
@@ -690,7 +926,7 @@ def plan_commit(pr_id, findings, latest_actions, read_fix, read_head):
     for path in sorted(approved_by_file):
         approved = approved_by_file[path]
         plan = {"file": path, "outcome": "held", "reason": None, "tip": None, "chain": [],
-                "left_out": [], "content": None, "diff": None}
+                "left_out": [], "content": None, "content_sha256": None, "diff": None}
         plans.append(plan)
 
         tip = approved_tip(approved)
@@ -726,7 +962,8 @@ def plan_commit(pr_id, findings, latest_actions, read_fix, read_head):
             plan["reason"] = ("the file has changed since these fixes were drafted; "
                               "run Draft fixes again")
             continue
-        plan.update(outcome="commit", content=content, diff=_commit_diff(head, content, path))
+        plan.update(outcome="commit", content=content, content_sha256=_content_sha256(content),
+                    diff=_commit_diff(head, content, path))
     return plans
 
 
