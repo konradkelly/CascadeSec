@@ -102,9 +102,9 @@ finding -- which is why it asks first (`--no-remediate` stops after mapping).
 
 ## Status
 
-**v1 is deployed and running** against a dev AWS account: multi-language IaC scanning, control mapping, self-verified remediation with per-file fix chains, and the human review dashboard. Triggered by `scripts/scan.py`, or by a pull request through the CascadeSec GitHub App (v3), which reports back on the PR as a check run and, when asked, as suggested changes. Nothing is committed to a branch: that is v4.
+**v1 is deployed and running** against a dev AWS account: multi-language IaC scanning, control mapping, self-verified remediation with per-file fix chains, and the human review dashboard. Triggered by `scripts/scan.py`, or by a pull request through the CascadeSec GitHub App (v3), which reports back on the PR as a check run and, when asked, as suggested changes. Nothing is committed to a branch yet: v4, write-back, is built and waiting to be deployed. A member of the `committers` group reviews a PR's commit plan in the dashboard and asks, and a second App commits the approved fixes as one commit, only over the file versions they were drafted on.
 
-CI runs the Lambda test suites (pytest, 440 tests) and the dashboard lint + type-check on every push — deliberately with no AWS credentials, so a test run can never touch real infrastructure.
+CI runs the Lambda test suites (pytest, 531 tests) and the dashboard lint + type-check on every push — deliberately with no AWS credentials, so a test run can never touch real infrastructure.
 
 ## Roadmap
 
@@ -113,7 +113,7 @@ CI runs the Lambda test suites (pytest, 440 tests) and the dashboard lint + type
 - [~] v2 — Azure ARM templates and Bicep (**built 2026-09-22**), with CIS Azure 3.0; KICS scans both since 2026-09-23, after Trivy's ARM adapter was measured unable to satisfy four of its own checks
 - [~] v2 — CloudFormation, both syntaxes (**built 2026-09-23**); all three scanners read it, so it needs no single-source caveat. CDK is deliberately out of scope: its synth output is CloudFormation, but a fix written into a generated template is overwritten by the next synth, so `cdk.out` is skipped — [`docs/multi-iac-spec.md`](docs/multi-iac-spec.md) §7.1
 - [x] v3 — GitHub App / PR-triggered CI integration (**deployed 2026-09-25**): a PR gets a check run with annotations on the lines it adds, and a Draft fixes button that posts self-checked fixes as suggested changes — [`docs/ci-integration-spec.md`](docs/ci-integration-spec.md)
-- [ ] v4 — Approved-fix write-back to PR branch
+- [~] v4 — Approved-fix write-back to PR branch (**built 2026-09-29, not yet deployed**): a commit plan in the dashboard, one commit per request as a second GitHub App with Contents write, gated on a Cognito group — [`docs/write-back-spec.md`](docs/write-back-spec.md)
 
 ## Tech stack
 

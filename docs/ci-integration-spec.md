@@ -414,7 +414,9 @@ found by name rather than by id.
 
 ## 7. Not in v3
 
-- **Write-back** of approved fixes to the branch — v4. Contents stays read.
+- **Write-back** of approved fixes to the branch — v4. Contents stays read:
+  v4 commits as a second App, "CascadeSec Fixes", so this App never holds
+  Contents write. Built 2026-09-29 — [`write-back-spec.md`](./write-back-spec.md).
 - **A base-commit scan** to tell introduced findings from existing ones.
   It doubles scan cost per push; the added-lines approximation comes first,
   and its misses are what would justify this.

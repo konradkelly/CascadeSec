@@ -31,6 +31,17 @@ Cognito emails a temporary password; the Hosted UI prompts for a permanent one
 on first sign-in. After that, enter a PR ID (e.g. `manual-test-1`) and review
 findings.
 
+Committing approved fixes to a GitHub PR's branch (v4,
+[`docs/write-back-spec.md`](../docs/write-back-spec.md)) needs membership of
+the `committers` group; approving does not. The group claim is issued at
+sign-in, so sign in again afterwards:
+
+```bash
+aws cognito-idp admin-add-user-to-group \
+  --user-pool-id "$(terraform output -raw cognito_user_pool_id)" \
+  --username you@example.com --group-name committers
+```
+
 ## API routes consumed
 
 | Method | Path | Use |
@@ -39,6 +50,9 @@ findings.
 | GET | `/prs/{pr_id}/findings/{finding_id}` | Finding detail + proposed diff |
 | GET | `/prs/{pr_id}/findings/{finding_id}/events` | Audit trail |
 | POST | `/prs/{pr_id}/findings/{finding_id}/review` | Approve / edit / reject |
+| GET | `/prs/{pr_id}/commit-plan` | What committing a GitHub PR's approved fixes would do, per file |
+| POST | `/prs/{pr_id}/commits` | Ask for that commit (`committers` group only) |
+| GET | `/prs/{pr_id}/commits/{request_id}` | A commit request's status |
 
 ## Build for static hosting
 
