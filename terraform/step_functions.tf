@@ -20,9 +20,10 @@
 #         parameter: the scanner reports what it finds, per file.
 #         A GitHub run (v3, docs/ci-integration-spec.md §2) adds a "github"
 #         object -- installation, repository, PR, head sha, trigger -- and
-#         with it three states around the unchanged stages: Fetch before
-#         Scan, SelectFiles before Remediate, Report at the end. Without it
-#         (scripts/scan.py) the execution is what it always was.
+#         with it four states around the unchanged stages: Fetch and
+#         RecordPullRequest before Scan, SelectFiles before Remediate, Report
+#         at the end. Without it (scripts/scan.py) the execution is what it
+#         always was.
 # Output: the input plus "scan" (finding_count, scan_errors, preserved_count,
 #         no_longer_detected_count), "map"
 #         (mapped_count, skipped_count, error_count, files) and "remediation" (one entry
@@ -96,7 +97,43 @@ locals {
         }
         ResultPath = "$.fetch"
         Retry      = [local.transient_retry]
-        Next       = "SnapshotUsable"
+        Next       = "RecordPullRequest"
+      }
+
+      # PullRequestMeta (write-back-spec §10): which repository and PR a
+      # gh- pr_id is. Nothing else stored maps one back, and review-api has
+      # to answer that without calling GitHub. Written here, by the state
+      # machine, rather than by fetch: github-gateway parses attacker-shaped
+      # tarballs and holds only dynamodb:Query, and giving it a table write
+      # is the exposure write-back-spec §4 exists to avoid. Every GitHub run
+      # rewrites it, so a renamed repository is picked up on the next push.
+      RecordPullRequest = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::dynamodb:putItem"
+        Parameters = {
+          TableName = aws_dynamodb_table.findings.name
+          Item = {
+            pk            = { "S.$" = "States.Format('PR#{}', $.pr_id)" }
+            sk            = { S = "GITHUB" }
+            repository    = { "S.$" = "$.github.repository" }
+            repository_id = { "N.$" = "States.Format('{}', $.github.repository_id)" }
+            pr_number     = { "N.$" = "States.Format('{}', $.github.pr_number)" }
+            updated_at    = { "S.$" = "$$.State.EnteredTime" }
+          }
+        }
+        ResultPath = null
+        Retry = [{
+          ErrorEquals = [
+            "DynamoDB.InternalServerErrorException",
+            "DynamoDB.ThrottlingException",
+            "DynamoDB.ProvisionedThroughputExceededException",
+            "DynamoDB.RequestLimitExceededException",
+          ]
+          IntervalSeconds = 2
+          MaxAttempts     = 3
+          BackoffRate     = 2
+        }]
+        Next = "SnapshotUsable"
       }
 
       # Too large or no IaC at all: say so on the check and scan nothing.
@@ -384,6 +421,19 @@ data "aws_iam_policy_document" "pipeline" {
       aws_lambda_function.remediation_agent.arn,
       aws_lambda_function.github_gateway.arn,
     ]
+  }
+  # RecordPullRequest's one write. Only keys under PR#gh-, the prefix
+  # webhook-receiver's make_pr_id gives every GitHub PR: the state machine
+  # has no business writing a manual run's partition, or any other.
+  statement {
+    sid       = "RecordPullRequest"
+    actions   = ["dynamodb:PutItem"]
+    resources = [aws_dynamodb_table.findings.arn]
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["PR#gh-*"]
+    }
   }
   # Step Functions delivers its logs through a CloudWatch Logs "log
   # delivery", which needs these account-level actions rather than a
