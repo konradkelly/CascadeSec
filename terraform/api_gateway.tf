@@ -66,6 +66,11 @@ locals {
     "GET /prs/{pr_id}/findings/{finding_id}/events",
     "GET /prs/{pr_id}/findings/{finding_id}/content",
     "POST /prs/{pr_id}/findings/{finding_id}/review",
+    # Write-back (docs/write-back-spec.md). Behind the same authorizer; the
+    # POST is further gated on the committers group, inside review-api.
+    "GET /prs/{pr_id}/commit-plan",
+    "POST /prs/{pr_id}/commits",
+    "GET /prs/{pr_id}/commits/{request_id}",
   ]
 }
 

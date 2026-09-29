@@ -42,9 +42,11 @@ def plan_commit(pr_id, findings, latest_actions, read_fix, read_head):
     (write-back-spec §8). A head already equal to the tip's content is
     "already" -- a retried request, or a person who applied the suggestions.
 
-    Returns [{file, outcome, reason, tip, chain, left_out, content, diff}]
-    sorted by file. outcome is "commit", "already" or "held"; reason says
-    why a file is held. chain lists the tip's links with whether each was
+    Returns [{file, outcome, reason, tip, chain, left_out, content,
+    content_sha256, diff}] sorted by file. outcome is "commit", "already" or
+    "held"; reason says why a file is held. content_sha256 is what a
+    reviewer confirms along with the tip: an edit keeps the finding id and
+    changes the content, and the commit has to be the content they saw. chain lists the tip's links with whether each was
     verified by its self-check (an edit never is, write-back-spec §5.5).
     left_out names approved fixes the tip does not carry.
     """
@@ -59,7 +61,7 @@ def plan_commit(pr_id, findings, latest_actions, read_fix, read_head):
     for path in sorted(approved_by_file):
         approved = approved_by_file[path]
         plan = {"file": path, "outcome": "held", "reason": None, "tip": None, "chain": [],
-                "left_out": [], "content": None, "diff": None}
+                "left_out": [], "content": None, "content_sha256": None, "diff": None}
         plans.append(plan)
 
         tip = approved_tip(approved)
@@ -95,7 +97,8 @@ def plan_commit(pr_id, findings, latest_actions, read_fix, read_head):
             plan["reason"] = ("the file has changed since these fixes were drafted; "
                               "run Draft fixes again")
             continue
-        plan.update(outcome="commit", content=content, diff=_commit_diff(head, content, path))
+        plan.update(outcome="commit", content=content, content_sha256=_content_sha256(content),
+                    diff=_commit_diff(head, content, path))
     return plans
 
 

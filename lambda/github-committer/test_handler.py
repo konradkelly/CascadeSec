@@ -39,7 +39,7 @@ def _plan(findings, actions=None, head=HEAD, fixes=None):
 def test_an_approved_fix_on_an_unchanged_file_is_committed_whole():
     [plan] = _plan([_fix("1")])
     assert plan["outcome"] == "commit" and plan["reason"] is None
-    assert plan["content"] == FIXED["1"]
+    assert plan["content"] == FIXED["1"] and plan["content_sha256"] == _h(FIXED["1"])
     # The diff the reviewer confirms is head to tip, the change the commit makes.
     assert "-c\n+C\n" in plan["diff"] and plan["diff"].startswith("--- a/f.tf\n+++ b/f.tf\n")
     assert plan["chain"] == [{"finding_id": "1", "rule_id": "R-1", "verified": True, "edited": False}]
