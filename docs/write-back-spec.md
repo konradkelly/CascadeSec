@@ -281,7 +281,15 @@ Three more things this turned up:
   fixes drafts only `mapped` findings. A stale fix is still `fix-proposed`,
   so it is never redrafted. §7's second `_chain_root` change covers this:
   a fix whose base no longer matches the snapshot goes back to `mapped`.
-  Until then, the message sends the reviewer to a button that does nothing.
+  **Fixed with v4 step 1:** remediation-agent reopens a `fix-proposed` or
+  `resolved` fix whose base is not the snapshot (or who has none), with a
+  `system` event, along with whatever it superseded, and redrafts them in
+  the same run. The gateway's `select_files` picks a changed file for that
+  even with nothing mapped on it, and a push's check offers Draft fixes
+  for it. Both sides share one predicate, `_stale_reason`, which
+  `corpus/test_corpus.py` keeps identical. A continuation invocation does
+  not reopen: the chain it resumes was drafted on the snapshot the run
+  read.
 
 ## 9. Authorisation
 

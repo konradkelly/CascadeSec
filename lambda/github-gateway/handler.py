@@ -41,6 +41,7 @@ import urllib.error
 import urllib.request
 
 import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -401,16 +402,62 @@ def replace_snapshot(pr_id, kept):
 
 def select_files(event):
     """The Remediate Map's items on a GitHub run: changed files with a finding
-    still "mapped". Not mapping-agent's `files`, which lists only what that
-    pass mapped -- on a Draft fixes run every finding was mapped by the push
-    before it, so that list is empty and nothing would be remediated."""
+    still "mapped", or with a stale fix. Not mapping-agent's `files`, which
+    lists only what that pass mapped -- on a Draft fixes run every finding was
+    mapped by the push before it, so that list is empty and nothing would be
+    remediated.
+
+    A stale fix was drafted on a version of the file the PR has since moved
+    past. remediation-agent reopens and redrafts it, but only on a file it is
+    asked about, and before this a file whose only problem was a stale fix
+    was never asked about: the hold message said "run Draft fixes again" and
+    the run did nothing (write-back-spec §8)."""
+    pr_id = event["pr_id"]
     changed = set(event.get("changed_files") or [])
-    findings = query_findings(event["pr_id"])
-    files = sorted({f["file"] for f in findings
-                    if f.get("status") == "mapped" and f["file"] in changed
-                    and not f.get("no_longer_detected")})
+    on_changed = [f for f in query_findings(pr_id)
+                  if f["file"] in changed and not f.get("no_longer_detected")]
+    mapped = {f["file"] for f in on_changed if f.get("status") == "mapped"}
+    files = sorted(mapped | stale_files(pr_id, [f for f in on_changed if f["file"] not in mapped]))
     carried = event.get("map") or {}
     return {**carried, "files": files, "remaining": 0}
+
+
+def stale_files(pr_id, findings):
+    """The files among `findings` holding a fix remediation-agent would
+    reopen as stale: one read of the snapshot per file with a fix on it."""
+    by_file = {}
+    for f in findings:
+        if f.get("status") in ("fix-proposed", "resolved"):
+            by_file.setdefault(f["file"], []).append(f)
+    stale = set()
+    for path, fixes in by_file.items():
+        try:
+            snapshot_sha256 = _content_sha256(_s3_text(f"scans/{pr_id}/{path}"))
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "NoSuchKey":
+                raise
+            continue  # the PR deleted the file; nothing to redraft on
+        if any(_stale_reason(f, snapshot_sha256) for f in fixes):
+            stale.add(path)
+    return stale
+
+
+def _stale_reason(finding, snapshot_sha256):
+    """Why this finding's fix can no longer land or be built on, or None.
+
+    Must stay identical to remediation-agent's copy, which decides what a
+    Draft fixes run reopens (corpus/test_corpus.py). A drift here offers the
+    button for a file the run then leaves alone, or never offers it.
+    """
+    fix = finding.get("proposed_fix") or {}
+    if (finding.get("status") not in ("fix-proposed", "resolved") or not fix.get("diff")
+            or fix.get("committed") or finding.get("no_longer_detected")):
+        return None
+    if not fix.get("base_sha256"):
+        return "it was drafted before fixes recorded the file they were drafted on"
+    if fix["base_sha256"] != snapshot_sha256:
+        return "the file has changed since it was drafted"
+    return None
 
 
 def query_findings(pr_id):
@@ -470,8 +517,13 @@ def report(event):
         posted, held = post_suggestions(github, pr_id, execution_name, findings, visible, token)
 
     changed = set(fetched.get("changed_files") or [])
-    offer_fixes = (not remediate) and any(
-        f.get("status") == "mapped" and f["file"] in changed for f in findings)
+    on_changed = [f for f in findings if f["file"] in changed]
+    # The same test select_files makes, so the button is offered exactly when
+    # the run it starts has something to do. Stale fixes are only looked for
+    # when nothing is mapped: each is a snapshot read.
+    offer_fixes = (not remediate) and (
+        any(f.get("status") == "mapped" for f in on_changed)
+        or bool(stale_files(pr_id, on_changed)))
 
     title = (f"{len(on_added)} finding(s) on lines this PR adds" if on_added
              else "No findings on lines this PR adds")
@@ -638,7 +690,8 @@ def build_summary(*, state, findings, on_added, posted, held, remediate, offer_f
         lines.append("")
     elif offer_fixes:
         lines += ["**Draft fixes** (above) drafts and self-checks a fix for each mapped finding "
-                  "in the files this PR changes, and posts the ones that verify as suggestions. "
+                  "in the files this PR changes, redrafts any fix whose file has changed since "
+                  "it was drafted, and posts the ones that verify as suggestions. "
                   "It makes model calls, so it waits to be asked.", ""]
 
     lines.append("Findings on added lines approximate \"introduced by this PR\": a change that "
