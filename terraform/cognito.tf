@@ -95,6 +95,21 @@ resource "aws_cognito_user_pool_client" "cli" {
   explicit_auth_flows = ["ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
 }
 
+# Who may commit approved fixes to a branch (write-back-spec §9, W6).
+# Approving stays open to every reviewer; a commit is a write to someone's
+# repository, so review-api refuses POST /prs/{pr_id}/commits unless the
+# verified ID token's cognito:groups carries this. Membership is out of band,
+# like the accounts themselves:
+#
+#   aws cognito-idp admin-add-user-to-group --user-pool-id <pool> #     --username <email> --group-name committers
+#
+# A group claim is issued at sign-in, so a new member signs in again.
+resource "aws_cognito_user_group" "committers" {
+  name         = "committers"
+  user_pool_id = aws_cognito_user_pool.dashboard.id
+  description  = "May commit approved fixes to a pull request's branch"
+}
+
 # Reviewer accounts are created out of band with `aws cognito-idp
 # admin-create-user` (documented in dashboard/README.md). Deliberately not an
 # aws_cognito_user resource: a human's account doesn't belong in config, and

@@ -23,6 +23,7 @@ output "lambda_role_arns" {
     review_api        = aws_iam_role.review_api.arn
     webhook_receiver  = aws_iam_role.webhook_receiver.arn
     github_gateway    = aws_iam_role.github_gateway.arn
+    github_committer  = one(aws_iam_role.github_committer[*].arn)
   }
 }
 
@@ -64,6 +65,11 @@ output "webhook_receiver_function_name" {
 
 output "github_gateway_function_name" {
   value = aws_lambda_function.github_gateway.function_name
+}
+
+# Null until var.github_writer_app_id is set.
+output "github_committer_function_name" {
+  value = one(aws_lambda_function.github_committer[*].function_name)
 }
 
 # Base URL the dashboard talks to, e.g.
