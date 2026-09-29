@@ -5,9 +5,12 @@ committed, and CascadeSec commits them to the pull request's branch as one
 commit. The push that commit makes is scanned like any other, and that scan
 is the fix's verification on the real branch.
 
-Written before building, 2026-09-28. Nothing here is built. GitHub API claims
-are from GitHub's documentation and are marked **(verify)** until a deployed
-run has shown them. §12 is the build order.
+Written before building, 2026-09-28. **Built 2026-09-29, not yet deployed**:
+steps 1-3, 5-8 and 10 of §12 are in, and §14 records where the build departed
+from this plan. Step 4 (registering the writer App) and step 9 (deploying and
+verifying on the testbed) are not done, so every **(verify)** below still
+stands. GitHub API claims are from GitHub's documentation and are marked
+**(verify)** until a deployed run has shown them. §12 is the build order.
 
 ## 1. What v4 adds that v3's suggestions do not
 
@@ -346,9 +349,9 @@ never polls forever.
 | # | Decision | Outcome |
 |---|---|---|
 | W1 | review-api never signs. A separate `github-committer` does, and API Gateway cannot reach it (§2) | Follows from v3 D7; proposed |
-| W2 | Second App for Contents write, rather than widening the existing one (§4) | **Open.** Proposed: second App |
+| W2 | Second App for Contents write, rather than widening the existing one (§4) | **Open.** Proposed: second App. Built that way 2026-09-29 |
 | W3 | Trigger: one explicit request per PR, not each approval, not a GitHub button (§3) | Proposed |
-| W4 | Approved but unverified fixes (edits, failed checks): commit them labelled, or refuse (§5.5) | **Open.** Proposed: commit, labelled |
+| W4 | Approved but unverified fixes (edits, failed checks): commit them labelled, or refuse (§5.5) | **Open.** Proposed: commit, labelled. Built that way 2026-09-29 |
 | W5 | Approver identity kept out of the commit message (§6) | Proposed |
 | W6 | Commit gated on the Cognito group `committers` (§9) | Proposed |
 | W7 | Fork PRs: refused, with "apply the suggestions instead" | Proposed |
@@ -418,3 +421,53 @@ Each step is a commit of its own, and none needs the next to be useful.
   there to commit. Widening Draft fixes is a separate decision about cost.
 - **GitLab, and the other CI platforms.** Write-back there would go through
   integrations-spec's surfaces, not this function.
+
+## 14. As built (2026-09-29)
+
+Where the build departed from, or added to, the plan above.
+
+- **What was confirmed is what is committed.** §5 says the reviewer sees
+  what is committed; the build enforces it. `plan_commit` returns each
+  file's `content_sha256`, the POST carries `confirm: [{file, tip,
+  content_sha256}]` from the plan the reviewer was shown, and review-api
+  refuses with 409 if its own preview no longer offers exactly that. An
+  edit keeps its finding id and changes its content, so the tip alone was
+  not enough. The confirmed set is stored on the request, and the committer
+  holds any file whose tip or hash differs ("not what was confirmed").
+- **Step 1's reopen.** remediation-agent reopens a `fix-proposed` or
+  `resolved` fix whose base is not the snapshot, or who has none, and
+  whatever it superseded, conditional on the status it read, with a
+  `system` event. It does so per file before choosing the chain root, not
+  inside `_chain_root`, so the reopened findings are drafted in the same
+  run. A continuation invocation does not reopen. The gateway selects, and
+  offers Draft fixes for, a changed file whose only work is a stale fix. A
+  held fix (`needs-human-only`, which a rejection also sets) is left alone.
+- **Twin deliveries.** Lambda can deliver one async event twice at once.
+  The loser of the ref race then gets a non-fast-forward 422, and ending the
+  request "held" would overwrite the winner's commit. So on a failed ref
+  update the committer re-reads the branch, and steps aside if the head
+  carries its own trailer. Every ending is conditional on `committing`.
+- **The failure backstop** is an on-failure destination to the default
+  EventBridge bus and a rule back to the committer, the pipeline's backstop
+  shape. It never raises, and it ignores a failure record whose payload is
+  itself one, so it cannot loop.
+- **The head is walked one directory at a time** through the Git Data API,
+  not with the recursive tree listing, which GitHub truncates on a large
+  repository. A path with `.`, `..` or an empty component is refused.
+- **"Already" files are recorded as committed**, with the head's sha: the
+  fix is on the branch, and `_chain_root` must not root on it again.
+- **Write-back deploys only once `var.github_writer_app_id` is set.** Until
+  then no committer exists, review-api answers a commit request with 503,
+  and the dashboard says write-back is not deployed. The Cognito group is
+  created either way.
+- **The group claim.** An HTTP API's JWT authorizer passes `cognito:groups`
+  as the string `"[a b]"`, not a list; review-api reads both.
+- **Metrics** are `CommitsRequested` (review-api), `CommitsCreated`,
+  `FilesCommitted`, `FilesHeldFromCommit` and `CommitsFailed` (the
+  committer), in the `IaCPosture` namespace.
+
+Still to do: register "CascadeSec Fixes" (Metadata read, Contents write,
+Pull requests read; webhooks off), import its key with
+`scripts/import_github_app_key.py --alias alias/iacposture-dev-github-app-writer`,
+install it on cascadesec-testbed only, apply with `-var
+github_writer_app_id=<id>`, add a user to `committers`, and run §12 step 9.

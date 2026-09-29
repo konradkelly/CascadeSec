@@ -87,18 +87,19 @@ The system is built as a serverless pipeline so it doubles as hands-on practice 
 | **Lambda — `remediation-agent`** | Calls Anthropic API to draft a diff, then invokes `iac-scanner` to self-check the fix. A draft may return `questions` about the rest of the repository; `context-agent` answers them and the fix is redrafted (docs/context-agent-spec.md) | Development, Security |
 | **Lambda — `context-agent`** | Answers a draft's questions by searching and reading the repository snapshot in S3, every `yes`/`no` cited to `file:line` and the citation verified in code. Own least-privilege role: reads `scans/*` and the API key, nothing else. Built 2026-09-12 | Development, Security |
 | **Lambda — `github-gateway`** | The only code that acts as the GitHub App: snapshots a PR's head into S3 (`fetch`), picks the files a Draft fixes run remediates (`select_files`), and reports back as a check run with annotations and suggested changes (`report`). Signs the App's JWT with `kms:Sign` and never holds the key. Built 2026-09-25 (v3) -- [`docs/ci-integration-spec.md`](./docs/ci-integration-spec.md) §4 | Development, Security |
-| **Lambda — `review-api`** | CRUD behind API Gateway for the dashboard: list findings, get diff, post approve/reject | Development with AWS Services |
+| **Lambda — `github-committer`** | Commits a GitHub PR's approved fixes to its branch as one commit, as a second App, "CascadeSec Fixes", the only one with Contents write. Invoked asynchronously by `review-api` and unreachable from API Gateway; reads the head from GitHub, checks each file's base, and updates the ref as a compare-and-swap. *Built 2026-09-29 (v4), not yet deployed -- [`docs/write-back-spec.md`](./docs/write-back-spec.md)* | Development, Security |
+| **Lambda — `review-api`** | CRUD behind API Gateway for the dashboard: list findings, get diff, post approve/reject. *v4 adds a GitHub PR's commit plan (a preview of what committing its approved fixes would do) and commit requests, gated on the Cognito group `committers`, which it records and hands to `github-committer`. It never signs anything.* | Development with AWS Services |
 | **SQS queue** | Decouples webhook ingestion from scan execution — a PR with many changed files shouldn't block the webhook response (GitHub expects a fast ACK). ***Dropped in v3 (2026-09-24):*** *Step Functions arrived first (§8.2 item 5). `StartExecution` returns in milliseconds and a Standard execution is itself durable, so the receiver answers inside GitHub's window without a queue, and a queue could not have serialised pushes to one PR either -- its consumer returns once an execution starts, not once it ends. [`docs/ci-integration-spec.md`](./docs/ci-integration-spec.md) §1.* | Development, Deployment |
 | **DynamoDB** *or* **RDS (Postgres)** | Findings, controls corpus, review audit log. DynamoDB fits the access pattern better (fetch by PR/finding ID) and is more idiomatic serverless; Postgres is a better fit if you want relational queries across the controls corpus. See §4.2 for the tradeoff. | Development with AWS Services |
 | **S3** | Stores raw Terraform snapshots per scan run, scanner output artifacts, and the versioned control corpus (CIS/OWASP text) | Development, Deployment |
-| **EventBridge** | Fan-out trigger for scheduled re-scans (e.g. nightly re-check of `main` against an updated CIS benchmark version). *Scheduled re-scans are not built. What v3 built is the failure backstop: a rule on a pipeline execution that fails, times out or is stopped hands it to `github-gateway`, which completes its check run so none is left spinning on a PR ([`docs/ci-integration-spec.md`](./docs/ci-integration-spec.md) §6.3).* | Development with AWS Services |
+| **EventBridge** | Fan-out trigger for scheduled re-scans (e.g. nightly re-check of `main` against an updated CIS benchmark version). *Scheduled re-scans are not built. What v3 built is the failure backstop: a rule on a pipeline execution that fails, times out or is stopped hands it to `github-gateway`, which completes its check run so none is left spinning on a PR ([`docs/ci-integration-spec.md`](./docs/ci-integration-spec.md) §6.3). v4 adds the same shape for `github-committer`: its on-failure destination is the default bus, and a rule hands the failure back to it to mark the commit request failed.* | Development with AWS Services |
 | **IAM roles (per Lambda, least-privilege)** | Each Lambda gets a narrowly scoped execution role — `iac-scanner` gets only what scanning needs and not `remediation-agent`'s permissions. This is itself a live demo of the least-privilege principle the tool checks for. | Security, Deployment |
 | **Secrets Manager** | Anthropic API key, GitHub App webhook secret. *Not the App's private key, which v3 moved to KMS (next row).* | Security |
-| **KMS** | The GitHub App's private key, imported with `scripts/import_github_app_key.py` (GitHub generates App keys and accepts no uploaded public key). `github-gateway` can use it with `kms:Sign` and nothing can read it; every signature is a CloudTrail event. Added 2026-09-24 (v3) -- [`docs/ci-integration-spec.md`](./docs/ci-integration-spec.md) §4.1 | Security |
+| **KMS** | The GitHub App's private key, imported with `scripts/import_github_app_key.py` (GitHub generates App keys and accepts no uploaded public key). `github-gateway` can use it with `kms:Sign` and nothing can read it; every signature is a CloudTrail event. Added 2026-09-24 (v3) -- [`docs/ci-integration-spec.md`](./docs/ci-integration-spec.md) §4.1. *v4 adds a second key, the writer App's (`alias/iacposture-dev-github-app-writer`), imported the same way and signable only by `github-committer`: the key that can write is one the tarball-parsing gateway cannot use ([`docs/write-back-spec.md`](./docs/write-back-spec.md) §4).* | Security |
 | **CloudWatch (Logs, Metrics, Alarms)** | Structured logs per Lambda, custom metric for findings-per-scan and fix-acceptance-rate, alarm on scan failures | Troubleshooting and Monitoring |
 | **X-Ray** | Trace a webhook event end-to-end through the receiver, the Step Functions execution and each stage's Lambda (*the SQS hop originally sketched here was dropped in v3*) — useful for debugging latency in the self-check loop | Troubleshooting and Monitoring |
 | **CloudFront + S3 (static hosting)** | Hosts the review dashboard (React + Vite + TypeScript) | Deployment |
-| **Cognito** | Auth for the review dashboard and its API. Pulled forward from the original v1.1 plan (see §8): the API exposes real vulnerability findings and a route that resolves them, and an unauthenticated write endpoint plus a self-asserted audit-trail actor were both live problems the moment the dashboard went internet-facing, not multi-tenant-only ones. | Security |
+| **Cognito** | Auth for the review dashboard and its API. Pulled forward from the original v1.1 plan (see §8): the API exposes real vulnerability findings and a route that resolves them, and an unauthenticated write endpoint plus a self-asserted audit-trail actor were both live problems the moment the dashboard went internet-facing, not multi-tenant-only ones. *v4 adds the group `committers`: approving stays open to every reviewer, committing to a branch does not.* | Security |
 
 ### 4.2 Data store decision
 
@@ -126,12 +127,14 @@ The other functions stay zip-packaged with the shared anthropic layer: they are 
 4. **`mapping-agent` Lambda** — for each raw finding, calls Anthropic API with the finding + relevant control corpus excerpt (pulled from S3), writes back `status: mapped` with control citation. *Built as a Step Functions state (§8.2 item 5) rather than the DynamoDB stream originally sketched here: steps 3–5 are one Standard execution per PR, `terraform/step_functions.tf`.*
 5. **`remediation-agent` Lambda** triggered per **file** with mapped findings — a `Map` state, bounded concurrency — drafts a diff via Anthropic API for each finding in the file in turn, then invokes `iac-scanner` to self-check the fix against the patched file, sets `self_check_passed: true/false`, writes `status: fix-proposed` or `status: needs-human-only` if self-check fails. *Per file, not per finding, because fixes within a file are chained (each drafted on the last verified one); a file too large for one invocation continues across several, the handler returning where it stopped.*
 6. Reviewer opens dashboard (**CloudFront** → React app → **API Gateway** → **`review-api` Lambda** → DynamoDB) — approves/edits/rejects
-7. On approval, `review-api` Lambda calls GitHub API to push the diff as a suggested change / commit on the PR branch
+7. On approval, `review-api` Lambda calls GitHub API to push the diff as a suggested change / commit on the PR branch *(v4: not as written -- see the v4 note below)*
 8. Every step writes a `review_event` / `audit_log` entry — nothing is silently decided
 
 **v2 change** *(rewritten 2026-09-16; the original had `webhook-receiver` fanning out to a second `k8s-scanner`)*: there is no fan-out and no second scanner. One `iac-scanner` image holds every parser, so a new language is an entry in its admission list, and each finding records the `target_type` it came from. `webhook-receiver` uploads a snapshot and does not route. `mapping-agent`, `remediation-agent`, `review-api` and the dashboard are unchanged, which was the point of isolating this to the scan stage — just with one Lambda rather than two. See [`docs/multi-iac-spec.md`](./docs/multi-iac-spec.md) §3.
 
 **v3 change** *(built 2026-09-24–25)*: steps 1–2 above are not how it works. `webhook-receiver` verifies the signature and starts the execution itself; there is no SQS. The execution's first state, `github-gateway`'s `fetch`, snapshots the **whole** repository at the PR head -- not only the changed files, because the scanner resolves modules across files and `context-agent` reads the rest of the repository -- and its last state, `report`, completes a check run annotating the findings on the lines the PR adds. Remediation runs only when a maintainer clicks the check's **Draft fixes**, and verified fixes are posted as suggested changes, which is the "suggested change" half of step 7. Committing an approved fix to the branch is still v4. [`docs/ci-integration-spec.md`](./docs/ci-integration-spec.md) §2.
+
+**v4 change** *(built 2026-09-29, not yet deployed)*: step 7 cannot be built as written, because `review-api` is the dashboard's internet-facing backend and v3 gave `kms:Sign` to one role API Gateway cannot reach. So approval does not commit anything. A member of the Cognito group `committers` reviews the PR's **commit plan** -- per file, the diff from the head to the approved chain's corrected file, held files and why, unverified links -- and asks for it to be committed. `review-api` records the request, with the tips and content hashes the reviewer confirmed, and invokes `github-committer`, which signs as a second App with Contents write. It re-reads each file from GitHub, commits only over the exact version the fixes were drafted on, writes one commit, and updates the ref with `force: false`. The push is scanned by the v3 pipeline like any other, and that scan is the fixes' verification on the real branch. [`docs/write-back-spec.md`](./docs/write-back-spec.md).
 
 ---
 
@@ -151,19 +154,39 @@ FindingRecord (DynamoDB)
 ├── control_mappings: [{ framework: "CIS-AWS" | "CIS-Kubernetes" | "OWASP-CICD" | "OWASP-CloudNative", control_id, control_text_ref (S3 key), citation_span }]
 ├── status: raw | mapped | fix-proposed | needs-human-only | superseded | resolved
 ├── superseded_by: finding_id, only with status superseded
-├── proposed_fix: { diff, rationale, self_check_passed, cleared, self_check_new_findings: [], agent_diff?, applies_after: [], scan_errors: [] }
+├── proposed_fix: { diff, rationale, self_check_passed, cleared, self_check_new_findings: [], agent_diff?, applies_after: [], scan_errors: [],
+│                   base_sha256, committed?: { sha, request_id, at } }   # v4, write-back-spec §5, §7
 └── created_at, updated_at
 
 ReviewEvent (DynamoDB)
 ├── pk: PR#<pr_id>#FINDING#<finding_id>
 ├── sk: EVENT#<timestamp>
 ├── actor: reviewer id (from the verified JWT, never the request body)
-├── action: approved | edited | rejected | reopened
+├── action: approved | edited | rejected | reopened | committed
 │     reopened is written by actor "system", never posted by a reviewer: an edit or
-│     rejection upstream invalidated a fix that had already been decided
+│     rejection upstream invalidated a fix that had already been decided, or (v4) the
+│     PR's head moved under a fix. committed is also "system": github-committer
+│     landed the fix on the branch
 ├── edited_diff: the reviewer's diff, on an "edited" action
 └── notes
+
+CommitRequest (DynamoDB, v4)                    # write-back-spec §10
+├── pk: PR#<pr_id>
+├── sk: COMMIT#<request_id>                     # a ULID, so requests sort by time
+├── requested_by (verified JWT), requested_at, updated_at
+├── status: requested | committing | committed | held | failed
+├── confirmed: [{ file, tip, content_sha256 }]  # what the reviewer was shown
+├── commit_sha, head_sha_before, reason
+└── files: [{ file, outcome: committed | already | held, reason, tip, chain, unverified, left_out }]
+
+PullRequestMeta (DynamoDB, v4; written by the state machine after Fetch)
+├── pk: PR#<pr_id>
+├── sk: GITHUB
+└── repository, repository_id, pr_number, updated_at
 ```
+
+Every finding reader queries `begins_with(sk, "FINDING#")`, so neither v4
+item appears in a finding list.
 
 **Why `ReviewEvent.pk` carries `pr_id`.** An earlier draft keyed it on
 `FINDING#<finding_id>` alone. That is unsound: `finding_id` is a content hash
@@ -291,7 +314,7 @@ and the resolution rate of the assumptions now in the table is its eval.
 | **v1 — Terraform only, read-only scan + suggest** | `terraform-scanner` + Layers 2-3 running on manual trigger (CLI or simple upload), findings + proposed diffs shown in dashboard, no GitHub write-back. Fastest path to a complete, demoable project — proves the whole pipeline (scan → map → remediate → self-check → review) on one IaC type before adding scope. Dashboard and review API ship behind Cognito from the start (see below) rather than as a later add-on. |
 | **v2 — Beyond Terraform** | *Steps 1-2 built 2026-09-16: OpenTofu, the one-scanner refactor, the `iac-scanner` rename and the `target_type`/`finding_class` split. Rescoped 2026-09-16 — [`docs/multi-iac-spec.md`](./docs/multi-iac-spec.md).* No `k8s-scanner` Lambda: §4.3's split existed for the 250MB layer ceiling, which the container image removed, and the one image already parses Kubernetes, Helm, CloudFormation, ARM and Ansible (Trivy) plus Bicep (checkov). So one scanner selects the type per file instead, renamed `iac-scanner` (decided 2026-09-16) -- and `iac_type` splits into `target_type` and `finding_class` in the same deploy, since npm is a `vulnerability` on an `npm` target and neither axis derives from the other (multi-iac-spec §3.1). Order: OpenTofu (free — `.tofu` is HCL and scans identically), then the multi-type refactor, then Kubernetes/Helm, CloudFormation, Bicep/ARM. The cost is not the scanner but the corpus (all 51 mappings are AWS; Kubernetes alone raised 239 unmappable findings on PugetScope) and the eval (45 cases, all AWS Terraform). **No language ships until its suppression markers and structural guard are implemented** — both are HCL-shaped today and would fail open on YAML, which looks like a verified fix. Pulumi and CDK are out: no scanner parses them, and the only route runs the user's program. |
 | **v3 — CI integration** | GitHub App/webhook, PR-triggered scans, diff suggestions posted as PR comments. *Built and deployed 2026-09-24–25 -- [`docs/ci-integration-spec.md`](./docs/ci-integration-spec.md). A PR gets a check run annotating the findings on the lines it adds; **Draft fixes** remediates the changed files and posts the fixes that verify as suggested changes. Demonstrated on [cascadesec-testbed](https://github.com/konradkelly/cascadesec-testbed).* |
-| **v4 — Write-back on approval** | Approved fixes committed to PR branch automatically |
+| **v4 — Write-back on approval** | Approved fixes committed to PR branch automatically. *Built 2026-09-29, not yet deployed -- [`docs/write-back-spec.md`](./docs/write-back-spec.md). Not automatically: a member of the `committers` group reviews the PR's commit plan and asks, and a second App with Contents write commits it as one commit, only over the exact file versions the fixes were drafted on. The first step also fixed v3: a fix the PR had moved the file under is now reopened and redrafted instead of being held for good.* |
 | **v5 — `context-agent`** | A retrieval step that answers what `remediation-agent` currently has to declare it cannot: it reads the rest of the repository and cites `file:line`. Deferred deliberately, not for lack of motivation — the evidence is already in the table (see below). [`docs/context-agent-spec.md`](./docs/context-agent-spec.md) |
 
 **On v5's position.** `assumptions` is, read literally, a list of queries the
