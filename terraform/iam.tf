@@ -11,7 +11,11 @@ locals {
     review_api        = "${var.project}-${var.environment}-review-api"
     webhook_receiver  = "${var.project}-${var.environment}-webhook-receiver"
     github_gateway    = "${var.project}-${var.environment}-github-gateway"
+    github_committer  = "${var.project}-${var.environment}-github-committer"
   }
+
+  # Write-back is deployed once the writer App exists (variables.tf).
+  write_back_enabled = var.github_writer_app_id != null
 }
 
 data "aws_iam_policy_document" "lambda_assume_role" {
@@ -288,6 +292,18 @@ data "aws_iam_policy_document" "review_api" {
     sid       = "WriteEditedFixContent"
     actions   = ["s3:PutObject"]
     resources = ["${aws_s3_bucket.artifacts.arn}/fixes/*"]
+  }
+
+  # Hand a recorded commit request to github-committer, which signs as the
+  # writer App. review-api is internet-facing and never signs itself
+  # (write-back-spec §2, W1): this invoke is the whole of its part.
+  dynamic "statement" {
+    for_each = local.write_back_enabled ? [1] : []
+    content {
+      sid       = "RequestCommit"
+      actions   = ["lambda:InvokeFunction"]
+      resources = ["arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.lambda_function_names.github_committer}"]
+    }
   }
 
   # Active tracing needs the function to be able to ship its segments.

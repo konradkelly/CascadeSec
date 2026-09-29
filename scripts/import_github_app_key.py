@@ -14,6 +14,12 @@ or, if the .pem is gone and only the Secrets Manager copy remains:
 
   python scripts/import_github_app_key.py --from-secret iacposture/dev/github-app-private-key
 
+and for the write-back App, "CascadeSec Fixes" (docs/write-back-spec.md §4):
+
+  python scripts/import_github_app_key.py --pem path/to/cascadesec-fixes.private-key.pem \\
+      --alias alias/iacposture-dev-github-app-writer \\
+      --description "GitHub App private key (CascadeSec Fixes); github-committer signs its JWT with it"
+
 What it does, in order:
   1. creates an RSA SIGN_VERIFY key with Origin=EXTERNAL and the alias
      Terraform looks it up by (or resumes one still waiting for its material);
@@ -58,7 +64,7 @@ def load_key(args, session):
     return key
 
 
-def find_or_create_key(kms, alias, key_spec):
+def find_or_create_key(kms, alias, key_spec, description):
     """The key under `alias`, created if absent. Refuses one already imported."""
     try:
         meta = kms.describe_key(KeyId=alias)["KeyMetadata"]
@@ -80,7 +86,7 @@ def find_or_create_key(kms, alias, key_spec):
         KeySpec=key_spec,
         KeyUsage="SIGN_VERIFY",
         Origin="EXTERNAL",
-        Description="GitHub App private key (CascadeSec); github-gateway signs its JWT with it",
+        Description=description,
     )["KeyMetadata"]
     kms.create_alias(AliasName=alias, TargetKeyId=meta["KeyId"])
     print(f"created    {meta['Arn']}")
@@ -120,8 +126,16 @@ def main():
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--pem", help="path to the .pem GitHub downloaded")
     source.add_argument("--from-secret", help="Secrets Manager id holding the PEM")
+    # The same script for both Apps (write-back-spec §4): the writer App's
+    # key is --alias alias/iacposture-dev-github-app-writer, with a
+    # description naming what signs with it.
     parser.add_argument("--alias", default="alias/iacposture-dev-github-app",
-                        help="must match terraform/lambda_github_gateway.tf (default: %(default)s)")
+                        help="must match var.github_app_key_alias, or "
+                             "var.github_writer_app_key_alias for the writer App "
+                             "(default: %(default)s)")
+    parser.add_argument("--description",
+                        default="GitHub App private key (CascadeSec); github-gateway signs its JWT with it",
+                        help="the KMS key's description, set when the key is created")
     parser.add_argument("--region", default=None)
     args = parser.parse_args()
 
@@ -132,7 +146,7 @@ def main():
     key_spec = KEY_SPECS[key.key_size]
     print(f"local key  RSA {key.key_size}")
 
-    key_arn = find_or_create_key(kms, args.alias, key_spec)
+    key_arn = find_or_create_key(kms, args.alias, key_spec, args.description)
 
     params = kms.get_parameters_for_import(
         KeyId=key_arn,

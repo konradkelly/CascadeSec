@@ -68,3 +68,15 @@ variable "github_app_key_alias" {
   type        = string
   default     = "alias/iacposture-dev-github-app"
 }
+
+variable "github_writer_app_id" {
+  description = "App ID of the write-back App, \"CascadeSec Fixes\" (docs/write-back-spec.md §4): Contents write, no webhooks, installed per repository. Null leaves write-back undeployed -- no github-committer, and review-api answers a commit request with 503 -- so this can be applied before the App is registered and its key imported."
+  type        = string
+  default     = null
+}
+
+variable "github_writer_app_key_alias" {
+  description = "KMS alias of the write-back App's private key, imported with scripts/import_github_app_key.py --alias. Only github-committer can sign with it; github-gateway's key stays read-and-report."
+  type        = string
+  default     = "alias/iacposture-dev-github-app-writer"
+}

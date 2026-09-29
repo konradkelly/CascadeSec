@@ -36,6 +36,11 @@ locals {
     webhook_receiver  = aws_lambda_function.webhook_receiver.function_name
     github_gateway    = aws_lambda_function.github_gateway.function_name
   }
+
+  # github-committer only exists once write-back is deployed.
+  alarmed_functions_all = merge(local.alarmed_functions, {
+    for f in aws_lambda_function.github_committer : "github_committer" => f.function_name
+  })
 }
 
 # Any invocation error. For iac-scanner this only became worth alarming
@@ -43,7 +48,7 @@ locals {
 # swallowed into an empty result and the function returned 200, so this metric
 # would never have moved.
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
-  for_each = local.alarmed_functions
+  for_each = local.alarmed_functions_all
 
   alarm_name          = "${each.value}-errors"
   alarm_description   = "${each.value} raised at least one invocation error in the last 5 minutes"

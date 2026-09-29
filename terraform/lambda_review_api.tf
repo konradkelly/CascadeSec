@@ -1,5 +1,6 @@
 # review-api Lambda (spec §4.1, §4.4 step 6). No layers -- boto3 is already in
-# the Lambda Python runtime and this function calls nothing else.
+# the Lambda Python runtime. It calls nothing else, except to hand a commit
+# request to github-committer (write-back-spec §3).
 
 data "archive_file" "review_api_handler" {
   type        = "zip"
@@ -43,6 +44,9 @@ resource "aws_lambda_function" "review_api" {
       ARTIFACTS_BUCKET = aws_s3_bucket.artifacts.bucket
       # Dimension on the metrics the handler emits (observability.tf).
       ENVIRONMENT = var.environment
+      # Where a commit request goes (write-back-spec §3). Empty while
+      # write-back is not deployed, and a request is then refused with 503.
+      COMMITTER_FUNCTION_NAME = local.write_back_enabled ? local.lambda_function_names.github_committer : ""
     }
   }
 
