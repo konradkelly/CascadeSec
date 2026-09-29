@@ -85,6 +85,7 @@ import uuid
 from datetime import datetime, timezone
 
 import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -1232,7 +1233,7 @@ def _write_findings(pr_id, findings):
     table = dynamodb.Table(DYNAMODB_TABLE)
     now = datetime.now(timezone.utc).isoformat()
 
-    known = _existing_finding_ids(table, pr_id)
+    known, already_marked = _existing_finding_ids(table, pr_id)
     unique = _deduplicate(findings)
     preserved = len(known & set(unique))
     for finding in unique.values():
@@ -1279,15 +1280,25 @@ def _write_findings(pr_id, findings):
         )
 
     stale = known - set(unique)
-    for finding_id in sorted(stale):
-        table.update_item(
-            Key={"pk": f"PR#{pr_id}", "sk": f"FINDING#{finding_id}"},
-            UpdateExpression="SET no_longer_detected = :now",
-            # Only the first scan that stops seeing it records when that
-            # happened; a later scan must not move the date forward.
-            ConditionExpression="attribute_not_exists(no_longer_detected)",
-            ExpressionAttributeValues={":now": now},
-        )
+    # Only the first scan that stops seeing a finding records when; a later
+    # one leaves the date alone. Skipping the marked ones here is what does
+    # that. The condition only settles a race between two scans of one PR,
+    # and losing it means the other scan already wrote the mark. It used to
+    # be the whole mechanism, and its failure was not caught, so every scan
+    # after the one that first marked a finding failed: on
+    # cascadesec-testbed #3 that was the Draft fixes run straight after the
+    # push that moved a KMS key down a line.
+    for finding_id in sorted(stale - already_marked):
+        try:
+            table.update_item(
+                Key={"pk": f"PR#{pr_id}", "sk": f"FINDING#{finding_id}"},
+                UpdateExpression="SET no_longer_detected = :now",
+                ConditionExpression="attribute_not_exists(no_longer_detected)",
+                ExpressionAttributeValues={":now": now},
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
     if stale:
         logger.info("%d finding(s) no longer detected on %s: %s", len(stale), pr_id, sorted(stale))
     return preserved, len(stale)
@@ -1308,22 +1319,28 @@ def _deduplicate(findings):
 
 
 def _existing_finding_ids(table, pr_id):
-    """Every finding id already recorded against this PR.
+    """(every finding id already recorded against this PR, the ones among
+    them already marked no_longer_detected).
 
     Read before the writes, so "already there" means before this scan.
-    Projected to the id alone -- a PR's findings carry whole file diffs, and
-    none of that is needed to answer this question.
+    Projected to the id and the mark -- a PR's findings carry whole file
+    diffs, and none of that is needed to answer this question.
     """
-    ids = set()
+    ids, marked = set(), set()
     kwargs = {
         "KeyConditionExpression": "pk = :pk AND begins_with(sk, :sk_prefix)",
         "ExpressionAttributeValues": {":pk": f"PR#{pr_id}", ":sk_prefix": "FINDING#"},
-        "ProjectionExpression": "finding_id",
+        "ProjectionExpression": "finding_id, no_longer_detected",
     }
     while True:
         response = table.query(**kwargs)
-        ids.update(item["finding_id"] for item in response.get("Items", []) if "finding_id" in item)
+        for item in response.get("Items", []):
+            if "finding_id" not in item:
+                continue
+            ids.add(item["finding_id"])
+            if item.get("no_longer_detected"):
+                marked.add(item["finding_id"])
         last_key = response.get("LastEvaluatedKey")
         if not last_key:
-            return ids
+            return ids, marked
         kwargs["ExclusiveStartKey"] = last_key

@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 import handler
 
@@ -1319,10 +1320,13 @@ def _finding(finding_id="f1", pr_id="pr-1", **over):
     return f
 
 
-def _write(mock_dynamodb, findings, known_ids=()):
-    """Run _write_findings against a table holding known_ids already."""
+def _write(mock_dynamodb, findings, known_ids=(), marked_ids=()):
+    """Run _write_findings against a table holding known_ids already, of
+    which marked_ids were already marked no_longer_detected."""
     mock_table = MagicMock()
-    mock_table.query.return_value = {"Items": [{"finding_id": i} for i in known_ids]}
+    mock_table.query.return_value = {"Items": [
+        {"finding_id": i, **({"no_longer_detected": "2026-09-28T00:00:00+00:00"} if i in marked_ids else {})}
+        for i in known_ids]}
     mock_dynamodb.Table.return_value = mock_table
     preserved, stale = handler._write_findings("pr-1", findings)
     return mock_table, preserved, stale
@@ -1384,6 +1388,44 @@ def test_a_finding_that_stops_firing_is_marked_not_deleted(mock_dynamodb):
 
 
 @patch.object(handler, "dynamodb")
+def test_a_later_scan_leaves_an_existing_mark_alone(mock_dynamodb):
+    """cascadesec-testbed #3: the push to commit C marked the KMS key's old
+    findings, and the Draft fixes run on the same commit -- the next scan --
+    failed on ConditionalCheckFailedException writing the mark again. Every
+    scan of a PR after one of its findings stopped firing failed that way."""
+    mock_table, _, stale = _write(mock_dynamodb, [_finding("f1")],
+                                  known_ids=["f1", "gone"], marked_ids=["gone"])
+
+    assert stale == 1  # still not seen, and still counted as such
+    assert [c.kwargs["Key"]["sk"] for c in mock_table.update_item.call_args_list] == ["FINDING#f1"]
+
+
+@patch.object(handler, "dynamodb")
+def test_losing_the_race_to_mark_a_finding_is_not_a_failure(mock_dynamodb):
+    """Two scans of one PR can both see a finding unmarked. The one that
+    writes second finds the mark there and must not move it -- or fail."""
+    lost = ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+    mock_table = MagicMock()
+    mock_table.query.return_value = {"Items": [{"finding_id": "gone"}]}
+    mock_table.update_item.side_effect = lost
+    mock_dynamodb.Table.return_value = mock_table
+
+    assert handler._write_findings("pr-1", []) == (0, 1)
+
+
+@patch.object(handler, "dynamodb")
+def test_any_other_error_marking_a_finding_still_fails_the_scan(mock_dynamodb):
+    mock_table = MagicMock()
+    mock_table.query.return_value = {"Items": [{"finding_id": "gone"}]}
+    mock_table.update_item.side_effect = ClientError(
+        {"Error": {"Code": "ProvisionedThroughputExceededException"}}, "UpdateItem")
+    mock_dynamodb.Table.return_value = mock_table
+
+    with pytest.raises(ClientError):
+        handler._write_findings("pr-1", [])
+
+
+@patch.object(handler, "dynamodb")
 def test_a_finding_that_comes_back_loses_the_mark(mock_dynamodb):
     mock_table, _, _ = _write(mock_dynamodb, [_finding()], known_ids=["f1"])
 
@@ -1393,11 +1435,11 @@ def test_a_finding_that_comes_back_loses_the_mark(mock_dynamodb):
 @patch.object(handler, "dynamodb")
 def test_existing_ids_are_read_before_the_writes_and_projected(mock_dynamodb):
     """Read first, so "already there" means before this scan -- and only the
-    id is fetched, since a PR's findings carry whole file diffs."""
+    id and the mark are fetched, since a PR's findings carry whole file diffs."""
     mock_table, _, _ = _write(mock_dynamodb, [_finding()], known_ids=["f1"])
 
     query = mock_table.query.call_args.kwargs
-    assert query["ProjectionExpression"] == "finding_id"
+    assert query["ProjectionExpression"] == "finding_id, no_longer_detected"
     assert query["ExpressionAttributeValues"][":pk"] == "PR#pr-1"
 
 
@@ -1408,11 +1450,11 @@ def test_the_known_id_query_pages_to_exhaustion(mock_dynamodb):
     mock_table = MagicMock()
     mock_table.query.side_effect = [
         {"Items": [{"finding_id": "a"}], "LastEvaluatedKey": {"pk": "x", "sk": "y"}},
-        {"Items": [{"finding_id": "b"}]},
+        {"Items": [{"finding_id": "b", "no_longer_detected": "2026-09-28T00:00:00+00:00"}]},
     ]
     mock_dynamodb.Table.return_value = mock_table
 
-    assert handler._existing_finding_ids(mock_table, "pr-1") == {"a", "b"}
+    assert handler._existing_finding_ids(mock_table, "pr-1") == ({"a", "b"}, {"b"})
 
 
 @patch.object(handler, "_write_findings", return_value=(3, 2))
