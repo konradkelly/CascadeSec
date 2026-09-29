@@ -720,9 +720,18 @@ def plan_file(pr_id, path, file_findings, visible_lines):
 
     head = _s3_text(f"scans/{pr_id}/{path}")
     chain = [a["finding_id"] for a in tip["proposed_fix"].get("applies_after") or []] + [tip["finding_id"]]
-    root = fixes[chain[0]]
-    if not diff_applies_to(root["proposed_fix"]["diff"], head):
-        return {"file": path, "reason": "drafted on an earlier commit; run Draft fixes again"}
+    # The suggestion is the tip's whole corrected file diffed against head,
+    # so head must be exactly the file the chain was drafted on. Checking
+    # that the root's diff still applies was not enough: on
+    # cascadesec-testbed #3 it applied to a head with a resource appended
+    # below it, and the suggestion deleted the resource (write-back-spec §8).
+    base = tip["proposed_fix"].get("base_sha256")
+    if not base:
+        return {"file": path, "reason": "drafted before fixes recorded their base; "
+                                        "run Draft fixes again"}
+    if base != _content_sha256(head):
+        return {"file": path, "reason": "the file has changed since this fix was drafted; "
+                                        "run Draft fixes again"}
 
     corrected = _s3_text(f"fixes/{pr_id}/{tip['finding_id']}/{path}")
     hunks = suggestion_hunks(head, corrected)
@@ -783,26 +792,10 @@ def _sha256(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def diff_applies_to(diff, content):
-    """Whether a unified diff's old side matches `content` where it says it
-    does -- i.e. the fix was drafted on this file, not an earlier version."""
-    lines = [line.rstrip("\r") for line in content.split("\n")]
-    old_line = None
-    for text in diff.split("\n"):
-        text = text.rstrip("\r")
-        header = re.match(r"^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@", text)
-        if header:
-            old_line = int(header.group(1))
-            continue
-        # Outside a hunk, an added line, a "\ No newline" marker, or the empty
-        # string a trailing newline leaves: none of them is an old-side line.
-        if old_line is None or not text or text.startswith(("---", "+++", "+", "\\")):
-            continue
-        if text.startswith((" ", "-")):
-            if old_line - 1 >= len(lines) or lines[old_line - 1] != text[1:]:
-                return False
-            old_line += 1
-    return old_line is not None
+def _content_sha256(content):
+    """Must stay identical to remediation-agent's helper of the same name,
+    which records the hash of the file a chain was drafted on."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def suggestion_hunks(head, corrected):

@@ -293,8 +293,14 @@ Reads the PR's findings from DynamoDB and the stored hunks, then:
      chain is named in the summary. *Was: the tip had to cover every verified
      fix on the file, which held back KMS rotation and database encryption on
      cascadesec-testbed #2 because a later fix was built on a held one;*
-  2. the chain's root diff must apply to the current snapshot, or the fix was
-     drafted on an earlier commit and is held ("run Draft fixes again");
+  2. the file at the PR head must hash to the tip's `base_sha256`, the file
+     the chain was drafted on, or the fix is held ("run Draft fixes again").
+     *Was: the chain's root diff had to apply to the snapshot.* That checks
+     only the diff's context lines, and step 3 posts the tip's **whole** file:
+     on cascadesec-testbed #3 a fix drafted before an alias was appended
+     below its resource still applied, and its suggestion deleted the alias
+     (write-back-spec §8). Fixed 2026-09-28; a fix drafted before then has no
+     base and is held;
   3. the tip's corrected file is diffed against the PR head, and each hunk
      becomes one ```` ```suggestion ```` comment on its `start_line`..`line`
      (a pure insertion is anchored to the line before it);

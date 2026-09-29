@@ -2,6 +2,7 @@
 mocked -- no AWS or network calls."""
 
 import base64
+import difflib
 import hashlib
 import io
 import json
@@ -291,16 +292,10 @@ def test_suggestion_block_fence_outgrows_backticks_in_the_fix():
 DIFF = "--- a/f.tf\n+++ b/f.tf\n@@ -2,2 +2,2 @@\n b\n-c\n+C\n"
 
 
-def test_diff_applies_to_the_file_it_was_drafted_on():
-    assert handler.diff_applies_to(DIFF, "a\nb\nc\nd\n")
-
-
-def test_diff_does_not_apply_to_a_changed_file():
-    assert not handler.diff_applies_to(DIFF, "a\nb\nchanged\nd\n")
-
-
-def test_diff_applies_to_crlf_content():
-    assert handler.diff_applies_to(DIFF, "a\r\nb\r\nc\r\nd\r\n")
+def test_content_hash_agrees_with_remediation_agent():
+    # The two helpers compare each other's output, so they must hash alike --
+    # CRLF included, which neither may normalise.
+    assert handler._content_sha256("a\r\nb\n") == hashlib.sha256(b"a\r\nb\n").hexdigest()
 
 
 # ======================================================================
@@ -311,6 +306,8 @@ def _fix(fid, diff, applies_after=()):
     return {"finding_id": fid, "file": "f.tf", "rule_id": f"R-{fid}", "status": "fix-proposed",
             "line_range": ["1", "1"],
             "proposed_fix": {"diff": diff, "self_check_passed": True,
+                             # Drafted on the file the plan tests put at the head.
+                             "base_sha256": _h(HEAD_FILE),
                              "applies_after": [{"finding_id": a, "diff_sha256": h} for a, h in applies_after]}}
 
 
@@ -392,9 +389,47 @@ def test_plan_holds_a_fix_that_reaches_outside_the_diff():
 
 
 def test_plan_holds_a_fix_drafted_on_an_earlier_commit():
-    stale = DIFF.replace(" b\n-c", " b\n-something-else")
-    plan = _plan([_fix("1", stale)], visible={1, 2, 3, 4})
-    assert "earlier commit" in plan["reason"]
+    fix = _fix("1", DIFF)
+    fix["proposed_fix"]["base_sha256"] = _h("a\nb\nsomething-else\nd\n")
+    plan = _plan([fix], visible={1, 2, 3, 4})
+    assert "changed since" in plan["reason"]
+
+
+KEY_AT_A = ('# Encryption key for the reporting service\'s exports.\n'
+            'resource "aws_kms_key" "reports" {\n'
+            '  description             = "Reporting service exports"\n'
+            '  deletion_window_in_days = 30\n'
+            '}\n')
+ALIAS = ('\nresource "aws_kms_alias" "reports" {\n'
+         '  name          = "alias/reports"\n'
+         '  target_key_id = aws_kms_key.reports.key_id\n'
+         '}\n')
+
+
+def test_a_fix_drafted_before_the_file_changed_is_not_posted_over_it():
+    """cascadesec-testbed #3 (docs/write-back-spec.md §8). Rotation was
+    drafted on commit A; commit B appended an alias below the key. The
+    finding kept its id and its fix, the fix's diff still applied to B, and
+    the corrected file -- written before the alias existed -- was posted over
+    B as "part 2 of 2": an empty suggestion deleting the alias."""
+    rotated = KEY_AT_A.replace("= 30\n", "= 30\n  enable_key_rotation     = true\n")
+    diff = "".join(difflib.unified_diff(KEY_AT_A.splitlines(True), rotated.splitlines(True),
+                                        "a/reports.tf", "b/reports.tf"))
+    fix = {**_fix("kms", diff), "file": "reports.tf", "rule_id": "CKV_AWS_7"}
+    fix["proposed_fix"]["base_sha256"] = _h(KEY_AT_A)
+    at_b = KEY_AT_A + ALIAS
+    contents = {"scans/p/reports.tf": at_b, "fixes/p/kms/reports.tf": rotated}
+    with patch.object(handler, "_s3_text", side_effect=lambda k: contents[k]):
+        plan = handler.plan_file("p", "reports.tf", [fix], visible_lines=set(range(1, 11)))
+    assert "hunks" not in plan
+    assert "changed since" in plan["reason"]
+
+
+def test_a_fix_with_no_recorded_base_is_not_posted():
+    fix = _fix("1", DIFF)
+    del fix["proposed_fix"]["base_sha256"]
+    plan = _plan([fix], visible={1, 2, 3, 4})
+    assert "hunks" not in plan and "Draft fixes again" in plan["reason"]
 
 
 def test_plan_ignores_fixes_that_failed_their_self_check():

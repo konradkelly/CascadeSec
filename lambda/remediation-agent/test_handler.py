@@ -1947,6 +1947,8 @@ def test_a_rejected_fix_is_not_a_root(
     assert result["fix_proposed_count"] == 1
     assert mock_s3.get_object.call_args.kwargs["Key"] == "scans/chain-1/main.tf"
     assert _written(mock_table, 0)[":pf"]["applies_after"] == []
+    # Rooted at the snapshot, so the base is the snapshot file's own hash.
+    assert _written(mock_table, 0)[":pf"]["base_sha256"] == handler._content_sha256(original)
     # No root rescan: the snapshot's counts are already in the table.
     assert mock_lambda_client.invoke.call_count == 1
 
@@ -2008,10 +2010,39 @@ def test_the_root_is_the_accepted_fix_with_the_longest_chain():
         mock_dynamodb.Table.return_value = mock_table
         mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: b"x")}
 
-        _, _, _, chain = handler._chain_root("chain-1", "main.tf")
+        _, _, _, chain, _ = handler._chain_root("chain-1", "main.tf")
 
     assert [c["finding_id"] for c in chain] == ["f1", "f2", "f3"]
     assert mock_s3.get_object.call_args.kwargs["Key"] == "fixes/chain-1/f3/main.tf"
+
+
+def test_a_chain_rooted_at_a_fix_inherits_its_base_hash():
+    """The base is the snapshot the whole chain descends from, not the
+    root's corrected file: it is what the PR head must still be for the
+    chain's last file to be posted over it (docs/write-back-spec.md §8)."""
+    root = _accepted("f1")
+    root["proposed_fix"]["base_sha256"] = "snapshot-hash"
+    with patch.object(handler, "dynamodb") as mock_dynamodb, \
+            patch.object(handler, "s3") as mock_s3, \
+            patch.object(handler, "_invoke_self_check", return_value=([], [])):
+        mock_dynamodb.Table.return_value.query.return_value = {"Items": [root]}
+        mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: b"x")}
+
+        *_, base_sha256 = handler._chain_root("chain-1", "main.tf")
+
+    assert base_sha256 == "snapshot-hash"
+
+
+def test_a_chain_rooted_at_a_fix_from_before_base_hashes_has_none():
+    with patch.object(handler, "dynamodb") as mock_dynamodb, \
+            patch.object(handler, "s3") as mock_s3, \
+            patch.object(handler, "_invoke_self_check", return_value=([], [])):
+        mock_dynamodb.Table.return_value.query.return_value = {"Items": [_accepted("f1")]}
+        mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: b"x")}
+
+        *_, base_sha256 = handler._chain_root("chain-1", "main.tf")
+
+    assert base_sha256 is None
 
 
 @patch.object(handler, "_get_anthropic_client")

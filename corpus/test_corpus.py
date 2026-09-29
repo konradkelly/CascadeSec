@@ -320,6 +320,22 @@ def test_both_uploaders_skip_the_same_directories_including_cdk_out():
     assert all("cdk.out" in v for v in copies.values())
 
 
+def test_the_agent_and_the_gateway_hash_a_base_alike():
+    """remediation-agent records the hash of the file a chain was drafted
+    on; github-gateway hashes the PR head and posts only on a match. A drift
+    fails closed -- every fix held as "the file has changed" -- which is
+    safe, and looks exactly like a broken pipeline (write-back-spec §8)."""
+    bodies = {}
+    for rel in ("lambda/remediation-agent/handler.py", "lambda/github-gateway/handler.py"):
+        tree = ast.parse((CORPUS.parent / rel).read_text(encoding="utf-8"))
+        func = next((n for n in tree.body
+                     if isinstance(n, ast.FunctionDef) and n.name == "_content_sha256"), None)
+        assert func, f"{rel}: no _content_sha256"
+        # The body without its docstring, which each copy words for itself.
+        bodies[rel] = ast.dump(ast.Module(body=func.body[1:], type_ignores=[]))
+    assert len(set(bodies.values())) == 1, bodies
+
+
 def test_the_receiver_and_the_gateway_agree_on_the_check_run():
     """github-gateway names the check run and its Draft fixes button;
     webhook-receiver recognises a click by the same two strings. A drift
