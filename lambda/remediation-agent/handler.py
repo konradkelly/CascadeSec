@@ -273,7 +273,7 @@ def handler(event, context):
             remaining += len(findings)
             continue
         try:
-            base_content, baseline_counts, baseline_triples, applies_after = _chain_root(
+            base_content, baseline_counts, baseline_triples, applies_after, base_sha256 = _chain_root(
                 pr_id, file_path, resume_from,
             )
             # The scanner's line numbers refer to this, not to the chain's
@@ -369,7 +369,7 @@ def handler(event, context):
             try:
                 outcome = _remediate_finding(
                     pr_id, finding, base_content, baseline_counts, list(applies_after),
-                    _flagged_lines(original_content, finding),
+                    _flagged_lines(original_content, finding), base_sha256=base_sha256,
                 )
             except Exception:
                 # One finding's failure shouldn't abandon the rest of the file.
@@ -470,7 +470,8 @@ def _remediation_order(finding):
     )
 
 
-def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_after, flagged=""):
+def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_after, flagged="",
+                       base_sha256=None):
     finding_id = finding["finding_id"]
     file_path = finding["file"]
 
@@ -515,7 +516,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
             finding, diff_text, rationale,
             self_check_passed=False, self_check_new_findings=[], cleared=False,
             suppression_attempt=suppressions, applies_after=applies_after,
-            questions=answers,
+            questions=answers, base_sha256=base_sha256,
         )
         return _Outcome(False, False, None, None, None, None)
 
@@ -536,7 +537,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
             finding, diff_text, rationale,
             self_check_passed=False, self_check_new_findings=[], cleared=False,
             assumptions=assumptions, scan_errors=scan_errors,
-            applies_after=applies_after, questions=answers,
+            applies_after=applies_after, questions=answers, base_sha256=base_sha256,
         )
         return _Outcome(False, False, None, None, None, None)
 
@@ -573,7 +574,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
     _write_result(
         finding, diff_text, rationale, self_check_passed, self_check_new_findings, cleared,
         dropped_resources=dropped_resources, assumptions=assumptions,
-        applies_after=applies_after, questions=answers,
+        applies_after=applies_after, questions=answers, base_sha256=base_sha256,
     )
     return _Outcome(
         self_check_passed,
@@ -602,7 +603,15 @@ def _query_all(table, **kwargs):
 
 def _chain_root(pr_id, file_path, resume_from=None):
     """Where this file's chain starts: (content, finding counts, finding
-    triples, applies_after).
+    triples, applies_after, base_sha256).
+
+    base_sha256 is the hash of the snapshot file the whole chain descends
+    from. A chain rooted at a fix inherits the fix's own, so every link
+    records the same one; a fix from before it was recorded has none, and
+    neither does anything drafted on it. github-gateway compares it with the
+    file at the PR head before posting a chain's corrected file, because
+    posting it over any other version reverts what changed in between
+    (docs/write-back-spec.md §8).
 
     The pristine snapshot, unless a fix on this file has already been accepted
     -- then the chain starts from the *last* accepted fix's corrected file, so
@@ -648,7 +657,8 @@ def _chain_root(pr_id, file_path, resume_from=None):
             # the self-check has to distinguish "one of them was fixed" from
             # "none".
             counts = _count_pairs(on_file)
-            return _fetch_original_content(pr_id, file_path), counts, _present_triples(on_file), []
+            content = _fetch_original_content(pr_id, file_path)
+            return content, counts, _present_triples(on_file), [], _content_sha256(content)
         root = max(accepted, key=lambda f: len(f["proposed_fix"].get("applies_after") or []))
 
     root_id = root["finding_id"]
@@ -669,7 +679,8 @@ def _chain_root(pr_id, file_path, resume_from=None):
 
     chain = list(root["proposed_fix"].get("applies_after") or [])
     chain.append({"finding_id": root_id, "diff_sha256": _diff_sha256(root["proposed_fix"]["diff"])})
-    return content, counts, _present_triples(rescan_findings), chain
+    return (content, counts, _present_triples(rescan_findings), chain,
+            root["proposed_fix"].get("base_sha256"))
 
 
 def _query_findings_on_file(pr_id, file_path):
@@ -1623,10 +1634,17 @@ def _diff_sha256(diff_text):
     return hashlib.sha256(diff_text.encode("utf-8")).hexdigest()
 
 
+def _content_sha256(content):
+    """Hash of a snapshot file's text. Must stay identical to
+    github-gateway's helper of the same name, which hashes the file at the
+    PR head to compare with it."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
 def _write_result(
     finding, diff_text, rationale, self_check_passed, self_check_new_findings, cleared,
     suppression_attempt=None, dropped_resources=None, assumptions=None, scan_errors=None,
-    applies_after=None, questions=None,
+    applies_after=None, questions=None, base_sha256=None,
 ):
     table = dynamodb.Table(DYNAMODB_TABLE)
     table.update_item(
@@ -1658,6 +1676,11 @@ def _write_result(
                 # {finding_id, diff_sha256}; the hash is what lets review-api
                 # tell "prerequisite was edited" from "prerequisite is intact".
                 "applies_after": applies_after or [],
+                # The snapshot file this fix's chain descends from, hashed.
+                # The corrected file is a whole file, so it may only replace
+                # that exact version: over any other it reverts whatever
+                # changed in between. None when the chain's root predates it.
+                "base_sha256": base_sha256,
                 # Files the scanner couldn't parse. Non-empty means the fix was
                 # never actually verified -- distinct from a fix that was
                 # verified and failed, which is what a reviewer would otherwise
