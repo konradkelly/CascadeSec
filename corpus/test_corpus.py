@@ -357,6 +357,19 @@ def test_the_agent_and_the_gateway_agree_on_what_is_stale():
     assert len(set(bodies.values())) == 1, bodies
 
 
+@pytest.mark.parametrize("name", ["plan_commit", "approved_tip", "_commit_diff",
+                                  "_content_sha256", "_diff_sha256"])
+def test_the_preview_and_the_committer_plan_alike(name):
+    """review-api previews the commit with its copy of plan_commit;
+    github-committer commits with its own. A drift means the reviewer
+    confirms one change and another is committed -- the unreviewed change
+    write-back-spec §5 closes ("what the reviewer sees is what is
+    committed"). The hash helpers ride along: the plan calls them."""
+    bodies = _function_bodies(name, "lambda/review-api/handler.py",
+                              "lambda/github-committer/handler.py")
+    assert len(set(bodies.values())) == 1, bodies
+
+
 def test_the_receiver_and_the_gateway_agree_on_the_check_run():
     """github-gateway names the check run and its Draft fixes button;
     webhook-receiver recognises a click by the same two strings. A drift
