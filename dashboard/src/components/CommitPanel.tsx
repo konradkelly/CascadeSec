@@ -243,7 +243,10 @@ function RequestStatus({ request, repository }: { request: CommitRequest; reposi
       role="status"
     >
       <p>
-        Commit request by {request.requested_by}: <strong>{request.status}</strong>
+        {request.source === 'github' || request.requested_by.startsWith('github:')
+          ? `Commit fixes clicked on GitHub by ${request.requested_by.replace(/^github:/, '')}`
+          : `Commit request by ${request.requested_by}`}
+        : <strong>{request.status}</strong>
         {running && '…'}
         {request.commit_sha && (
           <>
