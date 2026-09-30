@@ -22,10 +22,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const logout = useCallback(() => {
-    clearToken()
-    setToken(null)
     // Also end the Hosted UI session -- otherwise the next login silently
     // re-authenticates and "sign out" looks like it did nothing.
+    //
+    // The stored token goes, but React state is left alone: the page is
+    // navigating away. Setting it to null re-rendered RequireAuth, which
+    // saw no token and started a login -- a second navigation, to
+    // /oauth2/authorize, that replaced this one. Cognito's session was never
+    // ended, so the login silently signed the same user back in. On the way
+    // back from /logout the page loads fresh with no stored token.
+    clearToken()
     window.location.assign(hostedLogoutUrl())
   }, [])
 
