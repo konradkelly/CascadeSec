@@ -113,6 +113,7 @@ CI runs the Lambda test suites (pytest, 531 tests) and the dashboard lint + type
 - [~] v2 — Azure ARM templates and Bicep (**built 2026-09-22**), with CIS Azure 3.0; KICS scans both since 2026-09-23, after Trivy's ARM adapter was measured unable to satisfy four of its own checks
 - [~] v2 — CloudFormation, both syntaxes (**built 2026-09-23**); all three scanners read it, so it needs no single-source caveat. CDK is deliberately out of scope: its synth output is CloudFormation, but a fix written into a generated template is overwritten by the next synth, so `cdk.out` is skipped — [`docs/multi-iac-spec.md`](docs/multi-iac-spec.md) §7.1
 - [x] v3 — GitHub App / PR-triggered CI integration (**deployed 2026-09-25**): a PR gets a check run with annotations on the lines it adds, and a Draft fixes button that posts self-checked fixes as suggested changes — [`docs/ci-integration-spec.md`](docs/ci-integration-spec.md)
+- [~] v4 — GitHub-first review (**built 2026-09-30, not yet deployed**): after Draft fixes, the check shows every verified fix as a diff and a **Commit fixes** button that anyone with write access can click — [`docs/github-first-review-spec.md`](docs/github-first-review-spec.md)
 - [~] v4 — Approved-fix write-back to PR branch (**built 2026-09-29, not yet deployed**): a commit plan in the dashboard, one commit per request as a second GitHub App with Contents write, gated on a Cognito group — [`docs/write-back-spec.md`](docs/write-back-spec.md)
 
 ## Tech stack
