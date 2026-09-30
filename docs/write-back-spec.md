@@ -350,7 +350,7 @@ never polls forever.
 |---|---|---|
 | W1 | review-api never signs. A separate `github-committer` does, and API Gateway cannot reach it (§2) | Follows from v3 D7; proposed |
 | W2 | Second App for Contents write, rather than widening the existing one (§4) | **Open.** Proposed: second App. Built that way 2026-09-29 |
-| W3 | Trigger: one explicit request per PR, not each approval, not a GitHub button (§3) | Proposed |
+| W3 | Trigger: one explicit request per PR, not each approval, not a GitHub button (§3) | Proposed. A GitHub button for verified fixes is proposed as an amendment: [`github-first-review-spec.md`](./github-first-review-spec.md) |
 | W4 | Approved but unverified fixes (edits, failed checks): commit them labelled, or refuse (§5.5) | **Open.** Proposed: commit, labelled. Built that way 2026-09-29 |
 | W5 | Approver identity kept out of the commit message (§6) | Proposed |
 | W6 | Commit gated on the Cognito group `committers` (§9) | Proposed |
