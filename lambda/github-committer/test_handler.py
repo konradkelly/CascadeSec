@@ -173,6 +173,9 @@ class FakeGitHub:
             "base": {"repo": {"id": 123, "default_branch": "main"}},
         }
         self.before_patch = None
+        # The permission endpoint's answer per login (spec §3.2).
+        self.permissions = {"konradkelly": {"permission": "admin", "role_name": "admin",
+                                            "user": {"login": "konradkelly", "id": 4242}}}
 
     # ---- objects ----
 
@@ -241,6 +244,11 @@ class FakeGitHub:
         if method != "GET":
             self.writes.append((method, path))
         route = (method, path.split("?")[0])
+        if method == "GET" and path.startswith("/repos/o/r/collaborators/"):
+            login = path.split("/")[5]
+            if login not in self.permissions:
+                raise handler.GitHubError(404, "Not Found")
+            return copy.deepcopy(self.permissions[login])
         if route == ("GET", "/repos/o/r/installation"):
             if not self.installed:
                 raise handler.GitHubError(404, "Not Found")
@@ -297,7 +305,9 @@ class FakeTable:
         return {"Items": [copy.deepcopy(v) for (p, s), v in sorted(self.items.items())
                           if p == pk and s.startswith(prefix)]}
 
-    def put_item(self, Item, **_):
+    def put_item(self, Item, ConditionExpression=None, **_):
+        if ConditionExpression == "attribute_not_exists(sk)" and (Item["pk"], Item["sk"]) in self.items:
+            raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem")
         self.items[(Item["pk"], Item["sk"])] = copy.deepcopy(Item)
 
     def update_item(self, Key, UpdateExpression, ExpressionAttributeValues,
@@ -311,9 +321,14 @@ class FakeTable:
             "#status = :committing": status == values.get(":committing"),
             "#status IN (:requested, :committing)": status in ("requested", "committing"),
             "attribute_exists(proposed_fix)": item is not None and "proposed_fix" in item,
+            "#status IN (:proposed, :resolved)": status in ("fix-proposed", "resolved"),
+            "attribute_not_exists(sk) OR #status IN (:requested, :committing)":
+                item is None or status in ("requested", "committing"),
         }[ConditionExpression]
         if not ok:
             raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+        if item is None:
+            item = self.items[(Key["pk"], Key["sk"])] = dict(Key)
         for clause in UpdateExpression.removeprefix("SET ").split(", "):
             lhs, rhs = clause.split(" = ")
             parts = [names.get(p, p) for p in lhs.split(".")]
@@ -615,3 +630,168 @@ def test_a_path_cannot_forge_a_trailer_in_the_message():
     message = handler.commit_message("gh-1-7", REQUEST_ID, [plan])
     assert not handler._has_trailer(message, "someone-else")
     assert handler._has_trailer(message, REQUEST_ID)
+
+
+# ======================================================================
+# a Commit fixes click (github-first-review-spec §3)
+# ======================================================================
+
+CLICKED_AT = "2026-09-30T20:37:13.051Z"
+
+
+def _click_event(sender=None, **over):
+    return {"source": "github", "pr_id": "gh-1-7", "check_run_id": 55,
+            "sender": sender or {"login": "konradkelly", "id": 4242},
+            "github": {"repository": "o/r", "head_sha": "x"}, "clicked_at": CLICKED_AT,
+            "execution_name": "gh-1-7-cr55-commit", **over}
+
+
+def _click_setup(offered_hash=None, offer=True, files=None, extra_findings=()):
+    """A verified fix nobody has approved, and the offer the check run
+    showed for it."""
+    github = FakeGitHub(files or {"main.tf": KEY_V1, "other.tf": "x\n"})
+    fix = {**_fix("kms", base=KEY_V1, file="main.tf"), "pk": "PR#gh-1-7", "sk": "FINDING#kms",
+           "rule_id": "CKV_AWS_7", "status": "fix-proposed"}
+    items = [fix, *extra_findings,
+             {"pk": "PR#gh-1-7", "sk": "GITHUB", "repository": "o/r", "repository_id": 123,
+              "pr_number": 7}]
+    if offer:
+        items.append({"pk": "PR#gh-1-7", "sk": "OFFER#55", "offer_json": json.dumps({
+            "check_run_id": 55, "head_sha": github.branch,
+            "files": [{"file": "main.tf", "tip": "kms", "chain": ["kms"],
+                       "content_sha256": offered_hash or _h(KEY_ROTATED)}]})})
+    return github, FakeTable(items), {"fixes/gh-1-7/kms/main.tf": KEY_ROTATED}
+
+
+def _click(github, table, fixes, event=None):
+    return _run(github, table, fixes, event or _click_event())
+
+
+def _the_request(table):
+    [request] = [v for (p, s), v in table.items.items() if s.startswith("COMMIT#")]
+    return request
+
+
+def test_a_click_approves_and_commits_the_offer_under_the_clickers_identity():
+    github, table, fixes = _click_setup()
+    before = github.branch
+
+    outcome = _click(github, table, fixes)
+
+    assert outcome["status"] == "committed" and outcome["commit_sha"] == github.branch != before
+    assert outcome["requested_by"] == "github:konradkelly"
+    assert github.file_at(github.branch, "main.tf") == (KEY_ROTATED, "100644")
+    request = _the_request(table)
+    assert (request["source"], request["github_user_id"], request["check_run_id"]) == ("github", 4242, 55)
+    approved, committed = table.events("kms")
+    assert (approved["actor"], approved["action"], approved["github_user_id"]) == (
+        "github:konradkelly", "approved", 4242)
+    assert committed["action"] == "committed"
+    fix = table.items[("PR#gh-1-7", "FINDING#kms")]
+    assert fix["status"] == "resolved" and fix["proposed_fix"]["committed"]["sha"] == github.branch
+    # The commit message still leaves the clicker out (W5).
+    assert "konradkelly" not in github.objects[github.branch][1]["message"]
+
+
+@pytest.mark.parametrize("answer, reason", [
+    ({"permission": "read", "role_name": "triage", "user": {"id": 4242}}, "has triage access"),
+    ({"permission": "read", "role_name": "read", "user": {"id": 4242}}, "has read access"),
+    (None, "not a collaborator"),
+    ({"permission": "write", "role_name": "write", "user": {"id": 999}}, "not the one that now has"),
+], ids=["triage", "read", "not-a-collaborator", "login-reused"])
+def test_a_click_without_write_access_is_held_before_anything_is_written(answer, reason):
+    github, table, fixes = _click_setup()
+    before = github.branch
+    if answer is None:
+        github.permissions = {}
+    else:
+        github.permissions = {"konradkelly": answer}
+
+    outcome = _click(github, table, fixes)
+
+    assert outcome["status"] == "held" and reason in outcome["reason"]
+    assert github.branch == before and not [w for w in github.writes if "/git/" in w[1]]
+    # No approval was recorded for a click that was not allowed to make one.
+    assert table.events("kms") == []
+    assert table.items[("PR#gh-1-7", "FINDING#kms")]["status"] == "fix-proposed"
+
+
+def test_a_maintainer_may_click():
+    # GitHub reports maintain as "write" in the coarse field (verify).
+    github, table, fixes = _click_setup()
+    github.permissions = {"konradkelly": {"permission": "write", "role_name": "maintain",
+                                          "user": {"id": 4242}}}
+    assert _click(github, table, fixes)["status"] == "committed"
+
+
+def test_a_click_on_an_older_check_run_is_held():
+    github, table, fixes = _click_setup()
+    github.push({"other.tf": "y\n"})  # the offer's head is no longer the PR's
+
+    outcome = _click(github, table, fixes)
+
+    assert outcome["status"] == "held" and "older commit" in outcome["reason"]
+    assert table.events("kms") == []
+
+
+def test_a_fix_redrafted_since_the_offer_is_not_approved_or_committed():
+    # Same finding id, different content: what the check run showed is gone.
+    github, table, fixes = _click_setup(offered_hash=_h("what the check run showed"))
+    before = github.branch
+
+    outcome = _click(github, table, fixes)
+
+    assert outcome["status"] == "held" and github.branch == before
+    assert "changed after the offer" in outcome["files"][0]["reason"]
+    assert table.events("kms") == []
+
+
+def test_a_click_with_no_recorded_offer_is_held():
+    github, table, fixes = _click_setup(offer=False)
+    outcome = _click(github, table, fixes)
+    assert outcome["status"] == "held" and "no offer" in outcome["reason"]
+    assert github.writes == []
+
+
+def test_a_retried_click_finds_the_same_request_and_commits_once():
+    github, table, fixes = _click_setup()
+    first = _click(github, table, fixes)
+    second = _click(github, table, fixes)
+
+    assert first["request_id"] == second["request_id"]
+    assert second["status"] == "committed" and second["commit_sha"] == first["commit_sha"]
+    assert len([s for (p, s) in table.items if s.startswith("COMMIT#")]) == 1
+    assert len(table.events("kms")) == 2  # one approval, one commit
+
+
+def test_a_click_commits_only_the_offered_files():
+    # Approved in the dashboard on another file: the dashboard's to commit.
+    other = {**_fix("db", base="x\n", file="other.tf"), "pk": "PR#gh-1-7", "sk": "FINDING#db",
+             "rule_id": "CKV_AWS_16"}
+    github, table, fixes = _click_setup(extra_findings=[
+        other, {"pk": "PR#gh-1-7#FINDING#db", "sk": "EVENT#1", "action": "approved"}])
+    fixes["fixes/gh-1-7/db/other.tf"] = "y\n"
+
+    outcome = _click(github, table, fixes)
+
+    assert [f["file"] for f in outcome["files"]] == ["main.tf"]
+    assert github.file_at(github.branch, "other.tf") == ("x\n", "100644")
+
+
+def test_a_failed_click_is_marked_failed_and_reported():
+    github, table, fixes = _click_setup()
+    event = {**_click_event(), "action": "mark_failed", "error": {"Cause": "GitHub 502"}}
+
+    outcome = _run(github, table, fixes, event)
+
+    assert outcome["status"] == "failed" and "GitHub 502" in outcome["reason"]
+    assert _the_request(table)["status"] == "failed"
+
+
+def test_a_click_request_id_is_stable_and_sorts_by_time():
+    first = handler.github_request_id(_click_event())
+    assert handler.github_request_id(_click_event()) == first and len(first) == 26
+    later = handler.github_request_id(_click_event(clicked_at="2026-09-30T20:38:00Z"))
+    assert later > first
+    other = handler.github_request_id(_click_event(check_run_id=56))
+    assert other != first

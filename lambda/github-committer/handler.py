@@ -39,6 +39,13 @@ EventBridge with Lambda's failure record once the retries are spent, to
 mark the request failed. A retry finds the request "committing" and looks
 for its own trailer on the branch before doing anything.
 
+Invoked a third way by the commit state machine, for a Commit fixes click on
+the CascadeSec check run (docs/github-first-review-spec.md): it records the
+request itself, checks the clicker has write access, approves the offer the
+check run showed under their GitHub identity, and commits it by the same
+path. Its answer goes back to the state machine, and github-gateway reports
+it, since this App cannot post a check run.
+
 plan_commit, below, is pure, and review-api carries an identical copy for
 the dashboard's preview; corpus/test_corpus.py keeps the two the same.
 """
@@ -98,6 +105,10 @@ class Refused(Exception):
 def handler(event, context):
     if event.get("detail-type") == FAILURE_DETAIL_TYPE:
         return on_failure(event)
+    if event.get("action") == "mark_failed":
+        return mark_github_failed(event)
+    if event.get("source") == "github":
+        return commit_from_github(event)
     return commit(event["pr_id"], event["request_id"])
 
 
@@ -234,7 +245,10 @@ def write(pr_id, request, meta, retry):
     sha before), or None if a twin of this invocation committed first.
     Raises Refused for every refusal, before anything is written."""
     repo = meta["repository"]
+    from_github = request.get("source") == "github"
     token = installation_token(repo, meta["repository_id"])
+    if from_github:
+        _check_permission(repo, token, request)
     pr = _request("GET", f"/repos/{repo}/pulls/{int(meta['pr_number'])}", token)
     _check_pull_request(pr)
     head_sha, ref = pr["head"]["sha"], pr["head"]["ref"]
@@ -242,13 +256,30 @@ def write(pr_id, request, meta, retry):
     # A retry whose first attempt landed: the head is this request's commit,
     # every file in it plans as "already", and it is recorded, not redone.
     landed = retry and _has_trailer(head_commit.get("message") or "", request["request_id"])
+    # An offer describes the head it was drafted on. The base check would
+    # hold every changed file anyway; this says why in one line, and
+    # refuses a click on an old check run's button, which GitHub may leave
+    # clickable (github-first-review-spec §3.5).
+    if from_github and not landed and head_sha != request.get("offer_head_sha"):
+        raise Refused(f"this offer is for an older commit, {str(request.get('offer_head_sha'))[:7]}; "
+                      "use the Commit fixes button on the latest CascadeSec check")
 
     tree = _Tree(repo, token, head_commit["tree"]["sha"])
     findings = _query_findings(pr_id)
+    # A click is the approval: the offered fixes are approved under the
+    # clicker's GitHub identity before planning, so plan_commit -- which
+    # reads the event log -- plans them like any approved fix.
+    changed_since = accept_offer(pr_id, request, findings) if from_github else []
     plans = plan_commit(pr_id, findings, _latest_actions(pr_id, findings),
                         _read_fix, lambda path: _read_head(repo, token, tree, path))
 
     confirmed = {(c["file"], c["tip"], c["content_sha256"]) for c in request.get("confirmed") or []}
+    if from_github:
+        # The click accepted these files and no others. A fix approved in
+        # the dashboard on another file is the dashboard's to commit.
+        offered = {c["file"] for c in request.get("confirmed") or []}
+        plans = [p for p in plans if p["file"] in offered and p["file"] not in
+                 {c["file"] for c in changed_since}] + changed_since
     for plan in plans:
         if plan["outcome"] == "commit" and (
                 landed or (plan["file"], plan["tip"], plan["content_sha256"]) not in confirmed):
@@ -304,6 +335,213 @@ def write(pr_id, request, meta, retry):
     for plan in to_write:
         plan["outcome"] = "committed"
     return plans, new_commit["sha"], head_sha
+
+
+# ---------- a Commit fixes click (github-first-review-spec §3) ----------
+
+# The coarse permission GitHub reports for a collaborator. Maintain is
+# reported as write, triage as read (verify on the testbed); role_name
+# carries the fine role and is logged, not decided on (spec §3.2, G2).
+COMMIT_PERMISSIONS = {"admin", "write"}
+
+
+def commit_from_github(event):
+    """Record the request a click makes, commit it, and return the outcome
+    for the commit state machine to report on the PR.
+
+    The request id is derived from the click -- its time and a hash of the
+    PR, check run and clicker -- so a retry of this invocation, or the
+    state machine's MarkFailed after one, finds the same request instead of
+    making a second. It is still a ULID, so it sorts by time among the
+    dashboard's requests.
+    """
+    pr_id, check_run_id = event["pr_id"], int(event["check_run_id"])
+    sender = event["sender"]
+    request_id = github_request_id(event)
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    key = {"pk": f"PR#{pr_id}", "sk": f"COMMIT#{request_id}"}
+
+    offer_item = table.get_item(Key={"pk": f"PR#{pr_id}", "sk": f"OFFER#{check_run_id}"}).get("Item")
+    offer = json.loads(offer_item["offer_json"]) if offer_item else None
+    item = {
+        **key,
+        "request_id": request_id,
+        "pr_id": pr_id,
+        "source": "github",
+        # Who clicked, as GitHub signed it. The id cannot be renamed or
+        # reused; the login is what a reader recognises (spec §3.3).
+        "requested_by": f"github:{sender['login']}",
+        "github_user_id": int(sender["id"]),
+        "check_run_id": check_run_id,
+        "requested_at": event["clicked_at"],
+        "updated_at": _now(),
+        "status": "requested",
+    }
+    if offer is None:
+        item.update(status="held", reason="no offer is recorded for this check run; "
+                                          "run Draft fixes again")
+    else:
+        item["offer_head_sha"] = offer["head_sha"]
+        # What the check run showed is what is confirmed: the click commits
+        # this and nothing planned later (spec §3.1).
+        item["confirmed"] = [{"file": f["file"], "tip": f["tip"], "chain": f["chain"],
+                              "content_sha256": f["content_sha256"]} for f in offer["files"]]
+    try:
+        table.put_item(Item=item, ConditionExpression="attribute_not_exists(sk)")
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        logger.info("request %s already recorded; a retry", request_id)
+
+    commit(pr_id, request_id)
+    _emit_metrics({"CommitsFromGitHub": 1}, pr_id=pr_id, request_id=request_id)
+    return _outcome(table.get_item(Key=key).get("Item") or item)
+
+
+def mark_github_failed(event):
+    """The commit state machine's Catch: the committer raised past its
+    retries. The request -- found by the same derivation -- is marked
+    failed, or recorded failed if the failure came before it existed."""
+    pr_id = event["pr_id"]
+    request_id = github_request_id(event)
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    key = {"pk": f"PR#{pr_id}", "sk": f"COMMIT#{request_id}"}
+    cause = str((event.get("error") or {}).get("Cause") or "unknown")[:200]
+    reason = (f"the committer failed ({cause}); check the branch before clicking "
+              "Commit fixes on a new check")
+    try:
+        table.update_item(
+            Key=key,
+            UpdateExpression="SET #status = :failed, reason = :reason, updated_at = :now",
+            ConditionExpression="attribute_not_exists(sk) OR #status IN (:requested, :committing)",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":failed": "failed", ":requested": "requested",
+                                       ":committing": "committing", ":reason": reason,
+                                       ":now": _now()},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+    item = table.get_item(Key=key).get("Item") or {}
+    return _outcome({"request_id": request_id, "status": "failed", "reason": reason,
+                     "requested_by": f"github:{event['sender']['login']}", **item})
+
+
+def github_request_id(event):
+    """The click's request id: a ULID whose time is the click's and whose
+    randomness is a hash of what the click was, so it is the same on every
+    retry."""
+    clicked = datetime.fromisoformat(str(event["clicked_at"]).replace("Z", "+00:00"))
+    entropy = hashlib.sha256(
+        f"{event['pr_id']}:{event['check_run_id']}:{event['sender']['id']}".encode()).digest()[:10]
+    return _ulid(int(clicked.timestamp() * 1000), entropy)
+
+
+_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def _ulid(now_ms, entropy):
+    """review-api's _ulid, with the 80 random bits given rather than drawn."""
+    value = (now_ms << 80) | int.from_bytes(entropy, "big")
+    return "".join(_CROCKFORD[(value >> (5 * i)) & 31] for i in reversed(range(26)))
+
+
+def _check_permission(repo, token, request):
+    """Refuse unless the clicker has write access or above (spec §3.2, G2).
+
+    Asked of GitHub at the time of the click, not taken from GitHub's UI
+    showing the button. The account id is compared as well as the login: a
+    login can be renamed and then taken by someone else between the click
+    and this check.
+    """
+    login = request["requested_by"].removeprefix("github:")
+    try:
+        answer = _request("GET", f"/repos/{repo}/collaborators/{urllib.parse.quote(login)}/permission",
+                          token)
+    except GitHubError as e:
+        if e.status == 404:
+            raise Refused(f"{login} is not a collaborator on this repository; committing needs "
+                          "write access or above") from None
+        raise
+    user_id = (answer.get("user") or {}).get("id")
+    if user_id is not None and int(user_id) != int(request.get("github_user_id") or -1):
+        raise Refused("the GitHub account that clicked is not the one that now has that login")
+    permission = answer.get("permission")
+    logger.info("%s has permission %s (role %s)", login, permission, answer.get("role_name"))
+    if permission not in COMMIT_PERMISSIONS:
+        role = answer.get("role_name") or permission or "no"
+        raise Refused(f"{login} has {role} access; committing needs write access or above")
+
+
+def accept_offer(pr_id, request, findings):
+    """Approve the offered fixes under the clicker's identity. Returns a
+    held plan entry for each offered file that changed since the offer.
+
+    A file is accepted only if every fix in its chain is still what the
+    check run showed: verified, not committed, still reported, and the
+    tip's corrected file still has the offered hash -- a redraft keeps the
+    finding id and changes the content. Then each link gets an "approved"
+    ReviewEvent and status resolved, as a dashboard approval does. The
+    event's sort key is the click's time, so a retry writes the same event
+    again rather than a second one.
+    """
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    by_id = {f["finding_id"]: f for f in findings}
+    login = request["requested_by"]
+    changed = []
+    for offered in request.get("confirmed") or []:
+        chain = [by_id.get(i) for i in offered.get("chain") or [offered["tip"]]]
+        content = _read_fix(f"fixes/{pr_id}/{offered['tip']}/{offered['file']}")
+        current = all(
+            f is not None and f.get("status") in ("fix-proposed", "resolved")
+            and (f.get("proposed_fix") or {}).get("self_check_passed")
+            and not (f.get("proposed_fix") or {}).get("committed")
+            and not f.get("no_longer_detected")
+            for f in chain) and content is not None \
+            and _content_sha256(content) == offered["content_sha256"]
+        if not current:
+            changed.append({"file": offered["file"], "outcome": "held", "tip": offered["tip"],
+                            "reason": "the fixes changed after the offer was shown; run Draft "
+                                      "fixes again for a new one",
+                            "chain": [], "left_out": []})
+            continue
+        for f in chain:
+            table.put_item(Item={
+                "pk": f"PR#{pr_id}#FINDING#{f['finding_id']}",
+                "sk": f"EVENT#{request['requested_at']}#github",
+                "finding_id": f["finding_id"],
+                "pr_id": pr_id,
+                "actor": login,
+                "github_user_id": request.get("github_user_id"),
+                "action": "approved",
+                "notes": (f"Approved by clicking Commit fixes on the CascadeSec check run "
+                          f"{request.get('check_run_id')}."),
+                "edited_diff": None,
+                "created_at": request["requested_at"],
+            })
+            try:
+                table.update_item(
+                    Key={"pk": f"PR#{pr_id}", "sk": f"FINDING#{f['finding_id']}"},
+                    UpdateExpression="SET #status = :resolved, updated_at = :now",
+                    ConditionExpression="#status IN (:proposed, :resolved)",
+                    ExpressionAttributeNames={"#status": "status"},
+                    ExpressionAttributeValues={":resolved": "resolved", ":proposed": "fix-proposed",
+                                               ":now": _now()},
+                )
+            except ClientError as e:
+                if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                    raise
+    return changed
+
+
+def _outcome(request):
+    """The request as the commit state machine passes it to report_commit:
+    plain JSON, since DynamoDB's numbers are Decimals a Lambda response
+    cannot serialise."""
+    return json.loads(json.dumps({
+        k: request.get(k) for k in ("request_id", "status", "reason", "commit_sha",
+                                    "head_sha_before", "requested_by", "files")
+    }, default=lambda o: int(o) if o == int(o) else float(o)))
 
 
 def _check_pull_request(pr):

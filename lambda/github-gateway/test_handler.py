@@ -739,3 +739,51 @@ def test_a_push_run_makes_no_offer():
         result, _, _ = _report([_finding("1", 2)])
     plan.assert_not_called()
     assert "offer" not in result
+
+
+# ======================================================================
+# report_commit (github-first-review-spec §3.6)
+# ======================================================================
+
+def _report_commit(outcome):
+    event = {"action": "report_commit", "pr_id": "p", "check_run_id": 55,
+             "sender": {"login": "konradkelly", "id": 4242}, "github": GITHUB, "commit": outcome}
+    with patch.object(handler, "installation_token", return_value="tok") as token, \
+            patch.object(handler, "_request", return_value={}) as request:
+        result = handler.handler(event, None)
+    method, path, _, body = request.call_args.args
+    assert (method, path) == ("POST", "/repos/o/r/check-runs")
+    # Checks write only: reporting needs nothing else.
+    assert token.call_args.args[1] == {"checks": "write", "metadata": "read"}
+    return result, body
+
+
+def test_a_committed_click_is_reported_on_the_new_commit():
+    result, body = _report_commit({
+        "status": "committed", "commit_sha": "c" * 40, "requested_by": "github:konradkelly",
+        "files": [{"file": "main.tf", "outcome": "committed", "reason": None}]})
+    assert result == {"reported": "committed"}
+    assert body["name"] == "CascadeSec fixes" and body["name"] != handler.CHECK_NAME
+    assert body["head_sha"] == "c" * 40 and body["conclusion"] == "success"
+    summary = body["output"]["summary"]
+    assert "Committed in `ccccccc`" in summary and "after konradkelly clicked" in summary
+    assert "@konradkelly" not in summary
+    assert "| `main.tf` | committed |" in summary
+
+
+def test_a_held_click_is_reported_on_the_offers_commit_with_the_reason():
+    _, body = _report_commit({"status": "held", "requested_by": "github:someone",
+                              "reason": "someone has read access; committing needs write access or above"})
+    assert body["head_sha"] == HEAD and body["conclusion"] == "neutral"
+    assert "needs write access or above" in body["output"]["summary"]
+
+
+def test_a_failed_click_is_reported_as_not_finished():
+    _, body = _report_commit({"status": "failed", "reason": "the committer failed (GitHub 502)"})
+    assert body["output"]["title"] == "Commit fixes did not finish"
+
+
+def test_a_path_or_reason_cannot_break_the_outcome_table():
+    _, body = _report_commit({"status": "held", "files": [
+        {"file": "a|b.tf", "outcome": "held", "reason": "line one\nline two"}]})
+    assert "| `a\\|b.tf` | held: line one line two |" in body["output"]["summary"]
