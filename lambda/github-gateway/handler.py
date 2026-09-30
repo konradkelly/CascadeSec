@@ -117,6 +117,8 @@ def handler(event, context):
         return select_files(event)
     if action == "report":
         return report(event)
+    if action == "report_commit":
+        return report_commit(event)
     raise ValueError(f"unknown action {action!r}")
 
 
@@ -996,6 +998,79 @@ def _suggestion_block(text):
 
 def _s3_text(key):
     return s3.get_object(Bucket=ARTIFACTS_BUCKET, Key=key)["Body"].read().decode("utf-8")
+
+
+# ======================================================================
+# report_commit (github-first-review-spec §3.6)
+# ======================================================================
+
+# Not CHECK_NAME: webhook-receiver takes a check run named that as ours,
+# with buttons, and this one has none.
+COMMIT_CHECK_NAME = "CascadeSec fixes"
+
+
+def report_commit(event):
+    """Say on the PR what a Commit fixes click did: a check run of its own,
+    on the new commit if there is one, otherwise on the commit the offer
+    was for. The writer App cannot post a check run -- it holds Contents
+    write and nothing else -- so the commit state machine brings the
+    committer's answer here.
+
+    Code-produced only: the outcome per file, the commit, and the login
+    that clicked (not an @-mention, which would notify them).
+    """
+    github, outcome = event["github"], event.get("commit") or {}
+    repo = github["repository"]
+    login = (str(outcome.get("requested_by") or "").removeprefix("github:")
+             or (event.get("sender") or {}).get("login", "someone"))
+    status = outcome.get("status") or "failed"
+    commit_sha = outcome.get("commit_sha")
+    files = outcome.get("files") or []
+    committed = [f for f in files if f.get("outcome") == "committed"]
+
+    if status == "committed" and commit_sha:
+        title = f"Committed {len(committed)} file(s) of verified fixes"
+        lines = [f"Committed in `{commit_sha[:7]}` by the CascadeSec Fixes app, after {login} "
+                 "clicked **Commit fixes**. The scan of that commit is the fixes' check on the "
+                 "branch."]
+    elif status == "committed":
+        title = "The offered fixes are already on the branch"
+        lines = ["Nothing new was committed: the branch already has the offered fixes."]
+    elif status == "failed":
+        title = "Commit fixes did not finish"
+        lines = [f"The commit did not finish: {outcome.get('reason') or 'unknown error'}."]
+    else:
+        title = "Commit fixes committed nothing"
+        lines = [f"Nothing was committed: {outcome.get('reason') or 'see each file'}."]
+    if files:
+        lines += ["", "| File | Outcome |", "|---|---|"]
+        for f in files:
+            said = f.get("outcome") if not f.get("reason") else f"{f.get('outcome')}: {f['reason']}"
+            lines.append(f"| `{_cell(f.get('file'))}` | {_cell(said)} |")
+    if DASHBOARD_URL:
+        lines += ["", f"The request and each fix's audit trail are in the "
+                      f"[dashboard]({DASHBOARD_URL}/prs/{event['pr_id']})."]
+
+    token = installation_token(github, {"checks": "write", "metadata": "read"})
+    _request("POST", f"/repos/{repo}/check-runs", token, {
+        "name": COMMIT_CHECK_NAME,
+        "head_sha": commit_sha or github["head_sha"],
+        "status": "completed",
+        # Success means the commit landed; anything else is information,
+        # not a failure of the PR, as the scan's own check is neutral (D1).
+        "conclusion": "success" if status == "committed" else "neutral",
+        **({"details_url": f"{DASHBOARD_URL}/prs/{event['pr_id']}"} if DASHBOARD_URL else {}),
+        "output": {"title": title[:255], "summary": "\n".join(lines)[:65000]},
+    })
+    _emit_metrics({"CommitOutcomesReported": 1}, {"Environment": ENVIRONMENT},
+                  pr_id=event["pr_id"], status=status)
+    return {"reported": status}
+
+
+def _cell(text):
+    """Text for one markdown table cell: a path or a reason may hold a pipe
+    or a line break, and either would break the table."""
+    return str(text).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
 
 
 # ======================================================================
