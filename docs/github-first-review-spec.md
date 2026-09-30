@@ -348,10 +348,27 @@ marked the two rotation findings no longer detected and moved nothing
 else. That settles four **(verify)**s: the button is shown to an owner,
 its label and description are accepted, a check-run click's `sender` is
 the clicker, and the permission endpoint answers under the writer App's
-token. Still unverified: the triage/read and maintain answers, and
-whether an older check run's button stays clickable.
+token. Still unverified: the triage/read and maintain answers.
+
+**Two more scenarios, the same day.** Commit `8580d3d` added a second
+key and Draft fixes offered its rotation fix; commit `8a339a6` then
+inserted a line above the key. A click on `8580d3d`'s check was held --
+"this offer is for an older commit" -- with nothing written and no
+approval recorded, and a neutral check run saying so. GitHub had kept
+that old check run's button clickable, which settles §3.5's **(verify)**:
+the head rule is needed, not belt and braces. On a GitHub click, a push
+between the offer and the click always moves the head, so this rule,
+not the base check, is what holds it.
+
+Draft fixes on `8a339a6` then reopened the fix as stale and redrafted it
+on the new version of the file, and a double click on that check's
+Commit fixes made one request, one execution and one commit, `05af2b3`,
+which kept the inserted line and added only the rotation. Both clicks
+reached webhook-receiver 0.6s apart and both were answered "started":
+Step Functions treats a start with the name and identical input of a
+running execution as a success, not a duplicate. The outcome is the
+same; the receiver's log counts the second click as a start.
 
 Still to do, from §9 step 6: a click by a collaborator without write
-access (held), and by one with maintain (commits); a click on an older
-check run (held); a double click (one commit); a push between the offer
-and the click.
+access (held), and by one with maintain (commits). Both need a second
+GitHub account.
