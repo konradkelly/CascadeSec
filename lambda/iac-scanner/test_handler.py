@@ -1434,12 +1434,15 @@ def test_a_finding_that_comes_back_loses_the_mark(mock_dynamodb):
 
 @patch.object(handler, "dynamodb")
 def test_existing_ids_are_read_before_the_writes_and_projected(mock_dynamodb):
-    """Read first, so "already there" means before this scan -- and only the
-    id and the mark are fetched, since a PR's findings carry whole file diffs."""
+    """Read first, so "already there" means before this scan -- and only what
+    identifies a finding and the mark are fetched, since a PR's findings
+    carry whole file diffs."""
     mock_table, _, _ = _write(mock_dynamodb, [_finding()], known_ids=["f1"])
 
     query = mock_table.query.call_args.kwargs
-    assert query["ProjectionExpression"] == "finding_id, no_longer_detected"
+    assert query["ProjectionExpression"] == ("finding_id, no_longer_detected, #source, rule_id, "
+                                             "#file, #resource, line_range")
+    assert "proposed_fix" not in query["ProjectionExpression"]
     assert query["ExpressionAttributeValues"][":pk"] == "PR#pr-1"
 
 
@@ -1454,7 +1457,7 @@ def test_the_known_id_query_pages_to_exhaustion(mock_dynamodb):
     ]
     mock_dynamodb.Table.return_value = mock_table
 
-    assert handler._existing_finding_ids(mock_table, "pr-1") == ({"a", "b"}, {"b"})
+    assert set(handler._existing_findings(mock_table, "pr-1")) == {"a", "b"}
 
 
 @patch.object(handler, "_write_findings", return_value=(3, 2))
@@ -1555,3 +1558,133 @@ def test_findings_are_returned_by_default(mock_download, mock_trivy, mock_checko
     mock_checkov.return_value = _checkov_report()
 
     assert "findings" in handler.handler({"pr_id": "pr-1", "s3_prefix": "scans/pr-1/"}, None)
+
+
+# ---------- a finding that only moved lines keeps its id ----------
+#
+# The id hashes the line range. On cascadesec-testbed #2, write-back's first
+# commit added one line to ledger.tf, and the scan of its push stranded 16
+# findings below it: each came back under a new id at "raw", and the old
+# record -- held fixes, audit trails -- was marked no_longer_detected.
+
+def _known(finding_id, rule_id="CKV_AWS_24", resource="aws_security_group.bastion",
+           lines=(30, 40), source="checkov", file="ledger.tf", marked=False):
+    item = {"finding_id": finding_id, "source": source, "rule_id": rule_id, "file": file,
+            "resource": resource, "line_range": list(lines)}
+    if marked:
+        item["no_longer_detected"] = "2026-09-28T00:00:00+00:00"
+    return item
+
+
+def _seen(finding_id, rule_id="CKV_AWS_24", resource="aws_security_group.bastion",
+          lines=(31, 41), source="checkov", file="ledger.tf"):
+    return _finding(finding_id, source=source, rule_id=rule_id, file=file,
+                    resource=resource, line_range=list(lines))
+
+
+def _write_known(mock_dynamodb, findings, known):
+    mock_table = MagicMock()
+    mock_table.query.return_value = {"Items": known}
+    mock_dynamodb.Table.return_value = mock_table
+    preserved, stale = handler._write_findings("pr-1", findings)
+    return mock_table, preserved, stale
+
+
+def _written_sks(mock_table):
+    return [c.kwargs["Key"]["sk"] for c in mock_table.update_item.call_args_list]
+
+
+@patch.object(handler, "dynamodb")
+def test_a_finding_that_moved_lines_keeps_its_id_and_record(mock_dynamodb):
+    mock_table, preserved, stale = _write_known(
+        mock_dynamodb, [_seen("new-ssh")], [_known("old-ssh")])
+
+    # Written under the old id, with the new lines, and nothing marked gone.
+    assert _written_sks(mock_table) == ["FINDING#old-ssh"]
+    values = _update_for(mock_table, "old-ssh")["ExpressionAttributeValues"]
+    assert values[":line_range"] == [31, 41] and values[":finding_id"] == "old-ssh"
+    # The update never overwrites what was decided (status, fix, mappings).
+    assert "#status = if_not_exists(#status, :raw)" in _update_for(mock_table, "old-ssh")["UpdateExpression"]
+    assert (preserved, stale) == (1, 0)
+
+
+@patch.object(handler, "dynamodb")
+def test_the_testbed_commit_clears_the_fix_and_moves_the_rest(mock_dynamodb):
+    """The rotation fix added a line in the KMS key. CKV_AWS_7 really stopped
+    firing and has no counterpart, so it is marked; the bastion's SSH finding
+    below it only moved, and keeps its record."""
+    known = [_known("kms", rule_id="CKV_AWS_7", resource="aws_kms_key.ledger", lines=(3, 17)),
+             _known("ssh")]
+    mock_table, preserved, stale = _write_known(mock_dynamodb, [_seen("ssh-moved")], known)
+
+    assert (preserved, stale) == (1, 1)
+    assert _update_for(mock_table, "kms")["UpdateExpression"] == "SET no_longer_detected = :now"
+    assert _update_for(mock_table, "ssh")["ExpressionAttributeValues"][":line_range"] == [31, 41]
+    assert "FINDING#ssh-moved" not in _written_sks(mock_table)
+
+
+@pytest.mark.parametrize("seen", [
+    _seen("new", resource="aws_security_group.other"),
+    _seen("new", rule_id="CKV_AWS_25"),
+    _seen("new", source="trivy"),
+    _seen("new", file="other.tf"),
+], ids=["other-resource", "other-rule", "other-source", "other-file"])
+@patch.object(handler, "dynamodb")
+def test_only_the_same_rule_on_the_same_resource_is_paired(mock_dynamodb, seen):
+    mock_table, preserved, stale = _write_known(mock_dynamodb, [seen], [_known("old")])
+
+    assert (preserved, stale) == (0, 1)
+    assert "FINDING#new" in _written_sks(mock_table)
+    assert _update_for(mock_table, "old")["UpdateExpression"] == "SET no_longer_detected = :now"
+
+
+@patch.object(handler, "dynamodb")
+def test_a_finding_with_no_resource_is_never_paired(mock_dynamodb):
+    # Nothing tells two of them apart, so they keep today's behaviour.
+    mock_table, preserved, stale = _write_known(
+        mock_dynamodb, [_seen("new", resource="")], [_known("old", resource="")])
+
+    assert (preserved, stale) == (0, 1)
+    assert "FINDING#new" in _written_sks(mock_table)
+
+
+@patch.object(handler, "dynamodb")
+def test_a_finding_already_marked_gone_is_not_revived_by_a_lookalike(mock_dynamodb):
+    # It stopped firing in an earlier scan; this one appearing now is new.
+    mock_table, _, _ = _write_known(mock_dynamodb, [_seen("new")], [_known("old", marked=True)])
+
+    assert "FINDING#new" in _written_sks(mock_table)
+    assert "FINDING#old" not in _written_sks(mock_table)
+
+
+@patch.object(handler, "dynamodb")
+def test_several_instances_on_one_resource_pair_in_line_order(mock_dynamodb):
+    # Three open ingress rules in one security group, all pushed down a line.
+    known = [_known("a", lines=(10, 12)), _known("b", lines=(20, 22)), _known("c", lines=(30, 32))]
+    seen = [_seen("z", lines=(31, 33)), _seen("x", lines=(11, 13)), _seen("y", lines=(21, 23))]
+    mock_table, preserved, stale = _write_known(mock_dynamodb, seen, known)
+
+    assert (preserved, stale) == (3, 0)
+    assert [_update_for(mock_table, i)["ExpressionAttributeValues"][":line_range"]
+            for i in ("a", "b", "c")] == [[11, 13], [21, 23], [31, 33]]
+
+
+@patch.object(handler, "dynamodb")
+def test_when_one_instance_really_went_the_leftover_is_marked(mock_dynamodb):
+    known = [_known("a", lines=(10, 12)), _known("b", lines=(20, 22))]
+    mock_table, preserved, stale = _write_known(mock_dynamodb, [_seen("x", lines=(11, 13))], known)
+
+    assert (preserved, stale) == (1, 1)
+    assert _update_for(mock_table, "a")["ExpressionAttributeValues"][":line_range"] == [11, 13]
+    assert _update_for(mock_table, "b")["UpdateExpression"] == "SET no_longer_detected = :now"
+
+
+@patch.object(handler, "dynamodb")
+def test_findings_that_did_not_move_are_left_alone(mock_dynamodb):
+    # Same id both times: neither leftover set holds it, so no pairing.
+    mock_table, preserved, stale = _write_known(
+        mock_dynamodb, [_seen("same"), _seen("new", lines=(50, 51))],
+        [_known("same", lines=(31, 41))])
+
+    assert (preserved, stale) == (1, 0)
+    assert set(_written_sks(mock_table)) == {"FINDING#same", "FINDING#new"}
