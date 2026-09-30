@@ -181,7 +181,12 @@ export interface ReviewEvent {
   sk: string
   finding_id: string
   pr_id?: string
+  /** The reviewer's email, "system", or "github:<login>" for an approval
+   *  made by clicking Commit fixes on GitHub. */
   actor: string
+  /** With a GitHub actor: the account's numeric id, which, unlike the
+   *  login, cannot be renamed or reused. */
+  github_user_id?: number
   action: AuditAction
   notes?: string
   /** The diff a reviewer submitted with an "edited" decision, stored verbatim

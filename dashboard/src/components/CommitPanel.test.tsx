@@ -153,6 +153,28 @@ describe('CommitPanel', () => {
     expect(screen.queryByRole('button', { name: /Commit/ })).toBeNull()
   })
 
+  it('says a request came from a Commit fixes click on GitHub', async () => {
+    vi.mocked(getCommitPlan).mockResolvedValue(
+      plan({
+        latest_request: {
+          request_id: 'R2',
+          pr_id: 'gh-1-3',
+          source: 'github',
+          requested_by: 'github:konradkelly',
+          requested_at: 't',
+          updated_at: 't',
+          status: 'committed',
+          commit_sha: 'abcdef1234567890',
+        },
+      }),
+    )
+    render(<CommitPanel prId="gh-1-3" onCommitted={vi.fn()} />)
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Commit fixes clicked on GitHub by konradkelly: committed',
+    )
+  })
+
   it('says why there is no plan for a PR GitHub does not know', async () => {
     vi.mocked(getCommitPlan).mockRejectedValue(new ApiClientError('not a GitHub pull request', 404))
     render(<CommitPanel prId="gh-1-3" onCommitted={vi.fn()} />)

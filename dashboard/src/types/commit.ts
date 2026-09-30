@@ -47,6 +47,10 @@ export interface CommittedFile {
 export interface CommitRequest {
   request_id: string
   pr_id: string
+  /** "github" for a Commit fixes click on the CascadeSec check
+   *  (github-first-review-spec); absent or "dashboard" otherwise. */
+  source?: 'dashboard' | 'github'
+  /** An email for a dashboard request, "github:<login>" for a click. */
   requested_by: string
   requested_at: string
   updated_at: string
