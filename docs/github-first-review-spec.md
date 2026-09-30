@@ -102,18 +102,25 @@ is what the click commits. The truncation says so in the summary.
 
 ### 3.2 Who may click it
 
-A GitHub identity with **write** permission on the repository, checked by
-the committer at the time of the click with
+Anyone with **write access or above** to the repository: the write,
+maintain and admin roles. Triage and read are not enough, and there is no
+further list (G2, decided 2026-09-30). Not the Cognito group `committers`,
+which remains the rule for dashboard commits.
+
+The committer checks it at the time of the click with
 `GET /repos/{owner}/{repo}/collaborators/{username}/permission` under the
-writer App's token **(verify)**. Not the Cognito group `committers`, which
-remains the rule for dashboard commits.
+writer App's token, and accepts a `permission` of `admin` or `write`
+**(verify)**. That field is GitHub's coarse one, which reports maintain as
+`write` and triage as `read` **(verify)**; `role_name` carries the fine
+role and a custom role, and is logged but not decided on, so a custom role
+counts by the base permission GitHub folds it into.
 
 GitHub shows a check run's action buttons to users with write access
 **(verify)**, so the check is a second gate, not the only one. It is not
 skipped for that: the webhook's `sender` is who clicked, and permission is
-what the committer, not GitHub's UI, is accountable for. Read permission,
-or a user GitHub no longer knows, ends the request as `held` with the
-reason, and the check run says so.
+what the committer, not GitHub's UI, is accountable for. Anything below
+write, or a user GitHub no longer knows, ends the request as `held` with
+the reason, and the check run says so.
 
 This is weaker than the dashboard's gate in one way, on purpose: anyone who
 can push to the branch can commit CascadeSec's verified fixes to it. They
@@ -235,7 +242,7 @@ limit.
 | # | Decision | Outcome |
 |---|---|---|
 | G1 | The button commits verified fixes only; held fixes and edits stay in the dashboard (§2) | Proposed |
-| G2 | Authorisation for a GitHub click is write permission on the repository, checked by the committer (§3.2) | **Open.** Proposed: write permission. Alternative: also require a `committers`-like list in the repository's config |
+| G2 | Authorisation for a GitHub click is write permission on the repository, checked by the committer (§3.2) | Decided 2026-09-30: write access or above (write, maintain, admin), and no further list |
 | G3 | The audit log accepts GitHub identities, `github:<login>` with the user id (§3.3) | **Open.** Reverses W3's identity reasoning; proposed |
 | G4 | The click commits the stored offer, not what is planned at click time (§3.1) | Proposed |
 | G5 | A second state machine carries the click; webhook-receiver gets no invoke or table grant (§3.4) | Proposed |
@@ -259,10 +266,10 @@ Each step is a commit of its own.
    summary text of §4.
 5. **The dashboard** labels GitHub actors in the audit trail and shows a
    request's source.
-6. **Verify on cascadesec-testbed**: a click by the owner; a click by a
-   collaborator with read access (held); a click on an older check run
-   (held); a double click (one commit); an offer with an out-of-diff file;
-   a push between the offer and the click (base check holds the file). And
-   each **(verify)** above.
+6. **Verify on cascadesec-testbed**: a click by the owner; by a
+   collaborator with maintain (commits) and with triage or read (held); a
+   click on an older check run (held); a double click (one commit); an
+   offer with an out-of-diff file; a push between the offer and the click
+   (base check holds the file). And each **(verify)** above.
 7. **Docs**: write-back-spec W3 gains a pointer here, and ci-integration-
    spec §4.3 describes the offer.
