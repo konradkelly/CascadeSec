@@ -350,10 +350,13 @@ data "aws_iam_policy_document" "webhook_receiver" {
   # StartExecution only. A redelivery is made idempotent by the execution
   # name (ExecutionAlreadyExists), so the function never needs to list or
   # describe executions to find out what already ran.
+  # And the commit state machine, once write-back is deployed: a Commit
+  # fixes click starts it the way Draft fixes starts the pipeline, which
+  # keeps this function's grants to starting executions and nothing else.
   statement {
     sid       = "StartPipeline"
     actions   = ["states:StartExecution"]
-    resources = [aws_sfn_state_machine.pipeline.arn]
+    resources = concat([aws_sfn_state_machine.pipeline.arn], aws_sfn_state_machine.commit[*].arn)
   }
 
   # Active tracing needs the function to be able to ship its segments.

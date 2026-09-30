@@ -3,7 +3,8 @@
 The GitHub App's webhook endpoint: verify a delivery's signature, decide
 whether it is an event worth acting on -- a PR opened or pushed to, or a
 click on our check run's Draft fixes or Re-run -- and start one pipeline
-execution for it. Nothing else -- it never calls GitHub, never touches S3,
+execution for it. A click on Commit fixes starts the commit state machine
+instead (github-first-review-spec §3.4). Nothing else -- it never calls GitHub, never touches S3,
 and cannot read the App's private key (terraform/iam.tf). A request that got
 past it could start an execution and nothing more.
 
@@ -37,6 +38,9 @@ logger.setLevel(logging.INFO)
 
 WEBHOOK_SECRET_ARN = os.environ.get("WEBHOOK_SECRET_ARN")
 STATE_MACHINE_ARN = os.environ.get("STATE_MACHINE_ARN")
+# The commit state machine (github-first-review-spec §3.4). Empty while
+# write-back is not deployed, and a Commit fixes click is then ignored.
+COMMIT_STATE_MACHINE_ARN = os.environ.get("COMMIT_STATE_MACHINE_ARN", "")
 
 secretsmanager = boto3.client("secretsmanager")
 sfn = boto3.client("stepfunctions")
@@ -46,12 +50,14 @@ sfn = boto3.client("stepfunctions")
 # D4); closed, edited, labeled and the rest change no file.
 SCANNED_ACTIONS = {"opened", "synchronize", "reopened", "ready_for_review"}
 
-# The check run github-gateway creates, and its one button (spec §5). Must
-# match github-gateway's CHECK_NAME and DRAFT_FIXES_ACTION.
+# The check run github-gateway creates, and its buttons (spec §5;
+# github-first-review-spec §3). Must match github-gateway's CHECK_NAME,
+# DRAFT_FIXES_ACTION and COMMIT_FIXES_ACTION.
 CHECK_NAME = "CascadeSec"
 DRAFT_FIXES_ACTION = "draft_fixes"
-# requested_action is the Draft fixes button; rerequested is GitHub's own
-# Re-run on the check.
+COMMIT_FIXES_ACTION = "commit_fixes"
+# requested_action is a button (Draft fixes, Commit fixes); rerequested is
+# GitHub's own Re-run on the check.
 CHECK_RUN_ACTIONS = {"requested_action", "rerequested"}
 
 # Long enough that a secret rotated with put-secret-value is picked up within
@@ -108,14 +114,18 @@ def handler(event, context):
         # to an App subscribed to check_run. Only ours carries a button.
         if check_run.get("name") != CHECK_NAME:
             return _response(204)
-        if action == "requested_action" and \
-                (payload.get("requested_action") or {}).get("identifier") != DRAFT_FIXES_ACTION:
+        identifier = (payload.get("requested_action") or {}).get("identifier")
+        if action == "requested_action" and identifier not in (DRAFT_FIXES_ACTION,
+                                                               COMMIT_FIXES_ACTION):
             return _response(204)
         if not check_run.get("pull_requests"):
             # GitHub leaves this empty for a PR from a fork. Without the PR
             # there is no number to scan; the push that opened it already ran.
+            # A fork is refused write-back as well (write-back-spec W7).
             logger.info("delivery %s: check_run with no pull request (a fork?)", delivery)
             return _response(204)
+        if action == "requested_action" and identifier == COMMIT_FIXES_ACTION:
+            return start_commit(payload, delivery)
     elif gh_event == "check_suite" and action == "rerequested":
         # The PR page's Re-run re-runs the App's whole suite, and arrives as
         # this rather than check_run.rerequested (found on PugetScope #10,
@@ -258,6 +268,67 @@ def build_check_run_input(payload, delivery):
             "head_sha": _sha(check_run["head_sha"]),
             "base_sha": _sha(pr["base"]["sha"]),
             "trigger": trigger,
+        },
+    }
+
+
+def start_commit(payload, delivery):
+    """A Commit fixes click: start the commit state machine, which asks
+    github-committer to commit the offer shown on this check run.
+
+    Nothing is decided here about who may commit. The sender is who
+    clicked, as GitHub signed it; the committer checks their permission on
+    the repository before anything is written (github-first-review-spec
+    §3.2). The name is (PR, check run, "commit"), so a redelivery or a
+    second click on the same check run starts nothing -- a click on a later
+    check run's button is a new request.
+    """
+    if not COMMIT_STATE_MACHINE_ARN:
+        logger.info("delivery %s: Commit fixes clicked, but write-back is not deployed", delivery)
+        return _response(204)
+    try:
+        execution_input = build_commit_input(payload)
+    except (KeyError, TypeError, ValueError, IndexError) as e:
+        logger.error("delivery %s: malformed Commit fixes payload: %s", delivery, e)
+        return _response(400, "malformed check_run payload")
+
+    raw = f"{execution_input['pr_id']}-cr{execution_input['check_run_id']}-commit"
+    name = re.sub(r"[^A-Za-z0-9_-]", "-", raw)[:80]
+    try:
+        sfn.start_execution(
+            stateMachineArn=COMMIT_STATE_MACHINE_ARN,
+            name=name,
+            input=json.dumps(execution_input, sort_keys=True),
+        )
+    except sfn.exceptions.ExecutionAlreadyExists:
+        logger.info("delivery %s: commit %s already started", delivery, name)
+        return _response(200, "already started")
+    logger.info("delivery %s: Commit fixes by %s -> execution %s",
+                delivery, execution_input["sender"]["login"], name)
+    return _response(202, "started")
+
+
+def build_commit_input(payload):
+    """The commit state machine's input for a Commit fixes click: the PR,
+    the check run whose offer is accepted, and who clicked."""
+    check_run = payload["check_run"]
+    pr = check_run["pull_requests"][0]
+    repo = payload["repository"]
+    sender = payload["sender"]
+    return {
+        "pr_id": make_pr_id(repo["id"], pr["number"]),
+        "check_run_id": int(check_run["id"]),
+        # The login is what a reader recognises; the id is what cannot be
+        # renamed or reused (github-first-review-spec §3.3).
+        "sender": {"login": str(sender["login"]), "id": int(sender["id"])},
+        "github": {
+            "installation_id": int(payload["installation"]["id"]),
+            "repository_id": int(repo["id"]),
+            "repository": repo["full_name"],
+            "pr_number": int(pr["number"]),
+            "head_sha": _sha(check_run["head_sha"]),
+            "base_sha": _sha(pr["base"]["sha"]),
+            "trigger": "commit",
         },
     }
 
