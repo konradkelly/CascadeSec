@@ -41,6 +41,9 @@ resource "aws_lambda_function" "webhook_receiver" {
     variables = {
       WEBHOOK_SECRET_ARN = aws_secretsmanager_secret.github_webhook_secret.arn
       STATE_MACHINE_ARN  = aws_sfn_state_machine.pipeline.arn
+      # A Commit fixes click (github-first-review-spec §3.4). Empty while
+      # write-back is not deployed, and the click is then ignored.
+      COMMIT_STATE_MACHINE_ARN = try(aws_sfn_state_machine.commit[0].arn, "")
       # Dimension on the metrics the handler emits (observability.tf).
       ENVIRONMENT = var.environment
     }

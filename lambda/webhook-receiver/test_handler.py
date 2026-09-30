@@ -441,3 +441,65 @@ def test_suite_rerun_without_a_pull_request_is_ignored(aws):
 
     assert handler.handler(event, None)["statusCode"] == 204
     sfn.start_execution.assert_not_called()
+
+
+# ---------- Commit fixes (github-first-review-spec §3.4) ----------
+
+COMMIT_ARN = "arn:aws:states:us-east-1:1:stateMachine:commit"
+
+
+def _commit_click(**over):
+    payload = _check_run_payload(identifier="commit_fixes", **over)
+    payload["sender"] = {"login": "konradkelly", "id": 4242}
+    return payload
+
+
+def test_commit_fixes_starts_the_commit_state_machine_not_the_pipeline(aws):
+    _, sfn = aws
+    with patch.object(handler, "COMMIT_STATE_MACHINE_ARN", COMMIT_ARN):
+        response = handler.handler(_event(_commit_click(), gh_event="check_run"), None)
+
+    assert response["statusCode"] == 202
+    kwargs = sfn.start_execution.call_args.kwargs
+    assert kwargs["stateMachineArn"] == COMMIT_ARN
+    assert kwargs["name"] == "gh-123456-7-cr55-commit"
+    execution_input = json.loads(kwargs["input"])
+    assert execution_input["check_run_id"] == 55
+    # Who clicked, as GitHub signed it; the committer decides if they may.
+    assert execution_input["sender"] == {"login": "konradkelly", "id": 4242}
+    assert execution_input["github"]["head_sha"] == HEAD_SHA
+    assert execution_input["github"]["trigger"] == "commit"
+
+
+def test_a_second_commit_click_on_one_check_run_starts_nothing(aws):
+    _, sfn = aws
+    sfn.start_execution.side_effect = ExecutionAlreadyExists()
+    with patch.object(handler, "COMMIT_STATE_MACHINE_ARN", COMMIT_ARN):
+        response = handler.handler(_event(_commit_click(), gh_event="check_run"), None)
+    assert response["statusCode"] == 200
+
+
+def test_commit_fixes_is_ignored_while_write_back_is_not_deployed(aws):
+    _, sfn = aws
+    with patch.object(handler, "COMMIT_STATE_MACHINE_ARN", ""):
+        response = handler.handler(_event(_commit_click(), gh_event="check_run"), None)
+    assert response["statusCode"] == 204
+    sfn.start_execution.assert_not_called()
+
+
+def test_commit_fixes_on_a_fork_is_ignored(aws):
+    _, sfn = aws
+    with patch.object(handler, "COMMIT_STATE_MACHINE_ARN", COMMIT_ARN):
+        response = handler.handler(_event(_commit_click(pull_requests=False), gh_event="check_run"), None)
+    assert response["statusCode"] == 204
+    sfn.start_execution.assert_not_called()
+
+
+def test_commit_fixes_without_a_sender_is_a_400(aws):
+    _, sfn = aws
+    payload = _commit_click()
+    del payload["sender"]
+    with patch.object(handler, "COMMIT_STATE_MACHINE_ARN", COMMIT_ARN):
+        response = handler.handler(_event(payload, gh_event="check_run"), None)
+    assert response["statusCode"] == 400
+    sfn.start_execution.assert_not_called()
