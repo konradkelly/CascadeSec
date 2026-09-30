@@ -787,3 +787,35 @@ def test_a_path_or_reason_cannot_break_the_outcome_table():
     _, body = _report_commit({"status": "held", "files": [
         {"file": "a|b.tf", "outcome": "held", "reason": "line one\nline two"}]})
     assert "| `a\\|b.tf` | held: line one line two |" in body["output"]["summary"]
+
+
+# ---------- the Commit fixes button (github-first-review-spec §3) ----------
+
+OFFERED = [{"file": "f.tf", "tip": "1", "chain": ["1"], "rules": ["R1"],
+            "content_sha256": "h", "diff": "+x\n"}]
+
+
+@pytest.mark.parametrize("enabled, offer, button", [
+    (True, OFFERED, True),
+    (False, OFFERED, False),   # write-back not deployed: nothing to click to
+    (True, [], False),         # nothing verified to commit
+])
+def test_commit_fixes_is_offered_with_an_offer_once_write_back_is_deployed(enabled, offer, button):
+    with patch.object(handler, "COMMIT_FIXES_ENABLED", enabled), \
+            patch.object(handler, "plan_offer", return_value=offer):
+        _, request, _ = _report([_finding("1", 2)], remediate=True)
+    body = request.call_args.args[3]
+    actions = [a["identifier"] for a in body.get("actions", [])]
+    assert actions == (["commit_fixes"] if button else [])
+    summary = body["output"]["summary"]
+    if button:
+        assert "**Commit fixes** (above) commits" in summary
+        assert all(len(a["label"]) <= 20 and len(a["description"]) <= 40 for a in body["actions"])
+    elif offer:
+        assert "Approve them in the dashboard" in summary
+
+
+def test_a_push_run_offers_draft_fixes_and_never_commit_fixes():
+    with patch.object(handler, "COMMIT_FIXES_ENABLED", True):
+        _, request, _ = _report([_finding("1", 2)])
+    assert [a["identifier"] for a in request.call_args.args[3]["actions"]] == ["draft_fixes"]

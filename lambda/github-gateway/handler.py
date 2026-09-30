@@ -60,6 +60,12 @@ GITHUB_API = "https://api.github.com"
 # as ours. Must match webhook-receiver's CHECK_NAME.
 CHECK_NAME = "CascadeSec"
 DRAFT_FIXES_ACTION = "draft_fixes"
+# The button that commits a Draft fixes run's offer (github-first-review-
+# spec §3). Must match webhook-receiver's COMMIT_FIXES_ACTION.
+COMMIT_FIXES_ACTION = "commit_fixes"
+# Set once write-back is deployed (terraform: var.github_writer_app_id):
+# before then there is no committer for a click to reach.
+COMMIT_FIXES_ENABLED = bool(os.environ.get("COMMIT_FIXES_ENABLED"))
 
 # Over any of these the check completes as "too large to scan" and no scan
 # runs: a partial snapshot looks exactly like a clean one for the files it
@@ -532,12 +538,20 @@ def report(event):
 
     title = (f"{len(on_added)} finding(s) on lines this PR adds" if on_added
              else "No findings on lines this PR adds")
+    # Commit fixes is offered once write-back is deployed and the offer has
+    # a file in it; the click commits the stored offer (spec §3.1).
+    commit_button = bool(offer) and COMMIT_FIXES_ENABLED
     summary = build_summary(
         state=state, findings=findings, on_added=on_added, posted=posted, held=held,
         remediate=remediate, offer_fixes=offer_fixes, trigger=trigger, offer=offer,
+        commit_button=commit_button,
     )
     actions = ([{"label": "Draft fixes", "description": "Draft and self-check fixes",
                  "identifier": DRAFT_FIXES_ACTION}] if offer_fixes else [])
+    if commit_button:
+        # GitHub's limits: label 20 characters, description 40 (verify).
+        actions.append({"label": "Commit fixes", "description": "Commit the verified fixes listed below",
+                        "identifier": COMMIT_FIXES_ACTION})
 
     batches = [annotations[i:i + ANNOTATIONS_PER_REQUEST]
                for i in range(0, len(annotations), ANNOTATIONS_PER_REQUEST)] or [[]]
@@ -665,7 +679,7 @@ def annotation(finding):
 
 
 def build_summary(*, state, findings, on_added, posted, held, remediate, offer_fixes, trigger,
-                  offer=()):
+                  offer=(), commit_button=False):
     github = state["github"]
     lines = [
         f"**{len(on_added)}** finding(s) on lines this PR adds, of **{len(findings)}** "
@@ -706,7 +720,7 @@ def build_summary(*, state, findings, on_added, posted, held, remediate, offer_f
         for h in held:
             lines.append(f"- `{h['file']}`: fix not posted -- {h['reason']}")
         lines.append("")
-        lines += offer_section(offer)
+        lines += offer_section(offer, button=commit_button)
     elif offer_fixes:
         lines += ["**Draft fixes** (above) drafts and self-checks a fix for each mapped finding "
                   "in the files this PR changes, redrafts any fix whose file has changed since "
@@ -790,7 +804,8 @@ def offer_section(offer, button=False):
         lead = (f"**Commit fixes** (above) commits the verified fixes below to this branch as "
                 f"one commit, {len(offer)} file(s), as the CascadeSec Fixes app. It needs write "
                 "access to the repository. Each file is checked against the branch again first, "
-                "and a file that has changed since is held.")
+                "and a file that has changed since is held. The suggestions above cover what "
+                "GitHub can show inline; this covers every verified file.")
     else:
         lead = (f"**Ready to commit:** the verified fixes below, {len(offer)} file(s), including "
                 "any GitHub cannot show as a suggestion. Approve them in the dashboard to commit "
