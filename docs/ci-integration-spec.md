@@ -309,6 +309,12 @@ Reads the PR's findings from DynamoDB and the stored hunks, then:
      subset of the hunks was never verified — so the whole file is held and
      the summary says why, with the dashboard link.
 
+  After a Draft fixes run, the summary also shows the **offer**: per
+  changed file, the longest verified chain whose base is the head, as a
+  diff, whether or not its lines are in the PR's diff, and -- once
+  write-back is deployed -- a **Commit fixes** button that commits it
+  ([`github-first-review-spec.md`](./github-first-review-spec.md)).
+
   `needs-human-only` findings and failed self-checks are never posted, and
   neither is any model prose: the comment body is the rule ids, the file and
   the suggestion. If GitHub still rejects the review (422), the files are
