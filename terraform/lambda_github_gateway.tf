@@ -56,6 +56,9 @@ resource "aws_lambda_function" "github_gateway" {
       # The check run's details link and the summary's dashboard link.
       DASHBOARD_URL = "https://${aws_cloudfront_distribution.dashboard.domain_name}"
       ENVIRONMENT   = var.environment
+      # Whether a Draft fixes run's check offers Commit fixes: only once
+      # write-back is deployed (github-first-review-spec §3).
+      COMMIT_FIXES_ENABLED = local.write_back_enabled ? "true" : ""
     }
   }
 

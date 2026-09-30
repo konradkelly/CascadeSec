@@ -371,8 +371,8 @@ def test_the_preview_and_the_committer_plan_alike(name):
 
 
 def test_the_receiver_and_the_gateway_agree_on_the_check_run():
-    """github-gateway names the check run and its Draft fixes button;
-    webhook-receiver recognises a click by the same two strings. A drift
+    """github-gateway names the check run and its Draft fixes and Commit
+    fixes buttons; webhook-receiver recognises a click by the same strings. A drift
     would not fail anything visibly: the button would be on the PR, and a
     click would be ignored as some other app's check run."""
     values = {}
@@ -380,6 +380,6 @@ def test_the_receiver_and_the_gateway_agree_on_the_check_run():
         source = (CORPUS.parent / rel).read_text(encoding="utf-8")
         values[rel] = tuple(
             re.search(rf'^{name} = "([^"]+)"$', source, re.M).group(1)
-            for name in ("CHECK_NAME", "DRAFT_FIXES_ACTION")
+            for name in ("CHECK_NAME", "DRAFT_FIXES_ACTION", "COMMIT_FIXES_ACTION")
         )
     assert len(set(values.values())) == 1, values
