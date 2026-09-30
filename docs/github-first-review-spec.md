@@ -5,8 +5,8 @@ pull request to the branch without leaving GitHub. It amends write-back
 (v4, [`write-back-spec.md`](./write-back-spec.md)), whose decision W3 put
 every commit behind the dashboard, and adds nothing the dashboard loses.
 
-Written 2026-09-30, before building. **Built the same day, steps 1-5 and
-7 of §9, and not yet deployed**; §10 records where the build departed from
+Written 2026-09-30, before building. **Built and deployed the same day,
+steps 1-5 and 7 of §9, and verified live for a click by the owner**; §10 records where the build departed from
 this plan, and the text below describes what was built. GitHub API claims
 are from GitHub's documentation and are marked **(verify)** until a
 deployed run has shown them. §9 is the build order and §8 the decisions.
@@ -334,6 +334,24 @@ dashboard, and corpus/test_corpus.py asserts the receiver and gateway
 agree on `COMMIT_FIXES_ACTION`. Disabling the permission check, or the
 offer check, fails the tests that depend on it.
 
-Still to do: deploy (the gateway, receiver and committer Lambdas, the
-pipeline and the new commit state machine, and the dashboard), then §9
-step 6 on cascadesec-testbed.
+**Deployed and verified live, 2026-09-30,** on cascadesec-testbed #2.
+Commit `98e8f8e` added a KMS key without rotation in a new file. Draft
+fixes on it stored an offer for check run 110118818536 -- one file, the
+rotation fix -- and the check showed the diff and the Commit fixes button
+to the repository owner. The owner clicked it. The committer asked GitHub
+for the clicker's permission and got `admin`, with the writer App's token;
+recorded the approval as `github:konradkelly` with the account id; and
+committed `8079d52` as `cascadesec-fixes[bot]`, Verified, parented on the
+offer's head, adding the one line. github-gateway posted a green
+"CascadeSec fixes" check run naming the file. The scan of that commit
+marked the two rotation findings no longer detected and moved nothing
+else. That settles four **(verify)**s: the button is shown to an owner,
+its label and description are accepted, a check-run click's `sender` is
+the clicker, and the permission endpoint answers under the writer App's
+token. Still unverified: the triage/read and maintain answers, and
+whether an older check run's button stays clickable.
+
+Still to do, from §9 step 6: a click by a collaborator without write
+access (held), and by one with maintain (commits); a click on an older
+check run (held); a double click (one commit); a push between the offer
+and the click.
