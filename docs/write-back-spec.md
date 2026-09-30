@@ -466,6 +466,17 @@ Where the build departed from, or added to, the plan above.
   `FilesCommitted`, `FilesHeldFromCommit` and `CommitsFailed` (the
   committer), in the `IaCPosture` namespace.
 
+- **A finding that moved lines keeps its id** (found on the first live
+  commit, 2026-09-30). A finding's id hashes its line range, so the scan of
+  the commit's push -- one added line in `ledger.tf` -- marked 16 findings
+  below it no longer detected and recreated each at `raw` under a new id,
+  stranding held fixes and audit trails. The same happened whenever an
+  author's push inserted lines, but write-back makes it routine. The
+  scanner now pairs, within one scan, an unmarked finding that stopped
+  firing with a new one of the same source, rule, file and resource, in
+  line order, and writes the new one under the old id. A finding with no
+  resource is not paired. Ids themselves are unchanged, so no migration.
+
 Still to do: register "CascadeSec Fixes" (Metadata read, Contents write,
 Pull requests read; webhooks off), import its key with
 `scripts/import_github_app_key.py --alias alias/iacposture-dev-github-app-writer`,

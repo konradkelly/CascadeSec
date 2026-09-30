@@ -1154,7 +1154,9 @@ def _build_finding(pr_id, source, rule_id, file_path, line_range, severity,
     # seen before rather than accumulating duplicates. Because the id hashes
     # the location as well as the rule, an id that fires again is the same
     # rule in the same place -- which is what lets _write_findings keep that
-    # finding's review state without comparing anything else.
+    # finding's review state without comparing anything else. A finding that
+    # only moved lines gets a new id here, and _write_findings gives it its
+    # old one back (_carry_moved_ids).
     finding_key = f"{source}:{rule_id}:{file_path}:{line_range}"
     finding_id = hashlib.sha1(finding_key.encode()).hexdigest()[:16]
     return {
@@ -1218,7 +1220,10 @@ def _write_findings(pr_id, findings):
     removed, or a tool upgrade may have dropped the rule, and those read the
     same from here. Deleting would also take the audit trail with it, and
     spec §8.1's rule is that nothing is silently decided. A finding that
-    fires again has the mark removed.
+    fires again has the mark removed. One that only moved lines -- same
+    rule on the same resource, somewhere else in the file -- is not a
+    finding that stopped firing plus a new one: it keeps its id and record
+    (_carry_moved_ids).
 
     Findings are deduplicated by id first. A finding id hashes
     (source, rule, file, lines) but not the resource address, so one rule
@@ -1233,8 +1238,14 @@ def _write_findings(pr_id, findings):
     table = dynamodb.Table(DYNAMODB_TABLE)
     now = datetime.now(timezone.utc).isoformat()
 
-    known, already_marked = _existing_finding_ids(table, pr_id)
+    existing = _existing_findings(table, pr_id)
+    known = set(existing)
+    already_marked = {i for i, item in existing.items() if item.get("no_longer_detected")}
     unique = _deduplicate(findings)
+    moved = _carry_moved_ids(unique, existing, already_marked)
+    if moved:
+        logger.info("%d finding(s) moved lines on %s and kept their ids: %s",
+                    len(moved), pr_id, sorted(moved))
     preserved = len(known & set(unique))
     for finding in unique.values():
         table.update_item(
@@ -1318,29 +1329,90 @@ def _deduplicate(findings):
     return unique
 
 
-def _existing_finding_ids(table, pr_id):
-    """(every finding id already recorded against this PR, the ones among
-    them already marked no_longer_detected).
+def _existing_findings(table, pr_id):
+    """{finding id: its identifying fields and mark}, for every finding
+    already recorded against this PR.
 
     Read before the writes, so "already there" means before this scan.
-    Projected to the id and the mark -- a PR's findings carry whole file
-    diffs, and none of that is needed to answer this question.
+    Projected to what identifies a finding and to the mark -- a PR's
+    findings carry whole file diffs, and none of that is needed here.
     """
-    ids, marked = set(), set()
+    found = {}
     kwargs = {
         "KeyConditionExpression": "pk = :pk AND begins_with(sk, :sk_prefix)",
         "ExpressionAttributeValues": {":pk": f"PR#{pr_id}", ":sk_prefix": "FINDING#"},
-        "ProjectionExpression": "finding_id, no_longer_detected",
+        "ProjectionExpression": ("finding_id, no_longer_detected, #source, rule_id, #file, "
+                                 "#resource, line_range"),
+        "ExpressionAttributeNames": {"#source": "source", "#file": "file",
+                                     "#resource": "resource"},
     }
     while True:
         response = table.query(**kwargs)
         for item in response.get("Items", []):
-            if "finding_id" not in item:
-                continue
-            ids.add(item["finding_id"])
-            if item.get("no_longer_detected"):
-                marked.add(item["finding_id"])
+            if "finding_id" in item:
+                found[item["finding_id"]] = item
         last_key = response.get("LastEvaluatedKey")
         if not last_key:
-            return ids, marked
+            return found
         kwargs["ExclusiveStartKey"] = last_key
+
+
+def _carry_moved_ids(unique, existing, already_marked):
+    """Give a finding that only moved lines its old id back. Returns the ids
+    carried, and rewrites `unique` in place.
+
+    The id hashes the line range, so a push that inserts a line above a
+    finding renumbers it: the old id stops firing and a new one appears,
+    and the old record's status, fix and audit trail were stranded under a
+    no_longer_detected mark while the same misconfiguration started over at
+    "raw". Write-back made that routine. Its first commit on
+    cascadesec-testbed #2, one added line in ledger.tf, stranded 16 findings
+    below it, held fixes included (write-back-spec §14).
+
+    Within one scan, an unmarked finding that stopped firing and a new one
+    that appeared, with the same source, rule, file and resource, are the
+    same finding at new lines. The new one is written under the old id, so
+    the record's line_range is updated and everything decided about it
+    stays. Only the leftovers of the two sets are compared, so a finding
+    whose lines did not move is never touched, and a finding that really
+    stopped firing has nothing to pair with and is still marked.
+
+    Several instances of one rule on one resource (three open ingress
+    rules in one security group) are paired in line order, which is right
+    when an insertion shifts them together. If the counts differ, one of
+    them really went away; the unpaired ones stay gone or new. A finding
+    with no resource is never paired: there is nothing to tell two of them
+    apart. A moved finding's fix is not waved through by this: it was
+    drafted on the old file, so its base no longer matches, and it is held
+    and redrafted as any stale fix is.
+    """
+    def key(item):
+        resource = item.get("resource")
+        if not resource:
+            return None
+        return item.get("source"), item.get("rule_id"), item.get("file"), resource
+
+    def start(item):
+        line_range = item.get("line_range") or []
+        first = line_range[0] if line_range else None
+        return int(first) if first is not None else 0
+
+    gone, appeared = {}, {}
+    for finding_id, item in existing.items():
+        if finding_id not in unique and finding_id not in already_marked and key(item):
+            gone.setdefault(key(item), []).append(item)
+    for finding_id, finding in unique.items():
+        if finding_id not in existing and key(finding):
+            appeared.setdefault(key(finding), []).append(finding)
+
+    carried = []
+    for group, new_ones in appeared.items():
+        old_ones = sorted(gone.get(group, []), key=lambda i: (start(i), i["finding_id"]))
+        new_ones = sorted(new_ones, key=lambda f: (start(f), f["finding_id"]))
+        for old, new in zip(old_ones, new_ones):
+            del unique[new["finding_id"]]
+            new["finding_id"] = old["finding_id"]
+            new["sk"] = f"FINDING#{old['finding_id']}"
+            unique[old["finding_id"]] = new
+            carried.append(old["finding_id"])
+    return carried
