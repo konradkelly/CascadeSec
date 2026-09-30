@@ -476,6 +476,12 @@ Where the build departed from, or added to, the plan above.
   firing with a new one of the same source, rule, file and resource, in
   line order, and writes the new one under the old id. A finding with no
   resource is not paired. Ids themselves are unchanged, so no migration.
+  **Verified live, 2026-09-30:** on the same PR, commit `7cfcacf` inserted
+  one comment line at the top of `ledger.tf`. The scan logged all 16 of the
+  file's live findings as moved; every one kept its id, status and fix with
+  its lines one further down, no finding was created or newly marked gone,
+  and the PR stayed at 66. The 16 stranded by the first commit were repaired
+  by hand beforehand, by the same pairing rule.
 
 Still to do: register "CascadeSec Fixes" (Metadata read, Contents write,
 Pull requests read; webhooks off), import its key with
