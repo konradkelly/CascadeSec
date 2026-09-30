@@ -647,3 +647,95 @@ def test_a_finding_without_lines_is_counted_not_annotated(line_range):
 def test_annotation_title_leaves_out_a_severity_the_scanner_did_not_give():
     assert handler.annotation(_finding("1", 2, severity="UNKNOWN"))["title"] == "R1"
     assert handler.annotation(_finding("1", 2, severity="HIGH"))["title"] == "R1 (high)"
+
+
+# ======================================================================
+# the offer (github-first-review-spec §3.1)
+# ======================================================================
+
+def _offer(fixes, contents=None):
+    contents = contents or {"scans/p/f.tf": HEAD_FILE, "fixes/p/1/f.tf": CORRECTED,
+                            "fixes/p/2/f.tf": "A\nb\nC\nd\n"}
+
+    def read(key):
+        if key not in contents:
+            raise handler.ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        return contents[key]
+
+    with patch.object(handler, "_s3_text", side_effect=read):
+        return handler.plan_offer("p", fixes)
+
+
+def test_the_offer_includes_a_fix_outside_the_prs_diff():
+    # A suggestion needs its lines in the diff; the offer does not, which is
+    # the point of it (testbed #2's fixes were mostly outside).
+    [o] = _offer([_fix("1", DIFF)])
+    assert (o["file"], o["tip"], o["chain"], o["rules"]) == ("f.tf", "1", ["1"], ["R-1"])
+    assert o["content_sha256"] == _h(CORRECTED)
+    assert "-c\n+C\n" in o["diff"]
+
+
+def test_the_offer_is_the_longest_verified_chain():
+    first, second = _fix("1", DIFF), _fix("2", "d2", [("1", _h(DIFF))])
+    [o] = _offer([first, second])
+    assert (o["tip"], o["chain"]) == ("2", ["1", "2"])
+
+
+def test_an_approved_fix_is_offered_and_a_committed_one_is_not():
+    approved = {**_fix("1", DIFF), "status": "resolved"}
+    assert _offer([approved])[0]["tip"] == "1"
+    committed = _fix("1", DIFF)
+    committed["proposed_fix"]["committed"] = {"sha": "c"}
+    assert _offer([committed]) == []
+
+
+@pytest.mark.parametrize("change", [
+    lambda f: f["proposed_fix"].update(base_sha256=_h("an earlier version")),
+    lambda f: f["proposed_fix"].pop("base_sha256"),
+    lambda f: f["proposed_fix"].update(self_check_passed=False),
+    lambda f: f.update(status="needs-human-only"),
+    lambda f: f.update(no_longer_detected="t"),
+], ids=["stale-base", "no-base", "unverified", "held", "gone"])
+def test_only_a_verified_fix_on_the_current_head_is_offered(change):
+    fix = _fix("1", DIFF)
+    change(fix)
+    assert _offer([fix]) == []
+
+
+def test_a_fix_whose_file_is_gone_is_not_offered():
+    assert _offer([_fix("1", DIFF)], contents={"fixes/p/1/f.tf": CORRECTED}) == []
+
+
+def test_the_offer_section_shows_each_change_and_escapes_the_path():
+    offer = [{"file": "<b>x.tf", "rules": ["CKV_AWS_7"], "diff": "--- a\n+++ b\n+rotation\n"}]
+    text = "\n".join(handler.offer_section(offer))
+    assert "<code>&lt;b&gt;x.tf</code>: `CKV_AWS_7`" in text
+    assert "```diff\n--- a\n+++ b\n+rotation\n```" in text
+    assert "Approve them in the dashboard" in text
+
+
+def test_an_offer_too_large_to_show_still_lists_its_files():
+    big = [{"file": f"f{i}.tf", "rules": ["R"], "diff": "+x\n" * 9000} for i in range(3)]
+    text = "\n".join(handler.offer_section(big))
+    assert "`f2.tf`: `R` (the change is too large to show here" in text
+    assert len(text) < 65000
+
+
+def test_a_fixes_run_reports_the_offer_for_the_state_machine_to_store():
+    offered = [{"file": "f.tf", "tip": "1", "chain": ["1"], "rules": ["R1"],
+                "content_sha256": "h", "diff": "+x\n"}]
+    with patch.object(handler, "plan_offer", return_value=offered) as plan:
+        result, request, _ = _report([_finding("1", 2)], remediate=True)
+    assert result["offer"] == {"check_run_id": 55, "head_sha": HEAD,
+                               "files": [{"file": "f.tf", "tip": "1", "chain": ["1"],
+                                          "content_sha256": "h"}]}
+    assert "Ready to commit" in request.call_args.args[3]["output"]["summary"]
+    # Only the changed files' findings are considered.
+    assert [f["file"] for f in plan.call_args.args[1]] == ["f.tf"]
+
+
+def test_a_push_run_makes_no_offer():
+    with patch.object(handler, "plan_offer") as plan:
+        result, _, _ = _report([_finding("1", 2)])
+    plan.assert_not_called()
+    assert "offer" not in result

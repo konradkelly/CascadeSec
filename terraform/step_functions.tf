@@ -385,7 +385,51 @@ locals {
         }
         ResultPath = "$.report"
         Retry      = [local.transient_retry]
-        End        = true
+        Next       = "OfferMade"
+      }
+
+      # A Draft fixes run's report returns an offer: per file, the verified
+      # tip and its content hash (github-first-review-spec §3.1).
+      OfferMade = {
+        Type = "Choice"
+        Choices = [
+          { Variable = "$.report.result.offer.files[0]", IsPresent = true, Next = "RecordOffer" },
+        ]
+        Default = "Done"
+      }
+
+      # Stored under the check run it was shown on, because a Commit fixes
+      # click on that check run commits exactly this and nothing planned
+      # later. Written here rather than by the gateway, for the reason
+      # RecordPullRequest is. As a JSON string: a nested list is awkward to
+      # build as typed attributes in a service integration, and nothing
+      # queries inside it.
+      RecordOffer = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::dynamodb:putItem"
+        Parameters = {
+          TableName = aws_dynamodb_table.findings.name
+          Item = {
+            pk         = { "S.$" = "States.Format('PR#{}', $.pr_id)" }
+            sk         = { "S.$" = "States.Format('OFFER#{}', $.report.result.offer.check_run_id)" }
+            head_sha   = { "S.$" = "$.report.result.offer.head_sha" }
+            offer_json = { "S.$" = "States.JsonToString($.report.result.offer)" }
+            created_at = { "S.$" = "$$.State.EnteredTime" }
+          }
+        }
+        ResultPath = null
+        Retry = [{
+          ErrorEquals = [
+            "DynamoDB.InternalServerErrorException",
+            "DynamoDB.ThrottlingException",
+            "DynamoDB.ProvisionedThroughputExceededException",
+            "DynamoDB.RequestLimitExceededException",
+          ]
+          IntervalSeconds = 2
+          MaxAttempts     = 3
+          BackoffRate     = 2
+        }]
+        End = true
       }
     }
   }
@@ -422,7 +466,7 @@ data "aws_iam_policy_document" "pipeline" {
       aws_lambda_function.github_gateway.arn,
     ]
   }
-  # RecordPullRequest's one write. Only keys under PR#gh-, the prefix
+  # RecordPullRequest's and RecordOffer's writes. Only keys under PR#gh-, the prefix
   # webhook-receiver's make_pr_id gives every GitHub PR: the state machine
   # has no business writing a manual run's partition, or any other.
   statement {

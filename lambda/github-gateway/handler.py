@@ -30,6 +30,7 @@ counts. A fix's rationale, assumptions and questions stay in the dashboard
 import base64
 import difflib
 import hashlib
+import html
 import json
 import logging
 import os
@@ -513,10 +514,12 @@ def report(event):
     annotations = [annotation(f) for f in sorted(on_added, key=_sort_key)]
 
     posted, held = [], []
+    offer = []
+    changed = set(fetched.get("changed_files") or [])
     if remediate:
         posted, held = post_suggestions(github, pr_id, execution_name, findings, visible, token)
+        offer = plan_offer(pr_id, [f for f in findings if f["file"] in changed])
 
-    changed = set(fetched.get("changed_files") or [])
     on_changed = [f for f in findings if f["file"] in changed]
     # The same test select_files makes, so the button is offered exactly when
     # the run it starts has something to do. Stale fixes are only looked for
@@ -529,7 +532,7 @@ def report(event):
              else "No findings on lines this PR adds")
     summary = build_summary(
         state=state, findings=findings, on_added=on_added, posted=posted, held=held,
-        remediate=remediate, offer_fixes=offer_fixes, trigger=trigger,
+        remediate=remediate, offer_fixes=offer_fixes, trigger=trigger, offer=offer,
     )
     actions = ([{"label": "Draft fixes", "description": "Draft and self-check fixes",
                  "identifier": DRAFT_FIXES_ACTION}] if offer_fixes else [])
@@ -550,8 +553,20 @@ def report(event):
         {"Environment": ENVIRONMENT},
         pr_id=pr_id, execution=execution_name, trigger=trigger,
     )
-    return {"annotations": len(annotations), "suggestions": suggestion_count,
-            "files_posted": len(posted), "files_held": len(held)}
+    result = {"annotations": len(annotations), "suggestions": suggestion_count,
+              "files_posted": len(posted), "files_held": len(held)}
+    if offer:
+        # Stored by the state machine after this state (RecordOffer), keyed
+        # by the check run: what a Commit fixes click on it commits. Tips
+        # and hashes only -- the diffs are in the summary, and the state is
+        # capped at 256KB.
+        result["offer"] = {
+            "check_run_id": int(fetched["check_run_id"]),
+            "head_sha": github["head_sha"],
+            "files": [{k: o[k] for k in ("file", "tip", "chain", "content_sha256")}
+                      for o in offer],
+        }
+    return result
 
 
 def _complete(check_path, token, title, summary, annotations=(), actions=()):
@@ -647,7 +662,8 @@ def annotation(finding):
     }
 
 
-def build_summary(*, state, findings, on_added, posted, held, remediate, offer_fixes, trigger):
+def build_summary(*, state, findings, on_added, posted, held, remediate, offer_fixes, trigger,
+                  offer=()):
     github = state["github"]
     lines = [
         f"**{len(on_added)}** finding(s) on lines this PR adds, of **{len(findings)}** "
@@ -688,6 +704,7 @@ def build_summary(*, state, findings, on_added, posted, held, remediate, offer_f
         for h in held:
             lines.append(f"- `{h['file']}`: fix not posted -- {h['reason']}")
         lines.append("")
+        lines += offer_section(offer)
     elif offer_fixes:
         lines += ["**Draft fixes** (above) drafts and self-checks a fix for each mapped finding "
                   "in the files this PR changes, redrafts any fix whose file has changed since "
@@ -701,6 +718,101 @@ def build_summary(*, state, findings, on_added, posted, held, remediate, offer_f
         lines += ["", f"Review every finding, control mapping and fix in the "
                       f"[dashboard]({DASHBOARD_URL}/prs/{state['pr_id']})."]
     return "\n".join(lines)
+
+
+# ---------- the offer (github-first-review-spec §3.1) ----------
+
+# The offer's diffs share the summary's 65,535 characters with everything
+# else in it; past this, the files are listed without them.
+OFFER_DIFF_BUDGET = 40000
+
+
+def plan_offer(pr_id, findings):
+    """Per file, the verified fixes a Commit fixes click would commit.
+
+    The same chain v3 posts as suggestions -- chain_tip over the file's
+    verified fixes -- but not bound to the PR's diff lines: a summary can
+    show a fix a suggestion cannot. Approved fixes count as well as proposed
+    ones, since an approval does not unverify anything; a committed one does
+    not. A file is offered only if its tip was drafted on the head as it is
+    now, which is what the committer will check again at the click.
+    """
+    by_file = {}
+    for f in findings:
+        fix = f.get("proposed_fix") or {}
+        if (f.get("status") in ("fix-proposed", "resolved") and fix.get("self_check_passed")
+                and fix.get("diff") and not fix.get("committed")
+                and not f.get("no_longer_detected")):
+            by_file.setdefault(f["file"], {})[f["finding_id"]] = f
+
+    offer = []
+    for path in sorted(by_file):
+        fixes = by_file[path]
+        tip = chain_tip(fixes)
+        if tip is None:
+            continue
+        try:
+            head = _s3_text(f"scans/{pr_id}/{path}")
+            corrected = _s3_text(f"fixes/{pr_id}/{tip['finding_id']}/{path}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "NoSuchKey":
+                raise
+            continue
+        base = tip["proposed_fix"].get("base_sha256")
+        if not base or base != _content_sha256(head) or _content_sha256(corrected) == base:
+            continue
+        chain = [a["finding_id"] for a in tip["proposed_fix"].get("applies_after") or []]
+        chain.append(tip["finding_id"])
+        offer.append({
+            "file": path,
+            "tip": tip["finding_id"],
+            "chain": chain,
+            "rules": sorted({fixes[i]["rule_id"] for i in chain}),
+            "content_sha256": _content_sha256(corrected),
+            "diff": "".join(difflib.unified_diff(
+                head.splitlines(keepends=True), corrected.splitlines(keepends=True),
+                fromfile=f"a/{path}", tofile=f"b/{path}")),
+        })
+    return offer
+
+
+def offer_section(offer, button=False):
+    """The summary's account of the offer: what can be committed, file by
+    file, with the change each makes -- in or out of the PR's diff, which a
+    suggestion cannot be. Code-produced: rule ids, paths and diffs of
+    verified fixes, no model prose. Paths are the repository's, so they are
+    escaped where they sit inside HTML."""
+    if not offer:
+        return []
+    if button:
+        lead = (f"**Commit fixes** (above) commits the verified fixes below to this branch as "
+                f"one commit, {len(offer)} file(s), as the CascadeSec Fixes app. It needs write "
+                "access to the repository. Each file is checked against the branch again first, "
+                "and a file that has changed since is held.")
+    else:
+        lead = (f"**Ready to commit:** the verified fixes below, {len(offer)} file(s), including "
+                "any GitHub cannot show as a suggestion. Approve them in the dashboard to commit "
+                "them together.")
+    lines = [lead, ""]
+    budget = OFFER_DIFF_BUDGET
+    shown = []
+    for o in offer:
+        block = f"```diff\n{o['diff'].rstrip()}\n```"
+        if len(block) > budget:
+            break
+        budget -= len(block)
+        shown.append(o["file"])
+        rules = ", ".join(f"`{r}`" for r in o["rules"])
+        lines += [f"<details><summary><code>{html.escape(o['file'])}</code>: {rules}</summary>",
+                  "", block,
+                  "", "</details>", ""]
+    for o in offer:
+        if o["file"] not in shown:
+            lines.append(f"- `{o['file']}`: {', '.join(f'`{r}`' for r in o['rules'])} "
+                         "(the change is too large to show here; see the dashboard)")
+    if len(shown) < len(offer):
+        lines.append("")
+    return lines
 
 
 # ---------- suggestions ----------
