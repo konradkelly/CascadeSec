@@ -5,12 +5,12 @@ committed, and CascadeSec commits them to the pull request's branch as one
 commit. The push that commit makes is scanned like any other, and that scan
 is the fix's verification on the real branch.
 
-Written before building, 2026-09-28. **Built 2026-09-29, not yet deployed**:
-steps 1-3, 5-8 and 10 of §12 are in, and §14 records where the build departed
-from this plan. Step 4 (registering the writer App) and step 9 (deploying and
-verifying on the testbed) are not done, so every **(verify)** below still
-stands. GitHub API claims are from GitHub's documentation and are marked
-**(verify)** until a deployed run has shown them. §12 is the build order.
+Written before building, 2026-09-28. **Built 2026-09-29, deployed and
+verified live 2026-09-30** on cascadesec-testbed #2: steps 1-8 and 10 of §12
+are in, and step 9 is partly run (§14 lists what is still open). §14 records
+where the build departed from this plan. GitHub API claims are from GitHub's
+documentation and are marked **(verify)** until a deployed run has shown
+them. §12 is the build order.
 
 ## 1. What v4 adds that v3's suggestions do not
 
@@ -189,9 +189,9 @@ unverified (§5.5), a dashboard link, and a trailer
 `CascadeSec-Request: <request_id>`. It never carries model prose. The
 approver's identity also stays out (W5): it is a Cognito email, the audit log
 already records it, and a commit on a public repository is public forever.
-The author is the writer App's bot. Whether GitHub marks API-created bot
-commits as Verified **(verify)**, and whether "require signed commits" then
-passes, is checked on the testbed.
+The author is the writer App's bot. GitHub marks its API-created commits as
+Verified (seen live, 2026-09-30, as `cascadesec-fixes[bot]`); whether
+"require signed commits" then passes is still **(verify)**.
 
 ## 7. After the commit
 
@@ -201,7 +201,7 @@ passes, is checked on the testbed.
   action `committed` and actor `system`. Nothing lands on a branch off the
   books. Status stays `resolved`.
 - **The push is scanned.** The commit's push sends `pull_request.synchronize`
-  to the v3 App, like any push **(verify)**: installation-token pushes are
+  to the v3 App, like any push (seen live, 2026-09-30): installation-token pushes are
   not suppressed the way Actions' `GITHUB_TOKEN` pushes are. That runs scan
   and map on the new head. The fixed findings stop firing and are marked
   `no_longer_detected`, and a new check run reports the branch as it now
@@ -483,8 +483,16 @@ Where the build departed from, or added to, the plan above.
   and the PR stayed at 66. The 16 stranded by the first commit were repaired
   by hand beforehand, by the same pairing rule.
 
-Still to do: register "CascadeSec Fixes" (Metadata read, Contents write,
-Pull requests read; webhooks off), import its key with
-`scripts/import_github_app_key.py --alias alias/iacposture-dev-github-app-writer`,
-install it on cascadesec-testbed only, apply with `-var
-github_writer_app_id=<id>`, add a user to `committers`, and run §12 step 9.
+**Deployed 2026-09-30.** "CascadeSec Fixes" is registered (Metadata read,
+Contents write, Pull requests read; webhooks off), its key imported under
+`alias/iacposture-dev-github-app-writer`, and it is installed on
+cascadesec-testbed only. Apply with `-var github_writer_app_id=<id>`
+alongside `-var github_app_id=<id>`. Of §12 step 9, a fix in the diff has
+been committed from the dashboard, and the scan of its push marked the
+fixed findings `no_longer_detected`. GitHub-first review's runs
+([`github-first-review-spec.md`](./github-first-review-spec.md) §10)
+exercised the same committer from the check run.
+
+Still to run from step 9: testbed #2's out-of-diff held file, an edited
+fix, a push between approving and committing, a push during the commit, a
+fork PR, a non-committer (403), and a branch that requires signed commits.
