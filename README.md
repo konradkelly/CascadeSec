@@ -1,87 +1,99 @@
 # CascadeSec
 
-**DevSecOps/AppSec tool: Terraform security scanning, OWASP/CIS control mapping, and AI-assisted remediation with self-verification, built on serverless AWS.**
+**Infrastructure-as-code security scanning with AI-drafted fixes that prove themselves before a human sees them. Runs on serverless AWS and inside the GitHub pull request.**
 
 ![CI](https://img.shields.io/github/actions/workflow/status/konradkelly/CascadeSec/ci.yml?branch=main&label=CI)
 ![AWS](https://img.shields.io/badge/AWS-Lambda%20%7C%20Step%20Functions%20%7C%20DynamoDB-orange)
 
----
+A deterministic scanner finds the misconfiguration. An LLM drafts the fix, then re-runs the same scanner against its own diff, and only a fix that passes reaches a reviewer. A maintainer can commit the verified fixes to the pull request's branch with one click on the GitHub check run.
 
-## What it does
+**At a glance**
 
-CascadeSec scans infrastructure-as-code -- Terraform, OpenTofu, Kubernetes manifests, CloudFormation, Azure ARM templates and Bicep -- for security misconfigurations, maps every finding to the specific OWASP or CIS control it violates, and proposes a minimal fix — one it has already proven clears the issue before a human ever sees it.
-
-**The core design principle: the agent proposes, it never decides.**
-
-- A deterministic scanner (Trivy, Checkov, plus the project's own Rego checks) finds the issue — zero hallucination risk on detection
-- An LLM agent maps the finding to the exact control it violates, with a citation, choosing only among candidates a curated rule-to-control table already allows
-- A second LLM agent drafts a minimal diff — then re-runs the same scanner against its own proposed fix before surfacing it. If the fix doesn't clear the finding, introduces a new one, or suppresses the scanner instead of fixing anything, it never reaches a human as a suggestion
-- When a fix needs to know something about the rest of the repository, the agent asks a context agent rather than assuming, and every answer is cited to `file:line`
-- Every finding and every fix is reviewed and approved by a human — nothing is auto-merged
-
-## What it looks like
-
-A fix the agent proposed for a security group in [terragoat](https://github.com/bridgecrewio/terragoat)
-— code nobody on this project wrote. The `0.0.0.0/0, all ports` egress is
-replaced by four scoped rules, and the descriptions show where each one came
-from: the agent read the instance's `user_data` and found the `apt-get` that
-needs ports 80 and 443.
+- **98.7% detection recall** (155 of 157) on a labelled corpus of 83 cases, measured against the deployed scanner — [method](./corpus/eval/README.md)
+- **Six IaC languages:** Terraform, OpenTofu, Kubernetes, CloudFormation, Azure ARM and Bicep, mapped to OWASP and CIS controls
+- **Deployed end to end:** pull request → check run → self-verified fixes → one-click commit, verified live on a test repository
+- **14 AWS services, all in Terraform**, and 880 tests in CI (Lambda, corpus, dashboard), run with no AWS credentials
 
 ![Proposed diff replacing an open egress rule with four scoped rules](docs/images/proposed-diff-egress.png)
 
-A finding the agent would *not* propose a fix for. The self-check failed and
-the fix rested on something the agent could only assume about the repository
-— so it is held for a human, with the assumption spelled out.
+*A fix the agent proposed for a security group in [terragoat](https://github.com/bridgecrewio/terragoat), code nobody on this project wrote. The `0.0.0.0/0, all ports` egress is replaced by four scoped rules. The agent read the instance's `user_data` and found the `apt-get` that needs ports 80 and 443.*
+
+## How it works
+
+**The design principle: the agent proposes, it never decides.**
+
+1. **Detect.** Trivy, Checkov, KICS and the project's own Rego checks find the issue. Detection is deterministic, so the model cannot hallucinate a finding.
+2. **Map.** An LLM agent maps each finding to the control it violates, with a citation. It can only choose among candidates that a curated rule-to-control table allows.
+3. **Fix and self-check.** A second agent drafts a minimal diff, then re-scans its own fix. A fix that doesn't clear the finding, introduces a new one, or suppresses the scanner instead of fixing anything is never shown to a human as a suggestion.
+4. **Ask instead of assume.** When a fix depends on the rest of the repository, the agent asks a context agent, and every answer is cited to `file:line`.
+5. **A human decides.** Every fix is reviewed and committed by a person, either in the dashboard or on GitHub. Nothing is auto-merged.
+
+### Why
+
+Most "AI security scanner" tools ask an LLM to find and judge issues in one pass, with no way to check the model's claims. CascadeSec keeps detection deterministic and checks every LLM-drafted fix against the same scanner that found the problem. A proposed fix is never just the model's word that it worked.
+
+## In a pull request
+
+1. A push to a PR triggers a scan through the **CascadeSec GitHub App**. The PR gets a check run with annotations on the lines it adds.
+2. **Draft fixes** on the check runs remediation. Self-checked fixes inside the PR's diff are posted as suggested changes.
+3. The check then shows every verified fix as a diff, with a **Commit fixes** button for anyone with write access. A second App, **CascadeSec Fixes**, commits them to the branch as one signed commit. It writes only over the file versions the fixes were drafted on, and refuses a click on an outdated check.
+4. That commit is scanned like any other push, which verifies each fix on the real branch.
+
+The same commit can be requested from the review dashboard by members of a `committers` Cognito group.
+
+## Screenshots
+
+A finding the agent would *not* propose a fix for. The self-check failed and the fix rested on something the agent could only assume about the repository, so it is held for a human with the assumption spelled out.
 
 ![Finding detail: control mapping, remediation rationale, and the facts the agent could not check](docs/images/finding-detail-needs-human.png)
 
-The review queue for one scan. Every finding carries its status, the rule
-that raised it, and whether the proposed fix survived the self-check.
+The review queue for one scan. Every finding carries its status, the rule that raised it, and whether the proposed fix survived the self-check.
 
 ![Findings table for one PR, showing resolved, needs-human, and fix-proposed states](docs/images/findings-table.png)
-
-## Why
-
-Most "AI security scanner" tools ask an LLM to both find and judge issues in one pass, with no way to verify the model's claims. CascadeSec splits detection (deterministic, provable) from remediation (LLM-drafted, but self-checked against the same scanner that found the problem) — so a proposed fix is never just an LLM's word that it worked.
 
 ## Architecture
 
 ```
-scripts/scan.py  ──upload──▶  S3  ──▶  Step Functions (one execution per PR)
-                                            │
-                                            ▼
-                                    iac-scanner (Lambda, container image)
-                                    Trivy + Checkov + IACP-* checks → findings
-                                            │
-                                            ▼
-                                  mapping-agent (Lambda)
-                             finding → OWASP/CIS control + citation
-                                            │
-                                            ▼
-                          Map state: remediation-agent, one per file
-                        proposes diff → self-checks against iac-scanner
-                           ↳ asks context-agent (Lambda) about the rest of
-                             the repo; every answer cited to file:line
-                                            │
-                                            ▼
-                                        DynamoDB
-                                            │
-                        API Gateway (Cognito JWT authorizer) → review-api (Lambda)
-                                            │
-                                            ▼
-                         review dashboard (React + Vite + TS, CloudFront + S3)
-                       human approves / edits / rejects → audit log
+GitHub PR / scripts/scan.py
+        │
+        ▼
+webhook-receiver (Lambda) ──▶ Step Functions (one execution per PR push)
+                                      │
+                                      ▼
+                         iac-scanner (Lambda, container image)
+                         Trivy + Checkov + KICS + IACP-* checks
+                                      │
+                                      ▼
+                             mapping-agent (Lambda)
+                       finding → OWASP/CIS control + citation
+                                      │
+                                      ▼
+                    Map state: remediation-agent, one per file
+                  proposes diff → self-checks against iac-scanner
+                    ↳ context-agent: repo questions, cited to file:line
+                                      │
+                                      ▼
+                     DynamoDB ──▶ github-gateway (Lambda)
+                                  check run, annotations, suggestions
+                                      │
+              Commit fixes click / dashboard request (committers group)
+                                      │
+                                      ▼
+            commit state machine → github-committer (Lambda, writer App)
+                         one signed commit on the PR branch
+
+API Gateway (Cognito JWT) → review-api (Lambda) → dashboard (React + Vite + TS, CloudFront + S3)
 ```
 
-Built serverless on AWS — Lambda, Step Functions, API Gateway, DynamoDB, S3, ECR, Cognito, CloudFront, Secrets Manager, CloudWatch/X-Ray, SNS — provisioned end to end in Terraform. Doubles as hands-on AWS Developer Associate (DVA-C02) practice.
+Lambda, Step Functions, API Gateway, DynamoDB, S3, ECR, Cognito, CloudFront, Secrets Manager, KMS (the GitHub Apps' signing keys), EventBridge, CloudWatch (EMF metrics, alarms), X-Ray and SNS, all provisioned in Terraform. Built partly as hands-on practice for AWS Developer Associate (DVA-C02).
 
 Full technical spec (data model, agent JSON contracts, eval plan, build phases): [`iacposture-spec.md`](./iacposture-spec.md). Per-feature specs are in [`docs/`](./docs/).
 
 ## Evaluation
 
-Detection recall is measured, not assumed: a labelled corpus of Terraform, OpenTofu, Kubernetes, ARM and Bicep cases with known injected vulnerabilities, scanned by the **deployed** scanner.
+Detection recall is measured, not assumed. The test set is a labelled corpus of Terraform, OpenTofu, Kubernetes, ARM and Bicep cases with known injected vulnerabilities, scanned by the **deployed** scanner.
 
-**98.7% — 155 of 157 expected findings across 78 positive cases and 5 clean controls** (2026-09-23, Trivy 0.74.0 + Checkov 3.3.16 + KICS 2.1.20 + `IACP-0001`). By source: Trivy 57/57, KICS 13/13, Checkov 85/87. Both misses are documented upstream tool gaps, not relabelled. The full method, the corrections log, and what the number does *not* measure are in [`corpus/eval/README.md`](./corpus/eval/README.md).
+**98.7%: 155 of 157 expected findings across 78 positive cases and 5 clean controls** (2026-09-23, Trivy 0.74.0 + Checkov 3.3.16 + KICS 2.1.20 + `IACP-0001`). By source: Trivy 57/57, KICS 13/13, Checkov 85/87. Both misses are documented upstream tool gaps and were left as misses, not relabelled. The full method, the corrections log, and what the number does *not* measure are in [`corpus/eval/README.md`](./corpus/eval/README.md).
 
 ## Running it
 
@@ -94,36 +106,27 @@ python corpus/eval/run_eval.py                    # detection recall over the la
 python corpus/external/run_external.py           # scan pinned third-party repos, compare to baseline
 ```
 
-`scan.py` uploads the directory, starts one execution of the pipeline state
-machine (scan → map → remediate, one remediation invocation per file in
-parallel), narrates it stage by stage, and prints the dashboard URL when it
-finishes. Remediation is the stage that costs model calls -- one per mapped
-finding -- which is why it asks first (`--no-remediate` stops after mapping).
+`scan.py` uploads the directory, starts one execution of the pipeline, reports each stage as it runs, and prints the dashboard URL when it finishes. Remediation costs one model call per mapped finding, so `scan.py` asks before running it (`--no-remediate` stops after mapping).
 
 ## Status
 
-**v1 is deployed and running** against a dev AWS account: multi-language IaC scanning, control mapping, self-verified remediation with per-file fix chains, and the human review dashboard. Triggered by `scripts/scan.py`, or by a pull request through the CascadeSec GitHub App (v3), which reports back on the PR as a check run and, when asked, as suggested changes. Nothing is committed to a branch yet: v4, write-back, is built and waiting to be deployed. A member of the `committers` group reviews a PR's commit plan in the dashboard and asks, and a second App commits the approved fixes as one commit, only over the file versions they were drafted on.
+**Deployed and running** against a dev AWS account, with a GitHub App installed on a test repository. CI runs the Lambda suites (pytest, 581 tests), the corpus data tests (209) and the dashboard's lint, type-check and tests (90) on every push. It runs deliberately without AWS credentials, so a test run can never touch real infrastructure.
 
-CI runs the Lambda test suites (pytest, 531 tests) and the dashboard lint + type-check on every push — deliberately with no AWS credentials, so a test run can never touch real infrastructure.
-
-## Roadmap
-
-- [x] v1 — Terraform scanning, mapping, remediation, review dashboard (manual trigger, no GitHub write-back)
-- [~] v2 — Kubernetes manifest scanning (**built 2026-09-20**); Helm charts held back, see [`docs/multi-iac-spec.md`](docs/multi-iac-spec.md) §6
-- [~] v2 — Azure ARM templates and Bicep (**built 2026-09-22**), with CIS Azure 3.0; KICS scans both since 2026-09-23, after Trivy's ARM adapter was measured unable to satisfy four of its own checks
-- [~] v2 — CloudFormation, both syntaxes (**built 2026-09-23**); all three scanners read it, so it needs no single-source caveat. CDK is deliberately out of scope: its synth output is CloudFormation, but a fix written into a generated template is overwritten by the next synth, so `cdk.out` is skipped — [`docs/multi-iac-spec.md`](docs/multi-iac-spec.md) §7.1
-- [x] v3 — GitHub App / PR-triggered CI integration (**deployed 2026-09-25**): a PR gets a check run with annotations on the lines it adds, and a Draft fixes button that posts self-checked fixes as suggested changes — [`docs/ci-integration-spec.md`](docs/ci-integration-spec.md)
-- [~] v4 — GitHub-first review (**built 2026-09-30, not yet deployed**): after Draft fixes, the check shows every verified fix as a diff and a **Commit fixes** button that anyone with write access can click — [`docs/github-first-review-spec.md`](docs/github-first-review-spec.md)
-- [~] v4 — Approved-fix write-back to PR branch (**built 2026-09-29, not yet deployed**): a commit plan in the dashboard, one commit per request as a second GitHub App with Contents write, gated on a Cognito group — [`docs/write-back-spec.md`](docs/write-back-spec.md)
+| Version | What | State |
+|---|---|---|
+| v1 | Terraform scanning, control mapping, self-verified remediation, review dashboard | Deployed |
+| v2 | Kubernetes manifests, CloudFormation, Azure ARM and Bicep (CIS Azure 3.0) | Deployed; Helm and CDK deliberately out of scope ([why](docs/multi-iac-spec.md)) |
+| v3 | GitHub App: PR check runs, annotations, Draft fixes as suggested changes | Deployed 2026-09-25 ([spec](docs/ci-integration-spec.md)) |
+| v4 | Write-back: verified fixes committed to the PR branch from the dashboard or a **Commit fixes** button on the check | Deployed and verified live 2026-09-30 ([write-back](docs/write-back-spec.md), [GitHub-first review](docs/github-first-review-spec.md)) |
 
 ## Tech stack
 
-- **Infra:** AWS Lambda (zip and container-image), Step Functions, API Gateway, DynamoDB, S3, ECR, Cognito, CloudFront, Secrets Manager, KMS (the GitHub App's signing key), EventBridge, CloudWatch (EMF metrics, alarms), X-Ray, SNS — all in Terraform
-- **GitHub:** a GitHub App — webhooks, the Checks API (annotations and an action button), and PR reviews with suggested changes
-- **Scanning:** Trivy, Checkov, KICS, custom Trivy checks in Rego — Terraform, OpenTofu, Kubernetes manifests, CloudFormation (YAML and JSON), Azure ARM templates and Bicep
-- **Agents:** Anthropic API, strict JSON-schema-constrained outputs
+- **Infra:** AWS Lambda (zip and container image), Step Functions, API Gateway, DynamoDB, S3, ECR, Cognito, CloudFront, Secrets Manager, KMS, EventBridge, CloudWatch, X-Ray, SNS, all in Terraform
+- **GitHub:** two GitHub Apps (a reader and a writer). They use webhooks, the Checks API (annotations and action buttons), PR reviews with suggested changes, and signed commits through the Git Data API
+- **Scanning:** Trivy, Checkov, KICS, and custom Trivy checks in Rego
+- **Agents:** Anthropic API, with outputs constrained to strict JSON schemas
 - **Frontend:** React, Vite, TypeScript
-- **CI:** GitHub Actions — pytest per Lambda, oxlint + `tsc` for the dashboard
+- **CI:** GitHub Actions: pytest per Lambda, corpus data tests, and oxlint, `tsc` and Vitest for the dashboard
 
 ## Disclaimer
 
