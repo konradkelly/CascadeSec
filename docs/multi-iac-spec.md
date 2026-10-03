@@ -48,8 +48,8 @@ Measured, not inferred:
 | **CloudFormation** | ✅ 8 rules on a bare bucket | ✅ 6 failed checks | same template, both tools |
 | **ARM** | ✅ `azure-arm`, ids `AZU-nnnn` | ✅ `arm` | Measured 2026-09-22 on `azure-quickstart-templates` (175 templates): Trivy **264 findings, 30 rules**; checkov **640**. Four Trivy rules cannot pass on ARM at all and are dropped for that target -- see `docs/trivy-azure-arm-adapter-gap.md` |
 | **Bicep** | ❌ not a Trivy scanner; **KICS parses it natively** | ✅ `bicep` | 4 Azure findings (`CKV_AZURE_3/35/44/206`) on a storage account with `supportsHttpsTrafficOnly: false`. At scale (107 files): **366 findings**. The runner loads in the stripped image -- `pycep-parser` survives the numpy strip, verified 2026-09-22 |
-| **Pulumi** | ❌ | ❌ | no runner in either; see §7 |
-| **CDK** | ❌ | ~ `cdk` runner, but SAST over TypeScript/Python, not a resource graph | **out of scope** (2026-09-23). `cdk synth` emits CloudFormation, which step 4 scans, but a fix to a generated template does not survive the next synth; `cdk.out` is skipped. See §7.1 |
+| **Pulumi** | ❌ | ❌ | no runner in either; see §7. As a synthetic `terraformplan-json`, both fire their Terraform rules with findings identical to hand-written Terraform (§7.2, 2026-10-03) |
+| **CDK** | ❌ | ~ `cdk` runner, but SAST over TypeScript/Python, not a resource graph | **out of scope** (2026-09-23). `cdk synth` emits CloudFormation, which step 4 scans, but a fix to a generated template does not survive the next synth; `cdk.out` is skipped. See §7.1. Reopened 2026-10-03: findings map back to source lines (§7.2) |
 
 Two results worth pulling out.
 
@@ -677,7 +677,8 @@ By cost, and each step earns the next:
    section 5. v4.0 renumbers every storage control and drops SQL auditing
    entirely, so v3.0 is vendored deliberately rather than by default. See
    `corpus/README.md`.
-6. **Pulumi/CDK.** §7. CDK is out of scope, decided 2026-09-23 (§7.1).
+6. **Pulumi/CDK.** §7. CDK is out of scope, decided 2026-09-23 (§7.1);
+   both reopened 2026-10-03 behind a sandbox that does not exist yet (§7.2).
 
 ### 6.2 Trivy gives up ARM to KICS, 2026-09-23
 
@@ -801,6 +802,10 @@ sprint. **Recommendation: do not commit to Pulumi support. Spec the
 plan-artifact ingestion path, and prototype the adapter against one provider
 to find out whether the schema mapping holds.**
 
+*Answered 2026-10-03* (§7.2): it holds, for nine AWS resource types, through
+the Terraform provider `pulumi-aws` is generated from. What remains in the
+way is the program's execution, not the rules.
+
 ### 7.1 CDK is not Pulumi, and CloudFormation is why — out of scope, 2026-09-23
 
 §2's table files CDK next to Pulumi — "out of scope with Pulumi" — and §1
@@ -870,6 +875,11 @@ and the half CDK would add is the remediation this project cannot honestly
 give it. A detection-only mode would be a second product shape for one
 input.
 
+*Reopened 2026-10-03* (§7.2). The remediation this decision says the
+project cannot give CDK can be given once the program runs on this side of
+the boundary, and a probe showed every finding leads back to the source line
+that caused it. Still out of scope until the sandbox exists.
+
 A probe settled the facts the decision rests on. A small CDK app — a bucket
 on defaults, SSH open to `0.0.0.0/0`, a `*:*` policy — synthesized in a
 throwaway `node:22-slim` container with no AWS credentials, because the stack
@@ -896,6 +906,132 @@ Not done, and the first thing to revisit if templates start arriving by
 another route: remediation-agent could refuse any template whose resources
 carry `aws:cdk:path`, which would hold a generated file out of remediation
 however it got in. `SKIP_DIRS` covers `scan.py` only.
+
+### 7.2 Reopened 2026-10-03: what running the program buys, measured
+
+§7 and §7.1 both end at the same boundary: run nothing, ingest what the
+user's own CI produces. That is the right answer for detection and the wrong
+one for the half this project exists for. A fix to a CDK or Pulumi project is
+a change to TypeScript, and the only way to verify one is to run the program
+again and rescan what it emits -- which the user's CI cannot do inside a
+remediation loop. §7.1 declined CDK because remediation could not be given
+honestly; with execution on this side of the boundary it can, and the
+self-check keeps its meaning: edit the source, synthesize, rescan.
+
+That turns "should we" into three questions that could be measured before
+any infrastructure exists, and one that cannot. The three were probed in
+throwaway `node:22-slim` containers with no AWS variables in the environment,
+and the scans ran on the deployed scanner image (`84e3955`: Trivy 0.74.0,
+checkov 3.3.16).
+
+**(a) Does a CDK finding lead back to a source line?** Yes, for every
+resource, and without opting in. `aws-cdk-lib` 2.272.0 under CLI 2.1144.0
+synthesized credential-free (it logs the failed credential lookup and goes
+on), and the metadata now lives in `<Stack>.metadata.json` rather than
+`manifest.json`. Its `aws:cdk:creationStack` entries name the constructor
+call for every construct a user wrote -- `lib/storage.ts:6`,
+`lib/network.ts:8`, `lib/stack.ts:12` -- keyed by the same construct path as
+the hashed logical id in the template, so a finding on `NetSsh9740AB70`
+resolves to the line that made the security group. Resources a library
+construct creates for itself (a `Vpc`'s subnets) carry no stack of their own
+and resolve by walking up the path to the nearest ancestor that does.
+`CDK_DEBUG=true` adds `aws:cdk:propertyAssignment`, which went one better:
+`SecurityGroupIngress` was traced to `lib/network.ts:9`, the
+`addIngressRule` call, which is the line a fix should edit rather than the
+one that created the group. One practical catch: the CLI rejects `aws:`
+context keys on the command line, so turning bundling off
+(`aws:cdk:bundling-stacks`) has to go in `cdk.json`.
+
+**(b) Can a Pulumi program be run without the engine, state or
+credentials?** Yes. Under the SDK's unit-test mocks (`setMocks`, inside
+`runInPulumiStack` so a root stack exists), with no Pulumi CLI installed,
+`@pulumi/pulumi` 3.267.0 ran a TypeScript program and recorded every
+resource with its inputs. Stack config came from `PULUMI_CONFIG`, and a
+`getVpc` lookup went to the mock's `call` instead of AWS, with its fake id
+flowing into the dependent resource. A stack transformation took a stack
+trace at construction and named the right line for each resource
+(`infra/storage.ts:5`, `infra/network.ts:6`, `index.ts:12`). Two caveats.
+That transformation is the older, synchronous API, and the newer resource
+transforms run asynchronously, where the user's frames are gone. And the
+mocks record inputs only, not the provider's defaults -- which turned out to
+be what a plan carries too (c).
+
+**(c) Do the existing rules fire on Pulumi's resources?** This was §7's
+"research project", and it reduced to an adapter of about a hundred lines.
+`pulumi-aws` is generated from the Terraform provider, and its
+`bridge-metadata.json` (v7.48.0) maps every Pulumi token to its Terraform
+type and marks which nested fields are blocks and which of those Pulumi
+flattens to a single object. With that, the mocked resources become a
+synthetic `terraformplan-json`, and Trivy and checkov scan it with their
+Terraform rules unchanged. The test is a twin: each program written again as
+hand-written Terraform, both scanned, findings compared as
+`(rule, resource address)` pairs.
+
+| Twin | Trivy | checkov |
+|---|---|---|
+| Vulnerable (9 resources) | 33 = 33 | 51 = 51 |
+| Hardened (7 resources) | 8 = 8 | 10 = 10 |
+
+No finding on one side only, in any cell. Covered: one-item blocks
+(`metadata_options`, `root_block_device`), a list Pulumi pluralizes (`rules`
+↔ `rule`), and cross-resource links (S3 encryption and versioning
+configurations and a trail pointing at a bucket).
+
+**The vulnerable twin alone proves nothing, and that is the useful finding
+here.** It matched exactly with the adapter deliberately broken -- no
+block wrapping, no singular fallback -- because every rule it exercises
+fires on *absence*: a mangled `metadata_options` reads as IMDSv1, a dropped
+encryption rule as unencrypted. Only the hardened twin discriminates, because
+a block has to be read correctly for its finding to clear. That is exactly
+the property the remediation self-check depends on, so the hardened twin is
+the test, and any Pulumi corpus case needs one. It found three requirements,
+each of which fails the self-check of a correct fix if missed:
+
+1. **One-item blocks are wrapped in a list**, as a plan holds them. Without
+   it Trivy cannot see a hardened IMDS, root volume or versioning block.
+2. **Cross-resource links become `references`** in the plan's
+   `configuration`. Under mocks `bucket: logs.bucket` arrives resolved to a
+   string, and a constant does not tie an S3 configuration to its bucket in
+   either tool.
+3. **Blocks in `configuration` are nested expressions**, not one
+   `constant_value`. Trivy reads a constant list of objects as an attribute
+   and loses the block. Found by diffing against a real
+   `terraform show -json` of the hardened twin (Terraform 1.9.8, fake
+   credentials, nothing to look up), which was clean -- so the residual
+   finding was the adapter's, not Trivy's.
+
+**Not measured, and each is a question before it is a feature:**
+
+- The probe found references by matching values. Production should take them
+  from Pulumi's own `Output` dependency tracking, which is exact; untested.
+- KICS and the `IACP-*` checks did not run on the plan. KICS is scoped to ARM
+  and Bicep (§6.2), so only the latter matters.
+- **`azure-native` is out of reach of this approach.** It is not generated
+  from Terraform, so there is no mapping. `aws`, `gcp` and the classic
+  `azure` provider are bridged.
+- Python programs (both tools), Pulumi component resources (`awsx`), and
+  more than nine AWS resource types.
+- The legacy-transformation dependency in (b).
+
+**The question that cannot be probed is the sandbox.** Running a user's
+program, and the package tree it installs, is the execution §7 refused, and
+it is the same sandbox `docs/dependency-safety-spec.md` §5 needs for its test
+gate. That spec asks for it to be specified once, on its own; it will be
+`docs/sandbox-spec.md`. The direction it starts from: one-shot Fargate tasks
+with **no task role**, so no credentials exist inside the container at all
+(CodeBuild hands its service role to the build, and Lambda its execution
+role, both readable by the code being run); an install phase with
+`--ignore-scripts` whose only egress is CodeArtifact through a VPC endpoint;
+and a run phase with no egress beyond an S3 gateway endpoint whose policy
+admits one bucket. It also needs `github-gateway` to keep the whole project
+from the tarball for these targets, not just what the scanner opens.
+
+**Status.** §7.1's decision describes what is deployed and stays true until
+something ships; it is reopened, not reversed. The probes remove the reasons
+CDK and Pulumi were set aside -- remediation that could not be verified, and
+rules that did not exist -- and leave the one §7 named first: executing
+untrusted input inside a security tool. Nothing here is built until the
+sandbox spec is.
 
 ## 8. What this does not change
 
@@ -957,3 +1093,10 @@ however it got in. `SKIP_DIRS` covers `scan.py` only.
       numbering has been stable since v1.10, so the choice of edition
       within 1.10-2.0 does not change a citation; v1.9 and earlier differ.
       Azure is still open.
+- [ ] Whether CDK and Pulumi are built (§7.2). Reopened 2026-10-03 on
+      three probes: CDK findings map to source lines, Pulumi runs under
+      mocks with no engine or credentials, and Pulumi's resources get the
+      Terraform rules with findings identical to a hand-written twin. Gated
+      on `docs/sandbox-spec.md`, shared with the dependency-safety test
+      gate. If built, CDK first: its output is already a target type, and
+      what it needs is the source mapping and a re-synth self-check.
