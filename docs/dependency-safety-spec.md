@@ -211,6 +211,10 @@ skipped silently.
       explicitly declined Fargate for the pipeline; that argument was
       about duration and cold starts, and does not settle this one,
       which is about isolation and egress.
+      *Proposed 2026-10-08* in `docs/sandbox-spec.md` §3: one-shot
+      Fargate tasks with no task role, so the code under test holds no
+      credentials at all -- the one thing neither CodeBuild nor Lambda
+      can offer.
 - [ ] Whether phase one ships before the sandbox exists (§0, §3). It can:
       detection and four gates need no execution. What it cannot do is
       say `safe-to-apply`, so the question is whether a verdict of
