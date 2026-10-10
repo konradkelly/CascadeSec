@@ -3,6 +3,7 @@
     python scripts/sandbox.py up          # apply terraform/sandbox with active=true
     python scripts/sandbox.py down        # apply with active=false: nothing billed while idle
     python scripts/sandbox.py leak-test   # run the containment test; exit 1 unless it passes
+    python scripts/sandbox.py synth DIR [--app-dir infra]   # synthesize a local CDK app
     python scripts/sandbox.py status
 
 The sandbox is applied only while in use (docs/sandbox-spec.md §10, decided
@@ -23,17 +24,27 @@ passes. Two runs:
      the reap step stopped it is reported, because spec §7 left that to be
      measured.
 
+`synth` is spec §9 step 2 without GitHub: the directory is packed the way
+github-gateway packs a repository (scan.py's SKIP_DIRS, regular files only),
+run through cdk-synth, and the outcome printed. On success the templates
+and their source maps are in scans/<pr id>/ of the artifacts bucket, where
+the pipeline's Scan would read them.
+
 Needs AWS credentials, terraform on PATH, and boto3 (the repo's .venv).
 """
 
 import argparse
+import io
 import json
 import subprocess
 import sys
+import tarfile
 import time
 from pathlib import Path
 
 import boto3
+
+from scan import SKIP_DIRS
 
 ROOT = Path(__file__).resolve().parent.parent
 TF_DIR = ROOT / "terraform" / "sandbox"
@@ -161,6 +172,66 @@ def cmd_leak_test(_args):
     sys.exit(0 if passed else 1)
 
 
+SYNTH_TIMEOUT_SECONDS = 600
+
+
+def pack_project(root):
+    """The directory as github-gateway's ProjectArchive would hold it."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for path in sorted(root.rglob("*")):
+            rel = path.relative_to(root)
+            if SKIP_DIRS & set(rel.parts) or not path.is_file() or path.is_symlink():
+                continue
+            info = tarfile.TarInfo(rel.as_posix())
+            info.size, info.mode, info.mtime = path.stat().st_size, 0o644, 0
+            with path.open("rb") as fh:
+                tar.addfile(info, fh)
+    return buf.getvalue()
+
+
+def cmd_synth(args):
+    out = outputs()
+    if not out.get("active"):
+        sys.exit("the sandbox is down: run `python scripts/sandbox.py up` first")
+    root = Path(args.dir).resolve()
+    app_dir = args.app_dir.strip("/") or "."
+    if not (root / app_dir / "cdk.json").is_file():
+        sys.exit(f"no cdk.json in {root / app_dir}")
+    region = out["state_machine_arn"].split(":")[3]
+    s3 = boto3.client("s3", region_name=region)
+    sfn = boto3.client("stepfunctions", region_name=region)
+
+    pr_id = f"manual-synth-{int(time.time())}"
+    project_key = f"projects/{pr_id}/local.tgz"
+    body = pack_project(root)
+    s3.put_object(Bucket=out["artifacts_bucket"], Key=project_key, Body=body)
+    print(f"packed {root} ({len(body) // 1024} KB) as {pr_id}, app {app_dir}")
+
+    desc = start_and_wait(sfn, out["state_machine_arn"], {
+        "kind": "cdk-synth", "phases": ["fetch", "execute"], "timeout_seconds": SYNTH_TIMEOUT_SECONDS,
+        "pr_id": pr_id, "app_dir": app_dir, "project_key": project_key})
+    if desc["status"] != "SUCCEEDED":
+        print(f"  the run itself {desc['status']}: {desc.get('error')} {desc.get('cause', '')[:500]}")
+        sys.exit(1)
+    result = json.loads(desc["output"])
+    for phase, record in result["phases"].items():
+        r = record.get("result") or {}
+        took = f" in {r['duration_ms'] / 1000:.0f}s" if r.get("duration_ms") else ""
+        print(f"  {phase:<7} {record['status']} {r.get('status', '')}{took}"
+              f"{' -- ' + r['reason'] if r.get('reason') else ''}")
+        if record.get("error"):
+            print(f"          task error: {record['error']}")
+        if args.log and r.get("log_tail"):
+            print("          " + r["log_tail"][-1500:].replace("\n", "\n          "))
+    synth = result["synth"]
+    print(f"synth {synth['status']}" + (f": {synth['reason']}" if synth.get("reason") else ""))
+    for stack in synth.get("stacks") or []:
+        print(f"  {stack['stack']}: {stack['resources']} resource(s), {stack['unlocated']} without a source line"
+              f" -> s3://{out['artifacts_bucket']}/scans/{pr_id}/{stack['template']}")
+    sys.exit(0 if synth["status"] == "ok" else 1)
+
+
 def cmd_status(_args):
     out = outputs()
     print(f"sandbox is {'UP (endpoints billed hourly)' if out.get('active') else 'down (nothing billed while idle)'}")
@@ -173,6 +244,10 @@ def main():
         p = sub.add_parser(name)
         p.add_argument("--yes", action="store_true", help="apply without asking")
     sub.add_parser("leak-test")
+    synth = sub.add_parser("synth", help="synthesize a local CDK app in the sandbox")
+    synth.add_argument("dir", help="the repository (or project) root to pack")
+    synth.add_argument("--app-dir", default=".", help="the app's directory within it (holds cdk.json)")
+    synth.add_argument("--log", action="store_true", help="print each phase's log tail")
     sub.add_parser("status")
     args = parser.parse_args()
 
@@ -182,6 +257,8 @@ def main():
         apply(False, args.yes)
     elif args.command == "leak-test":
         cmd_leak_test(args)
+    elif args.command == "synth":
+        cmd_synth(args)
     else:
         cmd_status(args)
 

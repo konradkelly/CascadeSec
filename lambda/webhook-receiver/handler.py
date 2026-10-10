@@ -232,8 +232,18 @@ def build_input(payload):
             "head_sha": _sha(pr["head"]["sha"]),
             "base_sha": _sha(pr["base"]["sha"]),
             "trigger": "push",
+            "from_fork": from_fork(pr, repo),
         },
     }
+
+
+def from_fork(pr, repo):
+    """Whether the PR's head is in another repository. A fork's code is not
+    run in the sandbox until someone with write access approves it
+    (docs/sandbox-spec.md §8). A head whose repository has been deleted
+    has none to compare, and counts as a fork."""
+    head_repo = (pr.get("head") or {}).get("repo") or {}
+    return head_repo.get("id") is None or int(head_repo["id"]) != int(repo["id"])
 
 
 def build_check_run_input(payload, delivery):
@@ -268,6 +278,10 @@ def build_check_run_input(payload, delivery):
             "head_sha": _sha(check_run["head_sha"]),
             "base_sha": _sha(pr["base"]["sha"]),
             "trigger": trigger,
+            # GitHub lists pull requests on a check run only for heads in
+            # this repository, so a fork's click never gets here; this is
+            # computed anyway rather than assumed.
+            "from_fork": from_fork(pr, repo),
         },
     }
 

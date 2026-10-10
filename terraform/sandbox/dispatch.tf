@@ -1,6 +1,8 @@
 # sandbox-dispatch (docs/sandbox-spec.md §6): the trusted side of a run.
 # prepare presigns and fetches the CodeArtifact token, reap stops what
-# outlived its run, collect reads what the task wrote as hostile input.
+# outlived its run, collect reads what the task wrote as hostile input --
+# and, for cdk-synth, writes the templates it rebuilt from it into the main
+# stack's scan prefix.
 #
 # Its permissions travel: a presigned URL acts with this role's rights for
 # its one object, and a CodeArtifact token with this role's CodeArtifact
@@ -18,6 +20,10 @@ data "archive_file" "dispatch" {
   source {
     content  = file("${path.module}/../../lambda/sandbox-dispatch/leak.py")
     filename = "leak.py"
+  }
+  source {
+    content  = file("${path.module}/../../lambda/sandbox-dispatch/cdk.py")
+    filename = "cdk.py"
   }
 }
 
@@ -52,6 +58,22 @@ data "aws_iam_policy_document" "dispatch" {
     sid       = "Runs"
     actions   = ["s3:GetObject", "s3:PutObject"]
     resources = ["${aws_s3_bucket.sandbox.arn}/runs/*"]
+  }
+  statement {
+    # cdk-synth (spec §9 step 2): a project tarball github-gateway wrote,
+    # copied into runs/ for the task, since the task can reach no other
+    # bucket. Read-only, and only projects/.
+    sid       = "Projects"
+    actions   = ["s3:GetObject"]
+    resources = ["${local.artifacts_bucket_arn}/projects/*"]
+  }
+  statement {
+    # Where collect puts what it rebuilt: a template and its source map,
+    # under the PR's scan prefix. Written by this function, from JSON it
+    # parsed and serialised itself; nothing the task wrote is copied as is.
+    sid       = "SynthesizedTemplates"
+    actions   = ["s3:PutObject"]
+    resources = ["${local.artifacts_bucket_arn}/scans/*"]
   }
   statement {
     # So a missing result.json is a 404 rather than a 403.
@@ -123,8 +145,10 @@ resource "aws_lambda_function" "dispatch" {
   handler          = "handler.handler"
   runtime          = "python3.12"
 
-  timeout     = 30
-  memory_size = 256
+  # collect reads a cloud assembly of up to 20MB and writes its templates
+  # back out (cdk.py); the leak test needed neither.
+  timeout     = 120
+  memory_size = 512
 
   environment {
     variables = {
@@ -135,6 +159,10 @@ resource "aws_lambda_function" "dispatch" {
       CODEARTIFACT_OWNER    = data.aws_caller_identity.current.account_id
       CODEARTIFACT_NPM_REPO = aws_codeartifact_repository.npm.repository
       ECR_REGISTRY          = split("/", aws_ecr_repository.node22.repository_url)[0]
+      ARTIFACTS_BUCKET      = local.artifacts_bucket
+      # Answered at once when false: no task can start without the
+      # endpoints, and a pipeline waiting on one would wait for nothing.
+      SANDBOX_ACTIVE = tostring(local.active)
     }
   }
 

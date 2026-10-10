@@ -1688,3 +1688,132 @@ def test_findings_that_did_not_move_are_left_alone(mock_dynamodb):
 
     assert (preserved, stale) == (1, 0)
     assert set(_written_sks(mock_table)) == {"FINDING#same", "FINDING#new"}
+
+
+# ---------- synthesized CDK templates (docs/sandbox-spec.md §9 step 2) ----------
+
+CDK_TEMPLATE = "infra/cdk.out/ProbeStack.template.json"
+CDK_MAP = {
+    "app": "infra", "stack": "ProbeStack", "artifact": "ProbeStack",
+    "site": {"file": "infra/bin/app.ts", "line": 4},
+    "resources": {
+        "Data666C94C7": {"lines": [3, 7], "type": "AWS::S3::Bucket", "path": "/ProbeStack/Data/Resource",
+                         "file": "infra/lib/storage.ts", "line": 6, "assignments": []},
+        "NetSsh9740AB70": {"lines": [174, 198], "type": "AWS::EC2::SecurityGroup",
+                           "path": "/ProbeStack/Net/Ssh/Resource", "file": "infra/lib/network.ts", "line": 8,
+                           "assignments": [{"property": "SecurityGroupIngress",
+                                            "file": "infra/lib/network.ts", "line": 9}]},
+        "CDKMetadata": {"lines": [216, 220], "type": "AWS::CDK::Metadata", "path": None,
+                        "file": None, "line": None, "assignments": []},
+    },
+}
+
+
+def _cdk_finding(line, file=CDK_TEMPLATE, resource="ProbeStack.template.json:3-7"):
+    return {"file": file, "line_range": [line, line], "target_type": "cloudformation", "resource": resource}
+
+
+def test_a_finding_on_a_synthesized_template_is_a_cdk_finding_at_its_source_line():
+    finding = _cdk_finding(187)
+    handler._cdk_origins([finding], {CDK_TEMPLATE: CDK_MAP})
+    assert finding["target_type"] == "cdk"
+    assert finding["resource"] == "/ProbeStack/Net/Ssh/Resource"
+    origin = finding["origin"]
+    assert (origin["file"], origin["line"], origin["logical_id"]) == ("infra/lib/network.ts", 8, "NetSsh9740AB70")
+    assert origin["assignments"][0]["line"] == 9
+
+
+def test_a_resource_with_no_source_line_falls_back_to_the_stacks():
+    finding = _cdk_finding(217)
+    handler._cdk_origins([finding], {CDK_TEMPLATE: CDK_MAP})
+    assert (finding["origin"]["file"], finding["origin"]["line"]) == ("infra/bin/app.ts", 4)
+    assert finding["origin"]["logical_id"] == "CDKMetadata"
+
+
+def test_a_finding_outside_every_resource_is_placed_at_the_stack():
+    # KICS's "IAM Access Analyzer Not Enabled" fires on Resources itself.
+    finding = _cdk_finding(2)
+    handler._cdk_origins([finding], {CDK_TEMPLATE: CDK_MAP})
+    assert finding["origin"]["logical_id"] is None
+    assert (finding["origin"]["file"], finding["origin"]["line"]) == ("infra/bin/app.ts", 4)
+    assert finding["resource"] == "ProbeStack.template.json:3-7"
+
+
+def test_a_template_without_a_map_is_still_cdk_with_no_origin():
+    finding = _cdk_finding(5)
+    handler._cdk_origins([finding], {})
+    assert finding["target_type"] == "cdk" and finding["origin"] is None
+
+
+@pytest.mark.parametrize("path", ["infra/template.json", "cdk.out.json", "x/cdk.out",
+                                  "infra/cdk.out/manifest.json"])
+def test_only_templates_under_cdk_out_are_cdk(path):
+    finding = _cdk_finding(5, file=path)
+    handler._cdk_origins([finding], {path: CDK_MAP})
+    assert finding["target_type"] == "cloudformation" and "origin" not in finding
+
+
+def test_source_maps_are_read_beside_their_templates(tmp_path):
+    work = tmp_path
+    (work / "infra" / "cdk.out").mkdir(parents=True)
+    downloaded = [str(work / "infra" / "cdk.out" / "ProbeStack.template.json"), str(work / "main.tf")]
+    s3 = MagicMock()
+    s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(CDK_MAP).encode())}
+    with patch.object(handler, "s3", s3):
+        maps = handler._cdk_source_maps("bucket", "scans/pr-1/", downloaded, str(work))
+    assert maps == {CDK_TEMPLATE: CDK_MAP}
+    assert s3.get_object.call_args.kwargs["Key"] == "scans/pr-1/infra/cdk.out/ProbeStack.template.sources"
+
+
+def test_a_missing_or_unreadable_map_is_skipped(tmp_path):
+    downloaded = [str(tmp_path / "cdk.out" / "A.template.json"), str(tmp_path / "cdk.out" / "B.template.json")]
+    s3 = MagicMock()
+    s3.get_object.side_effect = [ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject"),
+                                 {"Body": MagicMock(read=lambda: b"\xff")}]
+    with patch.object(handler, "s3", s3):
+        assert handler._cdk_source_maps("bucket", "scans/pr-1/", downloaded, str(tmp_path)) == {}
+
+
+def test_cdk_dirs_name_the_apps_that_synthesized(tmp_path):
+    downloaded = [str(tmp_path / p) for p in (
+        "infra/cdk.out/A.template.json", "infra/cdk.out/assembly-Prod/B.template.json",
+        "cdk.out/Root.template.json", "main.tf")]
+    assert handler._cdk_dirs(downloaded, str(tmp_path)) == {"infra/cdk.out", "cdk.out"}
+
+
+@patch.object(handler, "dynamodb")
+def test_a_cdk_finding_whose_app_did_not_synthesize_is_not_marked_gone(mock_dynamodb):
+    mock_table = MagicMock()
+    mock_table.query.return_value = {"Items": [
+        {"finding_id": "held", "file": "infra/cdk.out/ProbeStack.template.json"},
+        {"finding_id": "removed-stack", "file": "svc/cdk.out/Old.template.json"},
+        {"finding_id": "tf", "file": "main.tf"},
+    ]}
+    mock_dynamodb.Table.return_value = mock_table
+    # svc synthesized this time (without its old stack); infra did not.
+    assert handler._write_findings("pr-1", [], {"svc/cdk.out"}) == (0, 2)
+    marked = sorted(c.kwargs["Key"]["sk"] for c in mock_table.update_item.call_args_list)
+    assert marked == ["FINDING#removed-stack", "FINDING#tf"]
+
+
+@patch.object(handler, "dynamodb")
+def test_a_cdk_findings_origin_is_written_and_others_get_none(mock_dynamodb):
+    mock_table = MagicMock()
+    mock_table.query.return_value = {"Items": []}
+    mock_dynamodb.Table.return_value = mock_table
+    cdk = {**_finding("c1"), "target_type": "cdk", "origin": {"file": "a.ts", "line": 3}}
+    handler._write_findings("pr-1", [cdk, _finding("t1")])
+    calls = {c.kwargs["Key"]["sk"]: c.kwargs for c in mock_table.update_item.call_args_list}
+    assert "origin = :origin" in calls["FINDING#c1"]["UpdateExpression"]
+    assert calls["FINDING#c1"]["ExpressionAttributeValues"][":origin"] == {"file": "a.ts", "line": 3}
+    assert "origin" not in calls["FINDING#t1"]["UpdateExpression"]
+
+
+@patch.object(handler, "_download_snapshot", return_value=([], [], {}))
+def test_an_empty_prefix_is_allowed_when_asked(_download):
+    out = handler.handler({"pr_id": "p", "s3_prefix": "scans/p/", "allow_empty": True,
+                           "return_findings": False}, None)
+    assert out == {"pr_id": "p", "finding_count": 0, "scan_errors": [],
+                   "preserved_count": 0, "no_longer_detected_count": 0}
+    with pytest.raises(ValueError, match="no IaC files"):
+        handler.handler({"pr_id": "p", "s3_prefix": "scans/p/"}, None)

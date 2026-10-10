@@ -20,7 +20,8 @@ Every finding records two things about what it came from, because one field
 could not answer both (multi-iac-spec §3.1):
 
   target_type    what to re-run to verify a fix -- terraform, opentofu,
-                 kubernetes, arm, bicep
+                 kubernetes, arm, bicep, cloudformation, and cdk for a
+                 template the sandbox synthesized (below)
   finding_class  what kind of problem, and so which remediation path --
                  misconfiguration, secret, vulnerability
 
@@ -32,8 +33,15 @@ Event shape:
   "pr_id": "manual-1",
   "s3_prefix": "scans/manual-1/",   # snapshot under ARTIFACTS_BUCKET (see SNAPSHOT_SUFFIXES)
   "persist": true,                   # optional, default true
-  "return_findings": true            # optional, default true
+  "return_findings": true,           # optional, default true
+  "allow_empty": false               # optional, default false
 }
+
+allow_empty=true makes an empty prefix a scan with nothing in it rather
+than an error. The pipeline sets it for a repository whose only IaC is a
+CDK app (github-gateway's allow_empty_scan): if the synth produced nothing,
+there is nothing to scan, and that is the synth's result to report, not a
+scanner fault. Nothing is written, so nothing is marked no longer detected.
 
 return_findings=false leaves the findings list out of the response and
 keeps only the counts. The pipeline's Scan state sets it: a Step Functions
@@ -50,6 +58,16 @@ only be "terraform".
 Each returned finding's "file" is relative to s3_prefix (e.g. "main.tf"), not
 a local /tmp path -- callers can reconstruct the object's S3 key as
 f"{s3_prefix}{finding['file']}".
+
+A CDK app's templates arrive in the snapshot under `<app>/cdk.out/`,
+written there by sandbox-dispatch after a synth (docs/sandbox-spec.md §9
+step 2). Nothing from a repository can be at that path -- every uploader
+drops cdk.out (SKIP_DIRS) -- so the path is what marks them. They are
+scanned as the CloudFormation they are, and each finding on one becomes
+target_type "cdk" and carries an `origin`: the source line that made its
+resource, from the template's source map beside it (_cdk_origins). What
+re-runs to verify a fix to one is a synth, not a rescan of the file, which
+is why it is a target_type of its own.
 
 Re-scanning a PR does not reset it. A finding id is a hash of
 (source, rule, file, lines), so an id that fires again is the same finding
@@ -444,6 +462,13 @@ def handler(event, context):
         downloaded, unreadable_templates, classifications = _download_snapshot(
             ARTIFACTS_BUCKET, s3_prefix, work_dir)
         if not downloaded:
+            if event.get("allow_empty"):
+                logger.info("nothing to scan under %s, and the caller allows that", s3_prefix)
+                response = {"pr_id": pr_id, "finding_count": 0, "findings": [], "scan_errors": [],
+                            "preserved_count": 0, "no_longer_detected_count": 0}
+                if not event.get("return_findings", True):
+                    del response["findings"]
+                return response
             raise ValueError(f"no IaC files found under s3://{ARTIFACTS_BUCKET}/{s3_prefix}")
         # Before normalizing, because what a .yaml is has to be known by the
         # time its findings are given a target_type.
@@ -459,6 +484,7 @@ def handler(event, context):
             + _normalize_checkov(checkov_report, pr_id, classifications)
             + _normalize_kics(kics_report, work_dir, pr_id, classifications)
         )
+        _cdk_origins(findings, _cdk_source_maps(ARTIFACTS_BUCKET, s3_prefix, downloaded, work_dir))
 
         kics_unparsed = _kics_unparsed_count(kics_report)
         if kics_unparsed:
@@ -488,7 +514,7 @@ def handler(event, context):
 
         preserved = stale = 0
         if persist:
-            preserved, stale = _write_findings(pr_id, findings)
+            preserved, stale = _write_findings(pr_id, findings, _cdk_dirs(downloaded, work_dir))
 
         # Spec §4.1's findings-per-scan metric. Self-checks are excluded by
         # the persist flag: a rescan of one patched file is not a scan of a
@@ -610,6 +636,113 @@ def _is_cfn_document(doc):
         and body["Type"].split("::")[0] in CFN_TYPE_NAMESPACES
         for body in resources.values()
     )
+
+
+CDK_OUT = "cdk.out"
+CDK_TEMPLATE_SUFFIX = ".template.json"
+# sandbox-dispatch's cdk.sources_key: beside the template, under a suffix
+# nothing admits, so the map is read here by name and never scanned.
+CDK_SOURCES_SUFFIX = ".template.sources"
+MAX_CDK_SOURCES_BYTES = 20 * 1024 * 1024
+
+
+def _is_cdk_template(rel_path):
+    return CDK_OUT in rel_path.split("/")[:-1] and rel_path.endswith(CDK_TEMPLATE_SUFFIX)
+
+
+def _cdk_dir(rel_path):
+    """`infra/cdk.out` for `infra/cdk.out/assembly-Prod/Api.template.json`."""
+    parts = rel_path.split("/")
+    return "/".join(parts[: parts.index(CDK_OUT) + 1])
+
+
+def _cdk_dirs(downloaded, work_dir):
+    """The cdk.out directories this scan holds a template in: the apps that
+    synthesized this time."""
+    rel_paths = (os.path.relpath(p, work_dir).replace(os.sep, "/") for p in downloaded)
+    return {_cdk_dir(r) for r in rel_paths if _is_cdk_template(r)}
+
+
+def _cdk_source_maps(bucket, prefix, downloaded, work_dir):
+    """{template path: its source map} for each synthesized template.
+
+    Written by sandbox-dispatch from JSON it parsed and checked itself, so
+    trusted as to shape -- but every location in it is the app's claim
+    about itself, and is only used to place an annotation (github-gateway).
+    A template without one still scans; its findings carry no origin."""
+    maps = {}
+    for local_path in downloaded:
+        rel_path = os.path.relpath(local_path, work_dir).replace(os.sep, "/")
+        if not _is_cdk_template(rel_path):
+            continue
+        key = prefix + rel_path[: -len(CDK_TEMPLATE_SUFFIX)] + CDK_SOURCES_SUFFIX
+        try:
+            obj = s3.get_object(Bucket=bucket, Key=key, Range=f"bytes=0-{MAX_CDK_SOURCES_BYTES - 1}")
+            data = json.loads(obj["Body"].read().decode("utf-8"))
+        except ClientError as e:
+            if e.response["Error"]["Code"] not in ("NoSuchKey", "404"):
+                raise
+            logger.warning("no source map for synthesized template %s", rel_path)
+            continue
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            logger.warning("unreadable source map for synthesized template %s", rel_path)
+            continue
+        if isinstance(data, dict) and isinstance(data.get("resources"), dict):
+            maps[rel_path] = data
+    return maps
+
+
+def _cdk_origins(findings, maps):
+    """Make each finding on a synthesized template a cdk finding, in place.
+
+    Its resource is the one whose lines in the template hold the finding's
+    first line. Spans, not the tools' resource names, because the three
+    tools name CloudFormation resources three ways (sandbox-dispatch's
+    cdk.py). A finding outside every resource -- one about the template as
+    a whole -- is placed where the stack was created.
+
+    `resource` becomes the construct path. The tools' own name for a
+    resource is sometimes a line range, which moves whenever the template
+    does, and _carry_moved_ids pairs a moved finding by resource. A
+    construct path moves only when the code is restructured, and it is what
+    a CDK author recognises."""
+    for finding in findings:
+        if not _is_cdk_template(finding["file"]):
+            continue
+        finding["target_type"] = "cdk"
+        source_map = maps.get(finding["file"])
+        if source_map is None:
+            finding["origin"] = None
+            continue
+        try:
+            first = int((finding.get("line_range") or [None])[0])
+        except (TypeError, ValueError):
+            first = None
+        hit = None
+        for logical_id, entry in source_map["resources"].items():
+            lines = entry.get("lines") if isinstance(entry, dict) else None
+            if first is not None and isinstance(lines, list) and len(lines) == 2 and lines[0] <= first <= lines[1]:
+                hit = (logical_id, entry)
+                break
+        site = source_map.get("site") if isinstance(source_map.get("site"), dict) else {}
+        if hit:
+            logical_id, entry = hit
+            located = entry if entry.get("file") else site
+            finding["origin"] = {
+                "app": source_map.get("app"), "stack": source_map.get("stack"),
+                "logical_id": logical_id, "construct_path": entry.get("path"),
+                "type": entry.get("type"),
+                "file": located.get("file"), "line": located.get("line"),
+                "assignments": entry.get("assignments") or [],
+            }
+            if entry.get("path"):
+                finding["resource"] = entry["path"]
+        else:
+            finding["origin"] = {
+                "app": source_map.get("app"), "stack": source_map.get("stack"),
+                "logical_id": None, "construct_path": None, "type": None,
+                "file": site.get("file"), "line": site.get("line"), "assignments": [],
+            }
 
 
 def _download_snapshot(bucket, prefix, dest_dir):
@@ -1193,10 +1326,17 @@ def _build_finding(pr_id, source, rule_id, file_path, line_range, severity,
     }
 
 
-def _write_findings(pr_id, findings):
+def _write_findings(pr_id, findings, scanned_cdk_dirs=None):
     """Persist this scan without discarding what humans and agents decided.
 
     Returns (preserved, no_longer_detected).
+
+    A synthesized CDK template is absent from a snapshot whenever its app
+    did not synthesize -- the sandbox was off, or the app failed -- and
+    that is not the finding going away. So a finding on one is marked only
+    if its app's cdk.out is in `scanned_cdk_dirs`, i.e. the app did
+    synthesize this time; then a missing template is a stack that was
+    removed, and its findings are gone in the ordinary sense.
 
     A plain put_item overwrote the whole record, so every re-scan reset each
     finding that still fired to status "raw" with no mapping and no proposed
@@ -1248,10 +1388,14 @@ def _write_findings(pr_id, findings):
                     len(moved), pr_id, sorted(moved))
     preserved = len(known & set(unique))
     for finding in unique.values():
+        # Scanner-owned like the rest, and only a synthesized template's
+        # findings have one.
+        origin = "origin = :origin, " if "origin" in finding else ""
         table.update_item(
             Key={"pk": finding["pk"], "sk": finding["sk"]},
             UpdateExpression=(
                 "SET finding_id = :finding_id, target_type = :target_type, "
+                + origin +
                 "finding_class = :finding_class, "
                 "#source = :source, rule_id = :rule_id, #file = :file, "
                 "line_range = :line_range, severity = :severity, "
@@ -1287,10 +1431,17 @@ def _write_findings(pr_id, findings):
                 ":raw": "raw",
                 ":empty": [],
                 ":null": None,
+                **({":origin": finding["origin"]} if "origin" in finding else {}),
             },
         )
 
     stale = known - set(unique)
+    held = {i for i in stale if _is_cdk_template(existing[i].get("file", ""))
+            and _cdk_dir(existing[i]["file"]) not in (scanned_cdk_dirs or set())}
+    if held:
+        logger.info("%d finding(s) on CDK templates not synthesized this time left as they were",
+                    len(held))
+    stale -= held
     # Only the first scan that stops seeing a finding records when; a later
     # one leaves the date alone. Skipping the marked ones here is what does
     # that. The condition only settles a race between two scans of one PR,

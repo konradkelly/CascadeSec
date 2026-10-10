@@ -23,3 +23,8 @@ output "sandbox_bucket" {
 output "task_log_group" {
   value = aws_cloudwatch_log_group.tasks.name
 }
+
+output "artifacts_bucket" {
+  description = "The main stack's bucket, where a cdk-synth run's project comes from and its templates go (scripts/sandbox.py synth)."
+  value       = local.artifacts_bucket
+}

@@ -22,6 +22,7 @@ import {
   normalizePrerequisite,
   type UnmetPrerequisite,
 } from '../review/prerequisites'
+import { CDK_DETECTION_ONLY, cdkSource, isCdk } from '../review/cdk'
 import type { Finding, ReviewEvent } from '../types/finding'
 
 export function FindingDetailPage() {
@@ -175,6 +176,13 @@ export function FindingDetailPage() {
           <p className="finding-meta">
             <span>{finding.source}</span>
             <span>·</span>
+            {cdkSource(finding) && (
+              <>
+                <code>{cdkSource(finding)}</code>
+                <span>·</span>
+                <span>synthesized into</span>
+              </>
+            )}
             <code>{finding.file}</code>
             {finding.line_range?.[0] != null && (
               <>
@@ -194,6 +202,21 @@ export function FindingDetailPage() {
           <SelfCheckBadge proposedFix={finding.proposed_fix} targetType={finding.target_type} />
         </div>
       </div>
+
+      {isCdk(finding) && (
+        <div className="alert alert--info">
+          <p>
+            {CDK_DETECTION_ONLY}
+            {finding.origin?.construct_path && (
+              <>
+                {' '}
+                The resource is <code>{finding.origin.construct_path}</code>
+                {finding.origin.type && <> ({finding.origin.type})</>}.
+              </>
+            )}
+          </p>
+        </div>
+      )}
 
       {finding.no_longer_detected && (
         <div className="alert alert--info">

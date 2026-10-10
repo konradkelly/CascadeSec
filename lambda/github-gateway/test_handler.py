@@ -216,9 +216,146 @@ def test_fetch_reports_changed_iac_files_only(github_calls):
         result = handler.handler(_fetch_event(), None)
 
     assert result == {"status": "ok", "check_run_id": 55, "kept_count": 2,
-                      "changed_files": ["main.tf"], "reason": None}
+                      "changed_files": ["main.tf"], "reason": None,
+                      "cdk_runs": [], "cdk_skipped": [], "changed_prefixes": [],
+                      "allow_empty_scan": False}
     stored = [c for c in s3.put_object.call_args_list if c.kwargs["Key"].startswith("github/")]
     assert stored[0].kwargs["Key"] == f"github/gh-123456-7/{HEAD}/files.json"
+
+
+# ---------- fetch: CDK apps (docs/sandbox-spec.md §9 step 2) ----------
+
+CDK_APP = [
+    ("o-r-sha/infra/cdk.json", b'{"app": "npx tsx bin/app.ts"}'),
+    ("o-r-sha/infra/package.json", b"{}"),
+    ("o-r-sha/infra/package-lock.json", b"{}"),
+    ("o-r-sha/infra/bin/app.ts", b"new App()"),
+    ("o-r-sha/infra/node_modules/x/index.js", b"x"),
+    ("o-r-sha/infra/cdk.out/Old.template.json", b'{"Resources": {}}'),
+    ("o-r-sha/README.md", b"readme"),
+]
+
+
+@pytest.fixture(autouse=True)
+def cdk_synthesis_enabled(monkeypatch):
+    monkeypatch.setattr(handler, "CDK_SYNTHESIS_ENABLED", True)
+
+
+def test_with_synthesis_off_an_app_is_reported_not_run(monkeypatch):
+    monkeypatch.setattr(handler, "CDK_SYNTHESIS_ENABLED", False)
+    result, puts = _fetch_with(CDK_APP + [("o-r-sha/main.tf", b"x")])
+    assert result["cdk_runs"] == [] and result["cdk_skipped"][0]["status"] == "disabled"
+    assert not any(k.startswith("projects/") for k in puts)
+
+
+def _fetch_with(members, github=None, pr_files=()):
+    """fetch over a real tarball, through read_snapshot."""
+    def download(_github, _token, project=None):
+        return handler.read_snapshot(_tarball(members), project)
+    with patch.object(handler, "installation_token", return_value="tok"),             patch.object(handler, "_request", return_value={"id": 55}),             patch.object(handler, "_paginate", return_value=list(pr_files)),             patch.object(handler, "s3") as s3,             patch.object(handler, "download_snapshot", side_effect=download):
+        s3.get_paginator.return_value.paginate.return_value = [{}]
+        event = _fetch_event()
+        event["github"] = {**event["github"], "from_fork": False, **(github or {})}
+        result = handler.handler(event, None)
+    puts = {c.kwargs["Key"]: c.kwargs["Body"] for c in s3.put_object.call_args_list}
+    return result, puts
+
+
+def _project_names(body):
+    with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as tar:
+        return sorted(tar.getnames())
+
+
+def test_read_snapshot_hands_every_safe_file_to_the_project():
+    project = handler.ProjectArchive()
+    kept = handler.read_snapshot(_tarball(CDK_APP + [
+        ("o-r-sha/main.tf", b"x"),
+        ("o-r-sha/../escape.ts", b"x"),
+        ("o-r-sha/link.ts", tarfile.SYMTYPE, "/etc/passwd"),
+    ]), project)
+    assert kept == {"main.tf": b"x"}
+    # node_modules and cdk.out stay out: fetch installs the one, and the
+    # other is where the sandbox's own output goes.
+    assert sorted(project.files) == ["README.md", "infra/bin/app.ts", "infra/cdk.json",
+                                     "infra/package-lock.json", "infra/package.json", "main.tf"]
+    assert _project_names(project.finish()) == sorted(project.files)
+    project.close()
+
+
+def test_a_cdk_app_is_kept_for_the_sandbox_and_its_templates_mapped_if_touched():
+    result, puts = _fetch_with(CDK_APP + [("o-r-sha/main.tf", b"x")], pr_files=[
+        {"filename": "infra/bin/app.ts", "status": "modified", "patch": "@@ -1 +1 @@\n+x"}])
+    key = f"projects/gh-123456-7/{HEAD}.tgz"
+    assert result["status"] == "ok"
+    assert result["cdk_runs"] == [{"app_dir": "infra", "project_key": key}]
+    assert result["changed_prefixes"] == ["infra/cdk.out/"]
+    assert result["allow_empty_scan"] is False
+    assert "infra/bin/app.ts" in _project_names(puts[key])
+
+
+def test_an_untouched_app_is_synthesized_but_not_mapped():
+    result, _ = _fetch_with(CDK_APP + [("o-r-sha/main.tf", b"x")], pr_files=[
+        {"filename": "main.tf", "status": "modified", "patch": "@@ -1 +1 @@\n+x"}])
+    assert len(result["cdk_runs"]) == 1 and result["changed_prefixes"] == []
+
+
+def test_a_repository_that_is_only_cdk_scans_what_synth_writes():
+    result, _ = _fetch_with(CDK_APP)
+    assert result["status"] == "ok" and result["kept_count"] == 0
+    assert result["allow_empty_scan"] is True
+
+
+@pytest.mark.parametrize("github", [{"from_fork": True}, {"from_fork": None}])
+def test_a_fork_is_not_run(github):
+    result, puts = _fetch_with(CDK_APP + [("o-r-sha/main.tf", b"x")], github=github)
+    assert result["cdk_runs"] == []
+    assert result["cdk_skipped"][0]["status"] == "needs_approval"
+    assert not any(k.startswith("projects/") for k in puts)
+
+
+def test_an_input_without_the_fork_field_is_treated_as_a_fork():
+    project = handler.ProjectArchive()
+    project.names = {"cdk.json", "package.json", "package-lock.json"}
+    assert handler.cdk_apps(project, {})[0]["status"] == "needs_approval"
+    project.close()
+
+
+@pytest.mark.parametrize("drop,why", [("package.json", "TypeScript and JavaScript"),
+                                      ("package-lock.json", "package-lock.json")])
+def test_an_app_npm_cannot_install_is_unsupported(drop, why):
+    members = [m for m in CDK_APP if not m[0].endswith("/" + drop)] + [("o-r-sha/main.tf", b"x")]
+    result, _ = _fetch_with(members)
+    [skipped] = result["cdk_skipped"]
+    assert skipped["status"] == "unsupported" and why in skipped["reason"]
+
+
+def test_only_cdk_and_nothing_runnable_is_empty_and_says_why():
+    result, _ = _fetch_with(CDK_APP, github={"from_fork": True})
+    assert result["status"] == "empty"
+    assert "`infra`" in result["reason"] and "fork" in result["reason"]
+
+
+def test_an_oversized_project_reports_its_apps_and_scans_the_rest(monkeypatch):
+    monkeypatch.setattr(handler, "MAX_PROJECT_BYTES", 20)
+    result, _ = _fetch_with(CDK_APP + [("o-r-sha/main.tf", b"x")])
+    assert result["status"] == "ok" and result["kept_count"] == 1
+    assert result["cdk_skipped"][0]["status"] == "too_large"
+
+
+def test_apps_past_the_cap_are_reported(monkeypatch):
+    monkeypatch.setattr(handler, "MAX_CDK_APPS", 1)
+    second = [(n.replace("/infra/", "/infra2/"), d) for n, d in CDK_APP if "/infra/" in n]
+    result, _ = _fetch_with(CDK_APP + second)
+    assert [r["app_dir"] for r in result["cdk_runs"]] == ["infra"]
+    assert result["cdk_skipped"] == [{"app_dir": "infra2", "status": "too_many",
+                                      "reason": "only the first 1 CDK apps are synthesized"}]
+
+
+def test_a_root_app_maps_under_the_root_cdk_out():
+    members = [(n.replace("/infra/", "/"), d) for n, d in CDK_APP]
+    result, _ = _fetch_with(members, pr_files=[{"filename": "bin/app.ts", "status": "modified"}])
+    assert result["cdk_runs"][0]["app_dir"] == "."
+    assert result["changed_prefixes"] == ["cdk.out/"]
 
 
 def test_fetch_too_large_scans_nothing(github_calls):
@@ -487,12 +624,14 @@ def _finding(fid, line, status="mapped", severity="HIGH", file="f.tf"):
             "control_mappings": [{"control_id": "CIS 1.1"}]}
 
 
-def _report(findings, remediate=False, fetch_status="ok", patch_text="@@ -1,2 +1,3 @@\n a\n+b\n c"):
+def _report(findings, remediate=False, fetch_status="ok", patch_text="@@ -1,2 +1,3 @@\n a\n+b\n c",
+            extra_state=None, pr_path="f.tf"):
     state = {"pr_id": "p", "github": {**GITHUB, "trigger": "fixes" if remediate else "push"},
              "remediate": remediate, "scan": {"scan_errors": []},
              "fetch": {"status": fetch_status, "check_run_id": 55, "kept_count": 3,
-                       "changed_files": ["f.tf"], "reason": "why not"}}
-    files_json = json.dumps([{"filename": "f.tf", "status": "modified", "patch": patch_text}]).encode()
+                       "changed_files": ["f.tf"], "reason": "why not"},
+             **(extra_state or {})}
+    files_json = json.dumps([{"filename": pr_path, "status": "modified", "patch": patch_text}]).encode()
     with patch.object(handler, "installation_token", return_value="tok"), \
             patch.object(handler, "_request", return_value={}) as request, \
             patch.object(handler, "query_findings", return_value=findings), \
@@ -532,6 +671,71 @@ def test_report_sends_annotations_in_batches_of_fifty():
     calls = [c.args[3] for c in request.call_args_list]
     assert [len(c["output"].get("annotations", [])) for c in calls] == [50, 50, 20]
     assert "status" not in calls[0] and calls[-1]["status"] == "completed"
+
+
+def _cdk_finding(fid, origin, template_line=180):
+    f = _finding(fid, template_line, file="infra/cdk.out/ProbeStack.template.json")
+    f.update(target_type="cdk", resource="/ProbeStack/Net/Ssh/Resource", origin=origin)
+    return f
+
+
+def test_a_cdk_finding_is_annotated_on_the_source_line_that_made_it():
+    finding = _cdk_finding("1", {"file": "infra/lib/network.ts", "line": 2, "logical_id": "NetSsh9740AB70"})
+    _, request, _ = _report([finding], pr_path="infra/lib/network.ts")
+    [ann] = request.call_args.args[3]["output"]["annotations"]
+    assert (ann["path"], ann["start_line"], ann["end_line"]) == ("infra/lib/network.ts", 2, 2)
+    assert "infra/cdk.out/ProbeStack.template.json" in ann["message"]
+    assert "not drafted" in ann["message"]
+
+
+@pytest.mark.parametrize("origin", [
+    {"file": "infra/lib/network.ts", "line": 1},   # a line the PR did not add
+    {"file": "other.ts", "line": 2},               # a file the PR did not touch
+    {"file": None, "line": None},                  # a resource with no source line
+    None,
+    {"file": "infra/lib/network.ts", "line": "x"},
+])
+def test_a_cdk_finding_off_the_added_lines_is_not_annotated(origin):
+    _, request, _ = _report([_cdk_finding("1", origin)], pr_path="infra/lib/network.ts")
+    assert "annotations" not in request.call_args.args[3]["output"]
+
+
+def test_a_cdk_finding_is_never_placed_on_the_template_itself():
+    # Even if the PR somehow added the template's own line.
+    _, request, _ = _report([_cdk_finding("1", None, template_line=2)],
+                            pr_path="infra/cdk.out/ProbeStack.template.json")
+    assert "annotations" not in request.call_args.args[3]["output"]
+
+
+def test_a_cdk_finding_alone_offers_no_draft_fixes():
+    finding = _cdk_finding("1", {"file": "f.tf", "line": 2})
+    _, request, _ = _report([finding])
+    assert "actions" not in request.call_args.args[3]
+
+
+def test_the_summary_accounts_for_every_cdk_app():
+    synth = [
+        {"app_dir": "infra", "status": "ok", "templates": ["infra/cdk.out/ProbeStack.template.json",
+                                                         "infra/cdk.out/assembly-Prod/ProdApi.template.json"]},
+        {"app_dir": "svc", "status": "failed", "reason": "the app exited 1"},
+        {"app_dir": "evil", "status": "error", "reason": "x` [click](https://evil.example) @org/team\nmore"},
+    ]
+    skipped = [{"app_dir": "fork-app", "status": "needs_approval", "reason": "this pull request comes from a fork"}]
+    _, request, _ = _report([], extra_state={"synth": synth, "fetch": {
+        "status": "ok", "check_run_id": 55, "kept_count": 0, "changed_files": [], "cdk_skipped": skipped}})
+    summary = request.call_args.args[3]["output"]["summary"]
+    assert "- `infra`: 2 stack(s) synthesized: `ProbeStack`, `ProdApi`" in summary
+    assert "- `svc`: not synthesized, the app failed: `the app exited 1`" in summary
+    assert "- `fork-app`: not synthesized, this pull request comes from a fork" in summary
+    # What the sandbox reports is code: no link, no mention, no way out of the span.
+    evil = next(line for line in summary.split("\n") if line.startswith("- `evil`"))
+    assert evil.endswith("`x [click](https://evil.example) @org/team more`")
+    assert evil.count("`") == 4
+
+
+def test_no_cdk_section_without_cdk():
+    _, request, _ = _report([_finding("1", 2)])
+    assert "CDK" not in request.call_args.args[3]["output"]["summary"]
 
 
 def test_report_offers_draft_fixes_when_changed_files_have_mapped_findings():

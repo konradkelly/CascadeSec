@@ -7,8 +7,11 @@
 # run: a task that failed or timed out is still a task to stop and a result
 # to read, and the leak test wants to see both phases even when one breaks.
 #
-# Input: {"kind": "leak-test" | "sleep", "phases": ["fetch", "execute"],
-#         "timeout_seconds": 300}
+# Input: {"kind": "leak-test" | "sleep" | "cdk-synth",
+#         "phases": ["fetch", "execute"], "timeout_seconds": 300}
+#        cdk-synth adds {"pr_id", "app_dir", "project_key"}: the main
+#        pipeline's Synthesize state starts one execution per CDK app.
+# Output: Collect's. For cdk-synth its "synth" is what the pipeline reads.
 
 locals {
   run_task = {
@@ -72,15 +75,18 @@ locals {
         Parameters = {
           FunctionName = aws_lambda_function.dispatch.arn
           Payload = {
-            action              = "prepare"
-            "kind.$"            = "$.kind"
-            "phases.$"          = "$.phases"
-            "timeout_seconds.$" = "$.timeout_seconds"
+            action = "prepare"
+            # The whole input: which fields a kind needs is prepare's to
+            # check, and a path naming a field the leak test does not send
+            # would fail the state.
+            "request.$" = "$"
           }
         }
         # The Lambda returns the run's whole initial state: {prepared,
         # timeout_seconds, tasks: {}, errors: {}}. The empty maps are there
-        # so Collect's paths resolve whichever states ran.
+        # so Collect's paths resolve whichever states ran, and `prepared`
+        # always carries pr_id, app_dir and unavailable, null or false
+        # where a kind has none.
         OutputPath = "$.Payload"
         Retry      = [local.lambda_retry]
         Next       = "FetchWanted"
@@ -125,6 +131,10 @@ locals {
             "tasks.$"  = "$.tasks"
             "errors.$" = "$.errors"
             "reap.$"   = "$.reap.reaped"
+            # cdk-synth's; null for the containment's own kinds.
+            "pr_id.$"       = "$.prepared.pr_id"
+            "app_dir.$"     = "$.prepared.app_dir"
+            "unavailable.$" = "$.prepared.unavailable"
           }
         }
         OutputPath = "$.Payload"

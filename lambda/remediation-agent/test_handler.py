@@ -2873,3 +2873,24 @@ def test_a_fix_decided_while_being_reopened_is_left_as_decided():
 
     assert stale["status"] == "fix-proposed"
     table.put_item.assert_not_called()
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_cdk_finding_is_never_drafted(mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client):
+    """Detection only until a fix can be verified by synthesizing again
+    (docs/sandbox-spec.md §9 step 3): no model call, no write."""
+    finding = {"pk": "PR#gh-1-2", "sk": "FINDING#c1", "finding_id": "c1", "status": "mapped",
+               "target_type": "cdk", "file": "infra/cdk.out/Stack.template.json",
+               "rule_id": "CKV_AWS_24", "source": "checkov", "line_range": [180, 198]}
+    mock_table = MagicMock()
+    mock_table.query.return_value = {"Items": [finding]}
+    mock_dynamodb.Table.return_value = mock_table
+
+    result = handler.handler({"pr_id": "gh-1-2"}, None)
+
+    mock_get_client.return_value.messages.create.assert_not_called()
+    mock_table.update_item.assert_not_called()
+    assert result["fix_proposed_count"] == 0 and result["error_count"] == 0

@@ -24,6 +24,10 @@
 #         RecordPullRequest before Scan, SelectFiles before Remediate, Report
 #         at the end. Without it (scripts/scan.py) the execution is what it
 #         always was.
+#         A GitHub run whose fetch found CDK apps the sandbox may run adds
+#         Synthesize before Scan: one sandbox-run execution per app
+#         (docs/sandbox-spec.md §7, Detection), whose templates land in the
+#         scan prefix for Scan to read like any other file.
 # Output: the input plus "scan" (finding_count, scan_errors, preserved_count,
 #         no_longer_detected_count), "map"
 #         (mapped_count, skipped_count, error_count, files) and "remediation" (one entry
@@ -51,6 +55,17 @@ locals {
     BackoffRate     = 2
   }
 
+  # terraform/sandbox's state machine, named by that root's convention
+  # rather than read from its state: the two roots are applied separately,
+  # and the sandbox is switched off while idle. Called only when
+  # var.cdk_synthesis is on; when the sandbox is down, its dispatch answers
+  # "unavailable" at once and the check run says so.
+  sandbox_run_name = "${var.project}-${var.environment}-sandbox-run"
+  sandbox_run_arn  = "arn:aws:states:${var.aws_region}:${data.aws_caller_identity.current.account_id}:stateMachine:${local.sandbox_run_name}"
+  # Per phase: install, then synth. Measured locally on the probe app at
+  # 69s and 12s; the rest is the room a real app's install needs.
+  synth_phase_timeout_seconds = 600
+
   pipeline_definition = {
     Comment = "IaCPosture pipeline: scan an IaC snapshot, map findings to controls, remediate one file at a time; on a GitHub run, fetch the PR head first and report back to it last."
     StartAt = "FromGitHub"
@@ -67,8 +82,11 @@ locals {
       # later states can read it without a Choice of their own; a null
       # changed_files tells mapping-agent to map everything, as before v3.
       ManualRun = {
-        Type       = "Pass"
-        Result     = { status = "ok", changed_files = null }
+        Type = "Pass"
+        Result = {
+          status   = "ok", changed_files = null, changed_prefixes = null,
+          cdk_runs = [], cdk_skipped = [], allow_empty_scan = false,
+        }
         ResultPath = "$.fetch"
         Next       = "Scan"
       }
@@ -94,6 +112,13 @@ locals {
           "kept_count.$"    = "$.Payload.kept_count"
           "changed_files.$" = "$.Payload.changed_files"
           "reason.$"        = "$.Payload.reason"
+          # CDK (sandbox-spec §9 step 2): the apps to synthesize, the ones
+          # not synthesized and why, where a touched app's templates will
+          # be, and whether the repository has nothing else to scan.
+          "cdk_runs.$"         = "$.Payload.cdk_runs"
+          "cdk_skipped.$"      = "$.Payload.cdk_skipped"
+          "changed_prefixes.$" = "$.Payload.changed_prefixes"
+          "allow_empty_scan.$" = "$.Payload.allow_empty_scan"
         }
         ResultPath = "$.fetch"
         Retry      = [local.transient_retry]
@@ -141,9 +166,86 @@ locals {
       SnapshotUsable = {
         Type = "Choice"
         Choices = [
-          { Variable = "$.fetch.status", StringEquals = "ok", Next = "Scan" },
+          { Variable = "$.fetch.status", StringEquals = "ok", Next = "SynthWanted" },
         ]
         Default = "Report"
+      }
+
+      SynthWanted = {
+        Type = "Choice"
+        Choices = [
+          { Variable = "$.fetch.cdk_runs[0]", IsPresent = true, Next = "Synthesize" },
+        ]
+        Default = "Scan"
+      }
+
+      # One sandbox run per CDK app. Every outcome is a result, not a
+      # failure of this execution: an app that will not synthesize is
+      # reported on the check run, and the rest of the repository is
+      # scanned regardless. The run writes its templates into the scan
+      # prefix itself (sandbox-dispatch's collect), so what comes back here
+      # is only a summary, small enough for the state.
+      Synthesize = {
+        Type           = "Map"
+        ItemsPath      = "$.fetch.cdk_runs"
+        MaxConcurrency = 2
+        ItemSelector = {
+          "pr_id.$"       = "$.pr_id"
+          "app_dir.$"     = "$$.Map.Item.Value.app_dir"
+          "project_key.$" = "$$.Map.Item.Value.project_key"
+        }
+        ItemProcessor = {
+          ProcessorConfig = { Mode = "INLINE" }
+          StartAt         = "SynthesizeApp"
+          States = {
+            SynthesizeApp = {
+              Type     = "Task"
+              Resource = "arn:aws:states:::states:startExecution.sync:2"
+              Parameters = {
+                StateMachineArn = local.sandbox_run_arn
+                Input = {
+                  kind            = "cdk-synth"
+                  phases          = ["fetch", "execute"]
+                  timeout_seconds = local.synth_phase_timeout_seconds
+                  "pr_id.$"       = "$.pr_id"
+                  "app_dir.$"     = "$.app_dir"
+                  "project_key.$" = "$.project_key"
+                  # Links the child to this execution in the console.
+                  "AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$" = "$$.Execution.Id"
+                }
+              }
+              # Both phases at their limit, plus the starts and Collect.
+              TimeoutSeconds = 2 * local.synth_phase_timeout_seconds + 300
+              OutputPath     = "$.Output.synth"
+              Retry = [{
+                ErrorEquals     = ["StepFunctions.ExecutionLimitExceededException", "StepFunctions.SdkClientException"]
+                IntervalSeconds = 5
+                MaxAttempts     = 3
+                BackoffRate     = 2
+              }]
+              Catch = [{
+                ErrorEquals = ["States.ALL"]
+                ResultPath  = "$.error"
+                Next        = "SynthFailed"
+              }]
+              End = true
+            }
+            SynthFailed = {
+              Type = "Pass"
+              Parameters = {
+                "app_dir.$" = "$.app_dir"
+                status      = "error"
+                stage       = null
+                "reason.$"  = "$.error.Error"
+                templates   = []
+                stacks      = []
+              }
+              End = true
+            }
+          }
+        }
+        ResultPath = "$.synth"
+        Next       = "Scan"
       }
 
       Scan = {
@@ -155,6 +257,9 @@ locals {
             "pr_id.$"     = "$.pr_id"
             "s3_prefix.$" = "$.s3_prefix"
             persist       = true
+            # A repository that is only a CDK app scans nothing if its
+            # synth failed, and the check run says why (github-gateway).
+            "allow_empty.$" = "$.fetch.allow_empty_scan"
             # Counts only. The findings are in DynamoDB already, and the
             # ResultSelector below cannot help: a task result is checked
             # against the 256KB limit before it is selected from, and a whole
@@ -207,6 +312,9 @@ locals {
             # null on a manual run (map everything); the PR's changed IaC
             # files on a GitHub run (spec §6.1).
             "only_files.$" = "$.fetch.changed_files"
+            # The templates of CDK apps the PR touches, by where they are:
+            # they did not exist to be changed (sandbox-spec §9 step 2).
+            "only_prefixes.$" = "$.fetch.changed_prefixes"
           }
         }
         ResultSelector = {
@@ -498,6 +606,35 @@ data "aws_iam_policy_document" "pipeline" {
   }
   # Spec §4.1's end-to-end trace: with tracing on here, the execution is the
   # root segment and each Lambda's Active-mode segment hangs off it.
+  dynamic "statement" {
+    # Synthesize (sandbox-spec §7): start sandbox-run, wait on it with
+    # .sync:2, and stop it if this execution is stopped.
+    for_each = var.cdk_synthesis ? [1] : []
+    content {
+      sid       = "StartSandboxRuns"
+      actions   = ["states:StartExecution"]
+      resources = [local.sandbox_run_arn]
+    }
+  }
+  dynamic "statement" {
+    for_each = var.cdk_synthesis ? [1] : []
+    content {
+      sid     = "WatchSandboxRuns"
+      actions = ["states:DescribeExecution", "states:StopExecution"]
+      resources = [
+        "arn:aws:states:${var.aws_region}:${data.aws_caller_identity.current.account_id}:execution:${local.sandbox_run_name}:*",
+      ]
+    }
+  }
+  dynamic "statement" {
+    for_each = var.cdk_synthesis ? [1] : []
+    content {
+      # How .sync learns a child finished: a managed EventBridge rule.
+      sid       = "SandboxRunEvents"
+      actions   = ["events:PutTargets", "events:PutRule", "events:DescribeRule"]
+      resources = ["arn:aws:events:${var.aws_region}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"]
+    }
+  }
   statement {
     sid       = "XRayWrite"
     actions   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets"]
