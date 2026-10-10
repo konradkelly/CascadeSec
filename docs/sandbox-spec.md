@@ -157,6 +157,16 @@ objects: `sandbox/<run_id>/output.tgz` and `sandbox/<run_id>/result.json`.
 It returns them as container overrides for the task. Each URL expires with
 the task's timeout.
 
+*Amended 2026-10-09.* The URLs no longer go in the overrides. They go in a
+per-phase **manifest** (`runs/<run_id>/<phase>/manifest.json`), and the
+task's environment holds only the run id, the kind, and a presigned GET for
+its manifest. There were two reasons. ECS caps container overrides at 8192
+characters, and three URLs plus a CodeArtifact token measured 7363 on the
+first deployed run, before the snapshot and dependency URLs this section
+promises. And the overrides are shown in full in the execution's history
+and the task's description, so every credential sat in plain view there.
+Now only the manifest's URL does, and it expires with the rest.
+
 **The job itself is chosen by the image, not by the input.** There is one
 image per runtime (`node22`, `python312`), pinned by digest. Each image
 carries the harnesses: the CDK runner, the Pulumi mock harness from the
@@ -251,6 +261,87 @@ someone the repository already trusts to push to it.
    Its result is asserted, not read. It runs on every change to the sandbox
    Terraform or images, the way the eval runs on scanner changes. Nothing
    below starts until it passes.
+
+   **Built 2026-10-09**: `terraform/sandbox/` (its own root and state),
+   `sandbox/image/`, `lambda/sandbox-dispatch/`, and `scripts/sandbox.py`
+   (`up`, `down`, `leak-test`). The leak test is graded on the trusted side
+   by `lambda/sandbox-dispatch/leak.py`, not by the runner, which shares a
+   container with what it tests. Each way out comes with a *control*,
+   something that must still work, so a sandbox whose network is simply
+   broken fails rather than passes. Building it corrected the spec in four
+   places:
+
+   - **The fetch task does hold one credential** (§3, §4): a CodeArtifact
+     bearer token. Without credentials it could not read the mirror.
+     Dispatch mints it for fifteen minutes, with the dispatch role's
+     CodeArtifact rights, which are read-only on the two mirrors. No user
+     code runs in that task, and the execute task never receives the
+     token. "No AWS credentials in the container" still holds for both
+     tasks; this is a narrower credential, said plainly rather than left
+     to be found.
+   - **The S3 endpoint policy admits two AWS-owned buckets** besides the
+     sandbox's own (§5): ECR serves image layers from
+     `prod-<region>-starport-layer-bucket`, and CodeArtifact serves package
+     assets from its own per-region bucket. Both are read-only grants on
+     AWS's buckets. Without the first, no task can start.
+   - **A run's tasks are found by ECS task group, not `StartedBy`** (§7).
+     Step Functions' ECS integration rejects `StartedBy`. The reap step
+     lists the cluster's running tasks and stops those in the run's group.
+   - **DNS Firewall stores names fully qualified.** `logs.<region>.amazonaws.com.`
+     with the trailing dot. Written without it, every plan shows a diff.
+
+   The first deployed run then found two more, before any task started.
+   Step Functions takes every ECS parameter in PascalCase, including the
+   `Name`/`Value` of environment entries that ECS's own API spells
+   lowercase. And the overrides were close to ECS's size cap, which moved
+   the URLs into a manifest (§6, amended).
+
+   **First leak test, 2026-10-10: 40 of 42 checks passed, and the two
+   failures were real.** Every credential, internet, S3, CodeArtifact and
+   filesystem check passed in both tasks, with every control working:
+   - the ECS credentials endpoint answered 400;
+   - a valid presigned URL for the canary bucket got 403 from the endpoint
+     policy;
+   - unauthenticated ECR answered 401;
+   - execute could not reach CodeArtifact, while fetch read metadata and
+     downloaded a tarball through it.
+
+   That last control proved the endpoint policy's CodeArtifact assets
+   bucket. The sleep run settled §7's open question: **Step Functions
+   stops a task when its `.sync` state times out**, and the reap step
+   found nothing left. Reap stays anyway, since it costs one call.
+
+   The failure was DNS. `example.com` resolved, in both tasks, because the
+   firewall was not attached (§10). It also exposed a flaw in the test
+   itself. The "never-seen name" was under `example.org`, which resolves
+   nowhere, so it failed with or without a firewall and passed a check it
+   could not fail. It is now a name that resolves publicly by construction
+   (`<run>-<phase>.127.0.0.1.nip.io`, a wildcard DNS service), and
+   `collect` resolves both names from outside the VPC. A DNS check passes
+   only if its name resolves outside and fails inside. Otherwise it is
+   inconclusive, and it fails.
+
+   **Second leak test, same day: no task could start.** With the firewall
+   attached, it refused names on its own allow-list. The reason is that
+   DNS Firewall, by default, also judges every name a lookup is redirected
+   to. Every allowed name redirects: an endpoint's private DNS name to
+   `vpce-….vpce.amazonaws.com`, an S3 name to S3's internal names. So ECR
+   auth and the image-layer bucket were both "no such host". The allow
+   rule now trusts redirection (`TRUST_REDIRECTION_DOMAIN`). That is safe
+   because every allowed name is AWS's, so only AWS decides where it
+   points. The same run showed the timeout check could pass a task that
+   never started, since one still pulling its image when the clock runs
+   out times out just the same. It now also requires the task to have
+   been running.
+
+   **Third leak test, 2026-10-10: passed.** 42 of 42 checks, fetch and
+   execute, and all three timeout checks. Both DNS names failed inside
+   the sandbox and resolved outside it, so the firewall is what stopped
+   them, and HTTPS by name now fails at DNS before it can try to
+   connect. Every control held: the endpoints resolve, the run writes its
+   own objects, fetch reads the mirror, and `/work` and `/tmp` are
+   writable. **Step 1 is done; step 2 may start.** The test reruns on
+   every change to `terraform/sandbox/` or `sandbox/image/`.
 2. **CDK detection.** Synth in the sandbox, templates into the scan,
    findings mapped to source lines. CDK first because its output is already
    a target type (multi-iac §9).
@@ -263,13 +354,32 @@ someone the repository already trusts to push to it.
 
 ## 10. Open decisions
 
-- [ ] Accept the ~$36/month idle cost of the endpoints (§5), or keep the
+- [x] Accept the ~$36/month idle cost of the endpoints (§5), or keep the
       sandbox's Terraform in a module that is applied only while the
       feature is in use. The second keeps dev cheap and makes every
       measurement start with an apply.
-- [ ] DNS Firewall (§5): in from the first apply, or accepted as an open
-      channel until the leak test reports it. Leaning in from the first
-      apply, because the leak test should fail on it from day one.
+      **Decided 2026-10-09: applied only while in use.** It is a separate
+      Terraform root, not a module of the main stack, so switching it never
+      touches the main stack, and that stack's required variables don't
+      come into it. A variable, `active`, controls only what is billed while
+      idle: the five interface endpoints. (DNS Firewall was also behind it
+      until 2026-10-10. See the next item.)
+      `scripts/sandbox.py up` and `down` flip it. Everything else stays,
+      because it is free while idle and slow to rebuild: the VPC, security
+      groups, S3 gateway endpoint, cluster, task definitions, images, and
+      the mirror's cache.
+- [x] DNS Firewall (§5): in from the first apply, or accepted as an open
+      channel until the leak test reports it. **In from the first apply,
+      2026-10-09**, fail-closed. The leak test checks it both ways: a public
+      name and a never-seen name must fail, and an endpoint name must still
+      resolve.
+      **Always on since 2026-10-10**, no longer switched with the
+      endpoints. Switching it went wrong. A `down` removed the association
+      but not the rule group, and the next `up` recreated the rules but not
+      the association. The leak test then ran with the firewall attached to
+      nothing, and `example.com` resolved. It bills per query and per
+      stored domain, with nothing hourly, so it costs nothing while idle,
+      and a VPC that is never without it is the safer default anyway.
 - [ ] Python: wheels only (§4) is the proposal. The alternative is building
       sdists in a third, egress-free task, which would be worth it only if
       the corpus shows a real cost.
