@@ -243,6 +243,10 @@ CFN_LOGICAL_ID_RE = re.compile(r"^[ \t]*([A-Za-z0-9]+):[ \t]*\r?$")
 CFN_TYPE_RE = re.compile(r"""^[ \t]*Type:[ \t]*['"]?([A-Za-z0-9:_-]+)""")
 
 
+# Mapped and shown, never drafted. mapping-agent keeps the same set.
+DETECTION_ONLY_TARGET_TYPES = {"cdk"}
+
+
 def handler(event, context):
     pr_id = event["pr_id"]
     only_file = event.get("file")
@@ -251,7 +255,14 @@ def handler(event, context):
         # A fix belongs to one file, so a chain can only be resumed per file.
         raise ValueError("resume_from requires file")
 
-    mapped_findings = _query_mapped_findings(pr_id, only_file)
+    # A finding on a synthesized CDK template is detection only: a fix
+    # belongs in the app's source, and verifying one means synthesizing
+    # again, which this function cannot do yet (docs/sandbox-spec.md §9
+    # step 3). The pipeline never asks for one; this holds for a direct
+    # invoke too, before a model call is spent on a draft the structural
+    # guard would refuse anyway.
+    mapped_findings = [f for f in _query_mapped_findings(pr_id, only_file)
+                       if f.get("target_type") not in DETECTION_ONLY_TARGET_TYPES]
 
     # Counters start from the previous continuation's, so the number the
     # state machine reports for a file is the file's total, not the last

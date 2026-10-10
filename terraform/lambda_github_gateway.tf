@@ -59,6 +59,9 @@ resource "aws_lambda_function" "github_gateway" {
       # Whether a Draft fixes run's check offers Commit fixes: only once
       # write-back is deployed (github-first-review-spec §3).
       COMMIT_FIXES_ENABLED = local.write_back_enabled ? "true" : ""
+      # Whether a CDK app found at fetch is handed to the sandbox, or
+      # reported as not enabled (docs/sandbox-spec.md §9 step 2).
+      CDK_SYNTHESIS_ENABLED = var.cdk_synthesis ? "true" : ""
     }
   }
 
@@ -100,6 +103,15 @@ data "aws_iam_policy_document" "github_gateway" {
       "${aws_s3_bucket.artifacts.arn}/scans/*",
       "${aws_s3_bucket.artifacts.arn}/github/*",
     ]
+  }
+
+  # The repository as a tarball, for a CDK app the sandbox will synthesize
+  # (docs/sandbox-spec.md §9 step 2). Written only; sandbox-dispatch reads
+  # it, from the other Terraform root.
+  statement {
+    sid       = "ProjectWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/projects/*"]
   }
 
   statement {

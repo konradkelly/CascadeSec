@@ -15,6 +15,8 @@ Event shape:
 { "pr_id": "manual-test-1", "mapped_count": 38, "files": ["ec2.tf"] }
 -- and on a GitHub run, limited to the PR's changed files --
 { "pr_id": "gh-1-2", "only_files": ["ec2.tf", "k8s/app.yaml"] }
+-- plus the synthesized templates of the CDK apps the PR touches --
+{ ..., "only_prefixes": ["infra/cdk.out/"] }
 
 Returns {pr_id, mapped_count, skipped_count, error_count, files, remaining}.
 skipped is a decision -- no candidate, or an answer refused by the checks
@@ -70,6 +72,10 @@ secretsmanager = boto3.client("secretsmanager")
 
 # Cold-start caches -- corpus content and the API key don't change within a
 # warm execution environment, so fetch each at most once per container.
+# Mapped, but never handed to remediation: detection only until a fix to
+# their source can be verified by synthesizing again (sandbox-spec §9).
+DETECTION_ONLY_TARGET_TYPES = {"cdk"}
+
 _anthropic_client = None
 _rule_mappings = None
 _framework_cache = {}
@@ -109,7 +115,13 @@ def handler(event, context):
     only_files = event.get("only_files")
     if only_files is not None:
         scope = set(only_files)
-        raw_findings = [f for f in raw_findings if f["file"] in scope]
+        # A CDK app's templates are not files the PR changed -- they did
+        # not exist until the sandbox synthesized them -- so the PR names
+        # them by where they are: under the cdk.out of an app it touches
+        # (github-gateway's changed_prefixes, docs/sandbox-spec.md §9).
+        prefixes = tuple(event.get("only_prefixes") or ())
+        raw_findings = [f for f in raw_findings
+                        if f["file"] in scope or (prefixes and f["file"].startswith(prefixes))]
     rule_mappings = _load_rule_mappings()
 
     # Carried over from the pass that yielded, if this is a continuation.
@@ -152,7 +164,11 @@ def handler(event, context):
             continue
 
         mapped_count += 1
-        files.add(finding["file"])
+        # `files` is what remediation iterates. A CDK finding is mapped, so
+        # its controls show, but there is no fix to draft for it until
+        # remediation can re-synthesize (sandbox-spec §9 step 3).
+        if finding.get("target_type") not in DETECTION_ONLY_TARGET_TYPES:
+            files.add(finding["file"])
 
     if remaining and mapped_count == mapped_before:
         # A whole time budget spent without one mapping landing is a fault
@@ -268,8 +284,11 @@ def _candidates_for(rule_mappings, finding):
     """
     refs = rule_mappings.get(f"{finding['source']}:{finding['rule_id']}") or []
     target_type = finding.get("target_type")
+    # A synthesized CDK template is CloudFormation, and a control scoped to
+    # CloudFormation fits it as well as it fits a hand-written template.
+    matches = {target_type} | ({"cloudformation"} if target_type == "cdk" else set())
     return [r for r in refs
-            if "target_type" not in r or r["target_type"] == target_type]
+            if "target_type" not in r or r["target_type"] in matches]
 
 
 def _load_rule_mappings():

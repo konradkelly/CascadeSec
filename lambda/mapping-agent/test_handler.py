@@ -703,3 +703,36 @@ def test_only_files_empty_maps_nothing(mock_dynamodb, mock_s3, mock_client):
 
     assert create.call_count == 0
     assert result["mapped_count"] == 0
+
+
+# ---------- CDK templates (docs/sandbox-spec.md §9 step 2) ----------
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_touched_apps_templates_are_mapped_but_never_remediated(mock_dynamodb, mock_s3, mock_client):
+    """The PR names a CDK app's templates by prefix: they did not exist to
+    change. They are mapped, and stay out of `files`, which is what
+    remediation iterates: there is no fix to draft for them yet."""
+    findings = [_finding("f1", file="changed.tf"),
+                {**_finding("f2", file="infra/cdk.out/Stack.template.json"), "target_type": "cdk"},
+                {**_finding("f3", file="other/cdk.out/Stack.template.json"), "target_type": "cdk"}]
+
+    result, _, create = _run(
+        mock_dynamodb, mock_s3, mock_client, findings, MAPPINGS, [_mapping("f1"), _mapping("f2")],
+        event={"pr_id": "pr-1", "only_files": ["changed.tf"], "only_prefixes": ["infra/cdk.out/"]},
+    )
+
+    assert create.call_count == 2
+    assert result["mapped_count"] == 2
+    assert result["files"] == ["changed.tf"]
+
+
+def test_a_cdk_finding_takes_cloudformation_scoped_candidates():
+    mappings = {"checkov:CKV_AWS_24": [
+        {"framework": "CIS-AWS-1.4", "control_id": "5.2", "target_type": "cloudformation"},
+        {"framework": "CIS-AWS-1.4", "control_id": "5.3", "target_type": "kubernetes"},
+    ]}
+    finding = {"source": "checkov", "rule_id": "CKV_AWS_24", "target_type": "cdk"}
+    assert [c["control_id"] for c in handler._candidates_for(mappings, finding)] == ["5.2"]

@@ -26,14 +26,15 @@ class ResourceNotFoundException(Exception):
     pass
 
 
-def _pr_payload(action="opened", draft=False, head_sha=HEAD_SHA):
+def _pr_payload(action="opened", draft=False, head_sha=HEAD_SHA, head_repo_id=123456):
     return {
         "action": action,
         "number": 7,
         "pull_request": {
             "number": 7,
             "draft": draft,
-            "head": {"sha": head_sha, "ref": "feature"},
+            "head": {"sha": head_sha, "ref": "feature",
+                     "repo": None if head_repo_id is None else {"id": head_repo_id}},
             "base": {"sha": BASE_SHA, "ref": "main"},
         },
         "repository": {"id": 123456, "full_name": "konradkelly/cascadesec-testbed"},
@@ -251,9 +252,18 @@ def test_execution_input(aws):
             "head_sha": HEAD_SHA,
             "base_sha": BASE_SHA,
             "trigger": "push",
+            "from_fork": False,
         },
     }
     assert kwargs["name"] == "gh-123456-7-aaaaaaaaaaaa-push"
+
+
+@pytest.mark.parametrize("head_repo_id", [999, None])
+def test_a_fork_or_a_deleted_head_repository_is_a_fork(aws, head_repo_id):
+    # sandbox-spec §8: a fork's CDK app is not run without approval.
+    _, sfn = aws
+    handler.handler(_event(_pr_payload(head_repo_id=head_repo_id)), None)
+    assert json.loads(sfn.start_execution.call_args.kwargs["input"])["github"]["from_fork"] is True
 
 
 def test_redelivery_starts_nothing_new(aws):
@@ -310,7 +320,8 @@ def _check_run_payload(action="requested_action", identifier="draft_fixes", name
         "action": action,
         "check_run": {
             "id": 55, "name": name, "head_sha": head_sha,
-            "pull_requests": [{"number": 7, "head": {"sha": "c" * 40}, "base": {"sha": BASE_SHA}}]
+            "pull_requests": [{"number": 7, "head": {"sha": "c" * 40, "repo": {"id": 123456}},
+                               "base": {"sha": BASE_SHA}}]
             if pull_requests else [],
         },
         "repository": {"id": 123456, "full_name": "konradkelly/cascadesec-testbed"},
@@ -405,7 +416,8 @@ def _check_suite_payload(action="rerequested", pull_requests=True):
         "action": action,
         "check_suite": {
             "id": 77, "head_sha": HEAD_SHA,
-            "pull_requests": [{"number": 7, "head": {"sha": HEAD_SHA}, "base": {"sha": BASE_SHA}}]
+            "pull_requests": [{"number": 7, "head": {"sha": HEAD_SHA, "repo": {"id": 123456}},
+                               "base": {"sha": BASE_SHA}}]
             if pull_requests else [],
         },
         "repository": {"id": 123456, "full_name": "konradkelly/cascadesec-testbed"},

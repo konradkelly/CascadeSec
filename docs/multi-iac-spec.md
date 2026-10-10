@@ -1100,3 +1100,12 @@ sandbox spec is.
       on `docs/sandbox-spec.md`, shared with the dependency-safety test
       gate. If built, CDK first: its output is already a target type, and
       what it needs is the source mapping and a re-synth self-check.
+      **CDK detection built 2026-10-10** (sandbox-spec §9 step 2). A
+      synthesized template's findings are `target_type: cdk`, mapped to
+      the line that made each resource, and held out of remediation until
+      the re-synth self-check (step 3) exists. That hold is the
+      "remediation-agent could refuse a generated template" that §7.1 left
+      undone, keyed on where the template came from rather than on
+      `aws:cdk:path`. A template a user commits is still skipped by
+      `SKIP_DIRS`, and one that arrives some other way is still read as
+      hand-written CloudFormation.

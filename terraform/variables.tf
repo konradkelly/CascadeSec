@@ -1,3 +1,9 @@
+variable "cdk_synthesis" {
+  description = "Whether a GitHub run synthesizes the CDK apps it finds in the sandbox (docs/sandbox-spec.md §9 step 2). Needs terraform/sandbox applied; while the sandbox is switched off, apps are reported as not synthesized. Off, they are reported as not enabled and nothing is called."
+  type        = bool
+  default     = false
+}
+
 variable "aws_region" {
   description = "AWS region to deploy into"
   type        = string

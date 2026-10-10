@@ -193,3 +193,12 @@ describe('coverage caveat', () => {
     )
   })
 })
+
+describe('SelfCheckBadge on a CDK finding', () => {
+  it('says detection only rather than no self-check', () => {
+    render(<SelfCheckBadge proposedFix={null} targetType="cdk" />)
+    expect(screen.getByText('Detection only')).toBeTruthy()
+    expect(screen.queryByText('No self-check')).toBeNull()
+    cleanup()
+  })
+})

@@ -1,3 +1,4 @@
+import { CDK_DETECTION_ONLY } from '../review/cdk'
 import { singleSourceTitle, singleSourceTool } from '../review/coverage'
 import type { ProposedFix } from '../types/finding'
 
@@ -39,6 +40,15 @@ export function humanGates(proposedFix?: ProposedFix | null): string[] {
 }
 
 export function SelfCheckBadge({ proposedFix, targetType }: SelfCheckBadgeProps) {
+  if (targetType === 'cdk') {
+    // Not "No self-check", which reads as a fix not yet tried: there is
+    // none to try until remediation can synthesize again.
+    return (
+      <span className="badge badge--muted" title={CDK_DETECTION_ONLY}>
+        Detection only
+      </span>
+    )
+  }
   const tool = singleSourceTool(targetType)
   return (
     <>
