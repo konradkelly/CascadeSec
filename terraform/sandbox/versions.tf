@@ -47,4 +47,11 @@ locals {
   region = data.aws_region.current.name
   # Every interface endpoint exists only while active; nothing else does.
   active = var.active
+
+  # The main stack's bucket (terraform/s3.tf), named by the same convention
+  # rather than passed in: this root is applied on its own, and the main
+  # stack's state is not one it reads. Projects come from it; synthesized
+  # templates go back into it to be scanned.
+  artifacts_bucket     = "${var.project}-${var.environment}-artifacts-${data.aws_caller_identity.current.account_id}"
+  artifacts_bucket_arn = "arn:aws:s3:::${local.artifacts_bucket}"
 }

@@ -137,12 +137,28 @@ export interface Prerequisite {
   diff_sha256?: string
 }
 
+/** Where a finding on a synthesized CDK template came from: the resource
+ *  it is on, and the source line that made it. The app's own metadata, so a
+ *  claim rather than a fact; it places the finding, and decides nothing. */
+export interface CdkOrigin {
+  app?: string | null
+  stack?: string | null
+  logical_id?: string | null
+  construct_path?: string | null
+  type?: string | null
+  file?: string | null
+  line?: number | null
+  /** The lines that set a property on the resource, under CDK_DEBUG. */
+  assignments?: { property: string; file: string; line: number }[]
+}
+
 export interface Finding {
   pk: string
   sk: string
   finding_id: string
   /** What to re-run to verify a fix: `terraform`, `opentofu`, `kubernetes`,
-   *  `arm`, `bicep`. Replaced `iac_type` on 2026-09-16
+   *  `arm`, `bicep`, `cloudformation`, or `cdk` for a template the sandbox
+   *  synthesized (see review/cdk.ts). Replaced `iac_type` on 2026-09-16
    *  (docs/multi-iac-spec.md §3.1); absent on records not re-scanned since.
    *  Some values are covered by only one of the two scanners -- see
    *  review/coverage.ts. */
@@ -151,6 +167,8 @@ export interface Finding {
    *  `misconfiguration`, `secret`, `vulnerability`. Does not derive from
    *  `target_type` -- a secret in a .tfvars is `terraform` + `secret`. */
   finding_class?: string
+  /** Only on a `cdk` finding: the source line behind it. */
+  origin?: CdkOrigin | null
   source: string
   rule_id: string
   file: string

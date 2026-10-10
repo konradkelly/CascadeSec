@@ -12,7 +12,9 @@ execution ends badly:
 
   fetch         open an in-progress check run; snapshot the PR head from the
                 repository tarball into scans/<pr_id>/; store the PR's changed
-                files and patch hunks for report
+                files and patch hunks for report; find CDK apps, and for the
+                ones the sandbox may run, keep the whole project for it
+                (docs/sandbox-spec.md §9 step 2)
   select_files  on a Draft fixes run, the changed files that hold a mapped
                 finding -- what the Remediate Map iterates
   report        complete the check run: summary, annotations on the lines the
@@ -31,12 +33,14 @@ import base64
 import difflib
 import hashlib
 import html
+import io
 import json
 import logging
 import os
 import posixpath
 import re
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -66,6 +70,9 @@ COMMIT_FIXES_ACTION = "commit_fixes"
 # Set once write-back is deployed (terraform: var.github_writer_app_id):
 # before then there is no committer for a click to reach.
 COMMIT_FIXES_ENABLED = bool(os.environ.get("COMMIT_FIXES_ENABLED"))
+# Set when terraform's cdk_synthesis is on: before then no CDK app is run,
+# and each is reported as not enabled.
+CDK_SYNTHESIS_ENABLED = bool(os.environ.get("CDK_SYNTHESIS_ENABLED"))
 
 # Over any of these the check completes as "too large to scan" and no scan
 # runs: a partial snapshot looks exactly like a clean one for the files it
@@ -75,6 +82,15 @@ MAX_SNAPSHOT_FILES = 3000
 MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024
 # changed_files rides in the execution state, which is capped at 256KB.
 MAX_CHANGED_FILES = 1000
+
+# The project the sandbox gets for a CDK app (sandbox-spec §9 step 2): the
+# repository's files, not only its IaC, under the snapshot's own path
+# rules. Over a cap the project is not kept and its apps are reported, not
+# synthesized; the rest of the scan goes ahead.
+MAX_PROJECT_FILES = 20000
+MAX_PROJECT_BYTES = 100 * 1024 * 1024
+# One sandbox run each, and the Synthesize Map waits for all of them.
+MAX_CDK_APPS = 5
 # The Checks API takes at most 50 annotations per request.
 ANNOTATIONS_PER_REQUEST = 50
 
@@ -219,6 +235,14 @@ def _next_link(link_header):
 # ======================================================================
 
 def fetch(event):
+    project = ProjectArchive()
+    try:
+        return _fetch(event, project)
+    finally:
+        project.close()
+
+
+def _fetch(event, project):
     github = event["github"]
     pr_id = event["pr_id"]
     trigger = github.get("trigger", "push")
@@ -241,18 +265,31 @@ def fetch(event):
                         "Scanning the infrastructure-as-code at this commit."),
         },
     })
-    result = {"check_run_id": check_run["id"], "kept_count": 0, "changed_files": [], "reason": None}
+    result = {"check_run_id": check_run["id"], "kept_count": 0, "changed_files": [], "reason": None,
+              "cdk_runs": [], "cdk_skipped": [], "changed_prefixes": [], "allow_empty_scan": False}
 
     try:
-        kept = download_snapshot(github, token)
+        kept = download_snapshot(github, token, project)
     except TooLarge as e:
         logger.warning("%s: too large to scan: %s", pr_id, e)
         return {**result, "status": "too_large", "reason": str(e)}
-    if not kept:
-        return {**result, "status": "empty",
-                "reason": "No infrastructure-as-code files at this commit."}
+    apps = cdk_apps(project, github)
+    runnable = [a for a in apps if a["status"] == "run"]
+    skipped = [{k: a[k] for k in ("app_dir", "status", "reason")} for a in apps if a["status"] != "run"]
+    if not kept and not runnable:
+        reason = "No infrastructure-as-code files at this commit."
+        if skipped:
+            reason = "No infrastructure-as-code files to scan at this commit. " + " ".join(
+                f"The CDK app in `{a['app_dir']}` was not synthesized: {a['reason']}" for a in skipped)
+        return {**result, "status": "empty", "reason": reason, "cdk_skipped": skipped}
 
     replace_snapshot(pr_id, kept)
+    cdk_runs = []
+    if runnable:
+        project_key = f"projects/{pr_id}/{github['head_sha']}.tgz"
+        s3.put_object(Bucket=ARTIFACTS_BUCKET, Key=project_key, Body=project.finish(),
+                      ContentType="application/gzip")
+        cdk_runs = [{"app_dir": a["app_dir"], "project_key": project_key} for a in runnable]
 
     pr_files = _paginate(f"/repos/{github['repository']}/pulls/{int(github['pr_number'])}/files", token)
     s3.put_object(
@@ -267,8 +304,103 @@ def fetch(event):
         return {**result, "status": "too_large", "kept_count": len(kept),
                 "reason": f"{len(changed)} changed IaC files, over the {MAX_CHANGED_FILES} limit."}
 
-    logger.info("%s: snapshot of %d file(s), %d changed", pr_id, len(kept), len(changed))
-    return {**result, "status": "ok", "kept_count": len(kept), "changed_files": changed}
+    logger.info("%s: snapshot of %d file(s), %d changed; %d CDK app(s) to synthesize, %d not",
+                pr_id, len(kept), len(changed), len(cdk_runs), len(skipped))
+    return {**result, "status": "ok", "kept_count": len(kept), "changed_files": changed,
+            "cdk_runs": cdk_runs, "cdk_skipped": skipped,
+            # A CDK app's templates do not exist until it is synthesized, so
+            # what mapping-agent may map is named by where they will be:
+            # under the app's cdk.out/, for an app the PR touches.
+            "changed_prefixes": [cdk_out(a["app_dir"]) for a in runnable
+                                 if touches(pr_files, a["app_dir"])],
+            # A repository that is only CDK has nothing to scan unless the
+            # synth succeeds, and that is a result, not a scanner fault.
+            "allow_empty_scan": not kept}
+
+
+def cdk_out(app_dir):
+    """Where sandbox-dispatch writes an app's templates in the snapshot.
+    Nothing from the repository can be there: SKIP_DIRS drops cdk.out."""
+    return "cdk.out/" if app_dir == "." else f"{app_dir}/cdk.out/"
+
+
+def touches(pr_files, app_dir):
+    return any(app_dir == "." or f["filename"].startswith(app_dir + "/") for f in pr_files)
+
+
+def cdk_apps(project, github):
+    """Every directory holding a cdk.json, and whether the sandbox may
+    synthesize it. Each refusal says why, for the check run."""
+    apps = []
+    # Every name in the repository, not only those packed: an app whose
+    # cdk.json came after the project went over its cap is still reported.
+    for path in sorted(project.names):
+        if posixpath.basename(path) != "cdk.json":
+            continue
+        app_dir = posixpath.dirname(path) or "."
+
+        def has(name, app_dir=app_dir):
+            return (name if app_dir == "." else f"{app_dir}/{name}") in project.names
+
+        status, reason = "run", None
+        if not CDK_SYNTHESIS_ENABLED:
+            status, reason = "disabled", "CDK synthesis is not enabled on this deployment"
+        elif project.over:
+            status, reason = "too_large", f"the repository is too large to synthesize ({project.over})"
+        elif github.get("from_fork") is not False:
+            # Fail closed: an input without the field, or with anything but
+            # false in it, is treated as a fork.
+            status, reason = "needs_approval", ("this pull request comes from a fork, and code from "
+                                                 "a fork is not run without approval")
+        elif not has("package.json"):
+            status, reason = "unsupported", "only TypeScript and JavaScript apps are synthesized so far"
+        elif not has("package-lock.json"):
+            status, reason = "unsupported", "it has no package-lock.json; yarn and pnpm are not supported yet"
+        elif sum(1 for a in apps if a["status"] == "run") >= MAX_CDK_APPS:
+            status, reason = "too_many", f"only the first {MAX_CDK_APPS} CDK apps are synthesized"
+        apps.append({"app_dir": app_dir, "status": status, "reason": reason})
+    return apps
+
+
+class ProjectArchive:
+    """The repository as a gzipped tarball, built while the snapshot streams.
+
+    For a CDK app the sandbox needs the program, not only its IaC
+    (multi-iac-spec §7.2). Paths are those read_snapshot already checked,
+    with no top-level directory, so the sandbox sees exactly the
+    repository's layout. Spooled to /tmp past a few MB, and abandoned rather
+    than truncated over a cap: half a project synthesizes into something
+    that is not the project."""
+
+    def __init__(self):
+        self.names, self.files, self.bytes, self.over = set(), set(), 0, None
+        self._buffer = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+        self._tar = tarfile.open(fileobj=self._buffer, mode="w:gz")
+
+    def add(self, path, data):
+        self.names.add(path)
+        if self.over:
+            return
+        if len(self.files) >= MAX_PROJECT_FILES:
+            self.over = f"more than {MAX_PROJECT_FILES} files"
+            return
+        if self.bytes + len(data) > MAX_PROJECT_BYTES:
+            self.over = f"files total over {MAX_PROJECT_BYTES // (1024 * 1024)}MB"
+            return
+        info = tarfile.TarInfo(path)
+        info.size, info.mode, info.mtime = len(data), 0o644, 0
+        self._tar.addfile(info, io.BytesIO(data))
+        self.files.add(path)
+        self.bytes += len(data)
+
+    def finish(self):
+        self._tar.close()
+        self._buffer.seek(0)
+        return self._buffer.read()
+
+    def close(self):
+        self._tar.close()
+        self._buffer.close()
 
 
 def files_key(pr_id, head_sha):
@@ -299,8 +431,9 @@ class _CappedReader:
         return chunk
 
 
-def download_snapshot(github, token):
-    """{repo path: bytes} for every file at head_sha the scanner would open."""
+def download_snapshot(github, token, project=None):
+    """{repo path: bytes} for every file at head_sha the scanner would open,
+    and, given a ProjectArchive, every file at all into it."""
     url = f"{GITHUB_API}/repos/{github['repository']}/tarball/{github['head_sha']}"
     opener = urllib.request.build_opener(_NoRedirect)
     request = urllib.request.Request(url, headers={
@@ -318,10 +451,10 @@ def download_snapshot(github, token):
         response = urllib.request.urlopen(
             urllib.request.Request(location, headers={"User-Agent": CHECK_NAME}), timeout=60)
     with response:
-        return read_snapshot(_CappedReader(response, MAX_TARBALL_BYTES))
+        return read_snapshot(_CappedReader(response, MAX_TARBALL_BYTES), project)
 
 
-def read_snapshot(fileobj):
+def read_snapshot(fileobj, project=None):
     """Stream a repository tarball and keep what the scanner would open.
 
     Nothing is extracted to disk and no member's path is trusted: a key built
@@ -337,9 +470,13 @@ def read_snapshot(fileobj):
             path = repo_path(member.name)
             if path is None or SKIP_DIRS & set(path.split("/")):
                 continue
+            if project is not None:
+                data = tar.extractfile(member).read()
+                project.add(path, data)
             if not _suffix_could_match(path):
                 continue
-            data = tar.extractfile(member).read()
+            if project is None:
+                data = tar.extractfile(member).read()
             if not is_snapshot_file(path, data):
                 continue
             total += len(data)
@@ -518,7 +655,7 @@ def report(event):
         Bucket=ARTIFACTS_BUCKET, Key=files_key(pr_id, github["head_sha"]))["Body"].read())
     added, visible = diff_lines(pr_files)
 
-    on_added = [f for f in findings if _lines(f) & added.get(f["file"], set())]
+    on_added = [f for f in findings if _added_at(f, added)]
     annotations = [annotation(f) for f in sorted(on_added, key=_sort_key)]
 
     posted, held = [], []
@@ -621,6 +758,31 @@ def _lines(finding):
     return set(range(span[0], span[1] + 1)) if span else set()
 
 
+def located(finding):
+    """(path, (start, end)) where a finding is shown, or (None, None).
+
+    A finding on a synthesized CDK template is shown on the source line that
+    made its resource (sandbox-dispatch's source map, carried on the finding
+    as `origin`), never on the template: nobody wrote the template, and it
+    is not in the pull request. The origin is the app's own claim about
+    itself (sandbox-spec §2), which is why it is only ever used to place an
+    annotation on a line the PR adds -- a claim naming any other line is
+    simply not shown."""
+    if finding.get("target_type") == "cdk":
+        origin = finding.get("origin") or {}
+        try:
+            line = int(origin.get("line"))
+        except (TypeError, ValueError):
+            return None, None
+        return (origin["file"], (line, line)) if origin.get("file") and line > 0 else (None, None)
+    return finding["file"], _span(finding)
+
+
+def _added_at(finding, added):
+    path, span = located(finding)
+    return bool(path and span) and bool(set(range(span[0], span[1] + 1)) & added.get(path, set()))
+
+
 def _sort_key(finding):
     severity = str(finding.get("severity", "UNKNOWN")).upper()
     rank = SEVERITY_ORDER.index(severity) if severity in SEVERITY_ORDER else len(SEVERITY_ORDER)
@@ -656,7 +818,7 @@ def diff_lines(pr_files):
 
 def annotation(finding):
     # Only called for findings on added lines, which have a span.
-    start, end = _span(finding)
+    path, (start, end) = located(finding)
     severity = str(finding.get("severity", "UNKNOWN")).upper()
     controls = sorted({m.get("control_id") for m in finding.get("control_mappings") or []
                        if m.get("control_id")})
@@ -665,8 +827,11 @@ def annotation(finding):
         message += f" on {finding['resource']}"
     if controls:
         message += f". Controls: {', '.join(controls)}"
+    if finding.get("target_type") == "cdk":
+        message += (f"\n\nFound in {finding['file']}, the template CDK synthesized from this line. "
+                    "Fixes are not drafted for CDK findings yet.")
     return {
-        "path": finding["file"],
+        "path": path,
         "start_line": start,
         "end_line": end,
         "annotation_level": ANNOTATION_LEVEL.get(severity, "notice"),
@@ -704,6 +869,8 @@ def build_summary(*, state, findings, on_added, posted, held, remediate, offer_f
         lines += [f"**{len(scan_errors)} file(s) could not be parsed** and were not scanned; "
                   "the dashboard lists them.", ""]
 
+    lines += cdk_section(state)
+
     if remediate:
         count = sum(len(p["hunks"]) for p in posted)
         if posted:
@@ -734,6 +901,54 @@ def build_summary(*, state, findings, on_added, posted, held, remediate, offer_f
         lines += ["", f"Review every finding, control mapping and fix in the "
                       f"[dashboard]({DASHBOARD_URL}/prs/{state['pr_id']})."]
     return "\n".join(lines)
+
+
+# What each way a synth can end is called in the summary. Statuses come
+# from sandbox-dispatch's collect, or from the pipeline's own Catch.
+SYNTH_STATUS_TEXT = {
+    "failed": "the app failed",
+    "unsupported": "unsupported",
+    "error": "the sandbox run failed",
+    "rejected": "its output was refused",
+    "needs-context": "needs cached context",
+    "unavailable": "the sandbox is switched off",
+}
+
+
+def _code(text, limit=200):
+    """Untrusted text as an inline code span: GitHub neither links nor
+    mentions inside one. Backticks and line breaks are what could end it."""
+    text = " ".join(re.sub(r"[`\r\n]", " ", str(text)).split())
+    return f"`{text[:limit]}`" if text else "``"
+
+
+def cdk_section(state):
+    """The summary's account of each CDK app (sandbox-spec §9 step 2).
+
+    Everything the sandbox reports -- a reason, a stack -- may have been
+    written by the app itself, so it is shown as code. The app's own log is
+    never shown here (spec §10)."""
+    runs = [r for r in state.get("synth") or [] if isinstance(r, dict)]
+    skipped = (state.get("fetch") or {}).get("cdk_skipped") or []
+    if not runs and not skipped:
+        return []
+    lines = ["**CDK apps** are synthesized in an isolated sandbox and their templates scanned as "
+             "CloudFormation. A finding is annotated on the line that made its resource. "
+             "Fixes are not drafted for CDK findings yet.", ""]
+    for r in runs:
+        app = _code(r.get("app_dir"))
+        if r.get("status") == "ok":
+            stacks = [posixpath.basename(t)[: -len(".template.json")] for t in r.get("templates") or []]
+            lines.append(f"- {app}: {len(stacks)} stack(s) synthesized"
+                         + (f": {', '.join(_code(s, 80) for s in stacks[:10])}" if stacks else ""))
+        else:
+            status = SYNTH_STATUS_TEXT.get(r.get("status"), "not synthesized")
+            lines.append(f"- {app}: not synthesized, {status}"
+                         + (f": {_code(r['reason'])}" if r.get("reason") else ""))
+    for a in skipped:
+        lines.append(f"- {_code(a.get('app_dir'))}: not synthesized, {a.get('reason')}")
+    lines.append("")
+    return lines
 
 
 # ---------- the offer (github-first-review-spec §3.1) ----------

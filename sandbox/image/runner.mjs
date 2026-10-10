@@ -3,9 +3,11 @@
 // set; the run supplies files and nothing else. No dependencies: this runs
 // before, and beside, anything a run installs.
 //
-// Kinds (spec §9 step 1 -- the containment's own tests, nothing else yet):
+// Kinds:
 //   leak-test  try every way out and report what happened (below)
 //   sleep      outlive the state's timeout, so the run can show it is stopped
+//   cdk-synth  install a CDK app (fetch), then synthesize it (execute):
+//              cdk.mjs (spec §9 step 2)
 //
 // The leak test REPORTS and never judges. It shares a container with
 // whatever a run executes, so the verdict is lambda/sandbox-dispatch/leak.py's,
@@ -16,6 +18,8 @@
 import { promises as dns } from "node:dns";
 import fs from "node:fs";
 import net from "node:net";
+
+import { Unsupported, executePhase, fetchPhase } from "./cdk.mjs";
 
 const PHASE = process.env.SANDBOX_PHASE;
 const KIND = process.env.SANDBOX_KIND;
@@ -169,6 +173,23 @@ async function leakTest() {
   return probes;
 }
 
+// --- cdk-synth ----------------------------------------------------------------
+
+// A phase that cannot run is still a result: collect reads why from here,
+// and the pipeline reports it, rather than finding nothing and guessing.
+async function cdkSynth() {
+  const started = Date.now();
+  try {
+    const out = PHASE === "fetch" ? await fetchPhase(manifest) : await executePhase(manifest);
+    console.log(`${PHASE} cdk-synth: ${out.status}${out.reason ? ` (${out.reason})` : ""} in ${out.duration_ms}ms`);
+    return out;
+  } catch (e) {
+    const status = e instanceof Unsupported ? "unsupported" : "error";
+    console.log(`${PHASE} cdk-synth: ${status}: ${e.message}`);
+    return { status, reason: e.message.slice(0, 500), duration_ms: Date.now() - started };
+  }
+}
+
 // --- main -------------------------------------------------------------------
 
 async function main() {
@@ -183,16 +204,22 @@ async function main() {
     await new Promise((r) => setTimeout(r, 3600 * 1000));
     return;
   }
-  if (KIND !== "leak-test") throw new Error(`unknown kind ${KIND}`);
-
-  const probes = await leakTest();
-  // Names and observations only: these are safe to log, and the log is
-  // what to read when result.json never arrives.
-  for (const p of probes) console.log(`${PHASE} ${p.name}: ${p.observed}`);
+  let result;
+  if (KIND === "leak-test") {
+    const probes = await leakTest();
+    // Names and observations only: these are safe to log, and the log is
+    // what to read when result.json never arrives.
+    for (const p of probes) console.log(`${PHASE} ${p.name}: ${p.observed}`);
+    result = { probes };
+  } else if (KIND === "cdk-synth") {
+    result = await cdkSynth();
+  } else {
+    throw new Error(`unknown kind ${KIND}`);
+  }
 
   const res = await http(manifest.RESULT_URL, {
     method: "PUT",
-    body: Buffer.from(JSON.stringify({ phase: PHASE, kind: KIND, probes })),
+    body: Buffer.from(JSON.stringify({ phase: PHASE, kind: KIND, ...result })),
   });
   console.log(`result upload: ${res.observed}`);
   if (res.status !== 200) process.exit(1);

@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { cdkSource } from '../review/cdk'
 import type { Finding, FindingStatus } from '../types/finding'
 import { SelfCheckBadge } from './SelfCheckBadge'
 import { SeverityBadge } from './SeverityBadge'
@@ -37,6 +38,10 @@ interface FindingsTableProps {
 }
 
 function formatLocation(finding: Finding): string {
+  // A synthesized template's lines mean nothing to its author; the source
+  // line does.
+  const source = cdkSource(finding)
+  if (source) return source
   const [start, end] = finding.line_range ?? [null, null]
   if (start != null && end != null && start !== end) {
     return `${finding.file}:${start}-${end}`

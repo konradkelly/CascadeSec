@@ -41,6 +41,26 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
 resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
   bucket = aws_s3_bucket.artifacts.id
 
+  # A project tarball is read once, by the sandbox run that follows it
+  # within minutes (docs/sandbox-spec.md §9 step 2). It holds a whole
+  # repository, so it is kept no longer than that needs.
+  rule {
+    id     = "expire-cdk-projects"
+    status = "Enabled"
+
+    filter {
+      prefix = "projects/"
+    }
+
+    expiration {
+      days = 2
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
   rule {
     id     = "expire-old-scan-snapshots"
     status = "Enabled"

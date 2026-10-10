@@ -15,7 +15,7 @@ measuring the containment the first thing built.
 
 | Consumer | Runs | Emits | Network after install |
 |---|---|---|---|
-| CDK | `cdk synth`, bundling off | templates and `<Stack>.metadata.json` | none (lookups come from a committed `cdk.context.json`) |
+| CDK | the app as `cdk synth` runs it, without the CLI, bundling off (§9 step 2) | templates and `<Stack>.metadata.json` | none (lookups come from a committed `cdk.context.json`) |
 | Pulumi | the program under the SDK's mocks (multi-iac §7.2 b) | `resources.json`: inputs and creation sites | none |
 | Dependency test gate | the suite, before and after the bump | pass/fail per test, and the logs | none; a suite that needs a database fails, and the gate reports that it could not be evaluated |
 
@@ -171,7 +171,9 @@ Now only the manifest's URL does, and it expires with the rest.
 image per runtime (`node22`, `python312`), pinned by digest. Each image
 carries the harnesses: the CDK runner, the Pulumi mock harness from the
 probe, and a test runner. `kind` selects among them. The pull request
-supplies files, never a command line.
+supplies files, never a command line -- with one exception found in
+building CDK: `cdk.json`'s `app` is the PR's command, run inside the
+execute task like the code it starts (§9 step 2).
 
 **Inside:** a non-root user, a read-only root filesystem, and a writable
 scratch volume. Resource limits come from the task size and from a
@@ -345,6 +347,118 @@ someone the repository already trusts to push to it.
 2. **CDK detection.** Synth in the sandbox, templates into the scan,
    findings mapped to source lines. CDK first because its output is already
    a target type (multi-iac §9).
+
+   **Built 2026-10-10, measured locally; not yet run on AWS.** A pull
+   request with a `cdk.json` now goes through the sandbox and comes back
+   as findings on its TypeScript:
+
+   - **github-gateway** finds every directory holding a `cdk.json` while
+     the snapshot streams, and packs the repository into
+     `projects/<pr_id>/<sha>.tgz` under the snapshot's own path rules
+     (`SKIP_DIRS`, regular files, refused names). An app is run only if the
+     deployment has `cdk_synthesis` on, the PR is not from a fork (§8), it
+     has a `package.json` and a `package-lock.json`, and it is among the
+     first five. Every other app is reported on the check run with the
+     reason.
+   - **The pipeline** gains `Synthesize` before `Scan`: a Map over the
+     apps, each one a `sandbox-run` execution (`startExecution.sync:2`).
+     Every outcome is a result, not a failed execution, so a broken app
+     never stops the rest of the repository being scanned.
+   - **The `cdk-synth` harness** (`sandbox/image/cdk.mjs`). Fetch extracts
+     only the two npm files and runs `npm ci --ignore-scripts` against the
+     mirror, with a userconfig of its own. Execute unpacks the project and
+     that `node_modules`, runs the app, and uploads only the assembly's
+     manifests, templates and metadata.
+   - **`collect`** (`lambda/sandbox-dispatch/cdk.py`) reads that assembly
+     as hostile input. It parses and re-serialises every template, and
+     writes each one, with a *source map* beside it, to
+     `scans/<pr_id>/<app>/cdk.out/`. No uploader can put a file there,
+     because `SKIP_DIRS` drops `cdk.out`, so the path itself marks a
+     template as synthesized.
+   - **iac-scanner** scans those templates as the CloudFormation they are.
+     It turns each finding into `target_type: cdk` with an `origin`, the
+     source line that made its resource. **mapping-agent** maps them for
+     an app the PR touches. **remediation-agent** never drafts them: that
+     is step 3.
+   - **The check run** annotates a finding on its source line, never on
+     the template. Its summary says what happened to each app.
+
+   `scripts/sandbox.py synth DIR` runs one app through the sandbox without
+   GitHub, and `sandbox/fixtures/cdk-app` is the probe app to run it on.
+
+   Building it settled §4's open measurement and corrected the spec in
+   five places:
+
+   - **`--ignore-scripts` is enough for a CDK app**, measured on one: the
+     probe app installed and synthesized with it, 242 MB of `node_modules`
+     and 79 MB compressed. One app is not a corpus. The first app that
+     needs a postinstall step will fail at synth, and is reported, not
+     given scripts.
+   - **The app runs without the CDK CLI.** The CLI's contract with an app
+     is two environment variables: where to write the assembly
+     (`CDK_OUTDIR`) and the merged context (`CDK_CONTEXT_JSON`). The
+     harness sets them itself, adds `aws:cdk:bundling-stacks: []`, and
+     runs `cdk.json`'s `app` command. On the probe app, offline, that took
+     31 seconds against the CLI's 66. A CLI pinned in the image would also
+     refuse any `aws-cdk-lib` newer than itself, and the project's own CLI
+     is more of the PR's code. A lookup with no cached context leaves its
+     dummy values in the template and a `missing` entry in the manifest.
+     That app is reported as *needs context*, with the providers it asked
+     for, and its templates are not scanned.
+   - **§6's "the pull request supplies files, never a command line" no
+     longer holds for CDK.** `cdk.json`'s `app` is a command line, and
+     the execute task runs it through a shell. That command is
+     the PR's code like the app it starts, and it runs where that code
+     would. What §6 protects still holds: the request names a kind and
+     never a command, and the task definition fixes the phase. The app's
+     environment holds nothing of the runner's: not the manifest's URL,
+     not the run id. The app still runs as the runner's user, so it could
+     read them from the runner's process. That is why everything the run
+     reports is read as hostile.
+   - **A finding is placed by line, not by resource name.** The three
+     scanners name CloudFormation resources three ways. Trivy uses a line
+     range for some, KICS a tag for others, and checkov a type and logical
+     id. All three agree on lines. `collect` therefore records each
+     resource's span in the template it wrote itself. The spans matched
+     checkov's ranges exactly. A finding's resource is the one whose span
+     holds its first line, and its source line comes from that resource's
+     creation stack in `<Stack>.metadata.json`. A resource a library made
+     for itself takes its nearest ancestor's line. A finding about the
+     template as a whole takes the stack's line. Run through the scanner
+     image, the probe app gave 41 findings, every one on a source line
+     (the table is in the fixture's README). Two settings carry this.
+     `CDK_DEBUG=true` records the line that set a property, which step 3's
+     fixes will want. `--stack-trace-limit=50` matters because at Node's
+     default of ten, a `Vpc`'s subnets had no user frame at all.
+   - **A template missing from a scan is not a finding fixed.** When an
+     app does not synthesize (the sandbox is off, the app fails, a fork),
+     its templates are absent. The scanner would then have marked every
+     earlier CDK finding `no_longer_detected`. So a CDK finding is marked
+     only if its app's `cdk.out` was scanned this time. In that case a
+     missing template is a stack that was removed.
+
+   The app's own words never reach a reader unescaped. The `reason` of a
+   failed phase comes from a `result.json` the app could have rewritten,
+   and stack names come from its manifest. The check run shows both as
+   inline code, where GitHub neither links nor mentions. `log_tail` is
+   kept in the run's output and shown nowhere (§10). A finding's `origin`
+   is the app's claim about itself (§2). It places an annotation and
+   decides nothing. An annotation goes only on a line the PR adds, so a
+   claim that names any other line is simply not shown.
+
+   **Not measured, or not built:**
+
+   - Any of it on AWS: the Fargate cold start, the mirror's first fetch of
+     `aws-cdk-lib`, and whether `TimeoutSeconds` on the `.sync:2` state
+     also stops the child execution.
+   - Execute runs even when fetch failed. It then fails at once with no
+     dependencies, but only after a task start. Skipping it needs a state
+     that reads fetch's result, which is one more Lambda call per run.
+   - npm workspaces, yarn, pnpm, and CDK apps in Python, Java or Go are
+     reported as unsupported. So are apps that import from outside their
+     own directory, which fail at synth.
+   - Approving a fork's app (§8, §10) is not built. A fork's app is
+     reported as needing approval, with nothing yet to give it.
 3. **CDK remediation.** The yield round trip of §7, and the cold-start
    measurement it exists to get.
 4. **Pulumi.** The mock harness and the converter, with a hardened twin for
@@ -391,3 +505,7 @@ someone the repository already trusts to push to it.
 - [ ] Whether `result.json`'s `log_tail` is shown to reviewers. It is the
       most useful thing in a failed run and entirely attacker-written, so
       it renders as escaped text in a collapsed block, if at all.
+      **Not shown anywhere as of step 2 (2026-10-10).** It is kept, clipped
+      to 4 KB, in `sandbox-run`'s output, and `scripts/sandbox.py synth
+      --log` prints it. The check run gets the phase's short reason, as
+      inline code. The dashboard question is still open.
