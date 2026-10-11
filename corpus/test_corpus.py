@@ -161,6 +161,44 @@ def test_a_mapping_offers_no_duplicate_candidates():
     assert not dupes, f"duplicate candidates: {dupes}"
 
 
+# ---------- the unmapped section: rules judged and deliberately left raw ----------
+
+# What an `unmapped` entry's reason may be. mapping-agent copies it onto the
+# finding verbatim and the dashboard groups by it, so a typo would invent a
+# fifth group. `unreviewed` is not here: it is what a rule gets for being in
+# neither section, and writing it down would be a contradiction.
+UNMAPPED_REASONS = {"no-control", "hygiene", "not-fixable"}
+
+
+def _unmapped():
+    return _load(CORPUS / "rule_mappings.json").get("unmapped", {})
+
+
+def test_an_unmapped_entry_has_a_known_reason_and_says_why():
+    bad = [
+        key for key, entry in _unmapped().items()
+        if entry.get("reason") not in UNMAPPED_REASONS or not entry.get("note")
+    ]
+
+    assert not bad, f"entries without a reason in {UNMAPPED_REASONS} and a note: {bad}"
+
+
+def test_an_unmapped_key_is_a_source_and_a_rule_id():
+    bad = [key for key in _unmapped()
+           if key.partition(":")[0] not in KNOWN_SOURCES or not key.partition(":")[2]]
+
+    assert not bad, f"keys that are not <source>:<rule_id>: {bad}"
+
+
+def test_no_rule_is_both_mapped_and_declared_unmapped():
+    """A rule that gains a mapping must leave the unmapped section in the
+    same edit. Left in both, the mapping wins at runtime and the entry is a
+    stale claim that nobody can see is stale."""
+    both = sorted(set(_mappings()) & set(_unmapped()))
+
+    assert not both, f"in both sections: {both}"
+
+
 def test_the_handlers_framework_map_matches_the_files_on_disk():
     """mapping-agent holds framework -> filename in code while the files
     live here, so the two can drift apart in either direction: a framework

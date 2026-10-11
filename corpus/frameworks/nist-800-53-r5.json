@@ -1,0 +1,98 @@
+{
+  "framework": "NIST-800-53-r5",
+  "framework_name": "NIST SP 800-53 Rev. 5, Security and Privacy Controls for Information Systems and Organizations (release 5.2.0)",
+  "source": "https://github.com/usnistgov/oscal-content/blob/78650f02ad9321bb7b817846f8fbd4f2bcd620de/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_catalog.json",
+  "_comment": "Generated from NIST's OSCAL catalog at the pinned commit above, not written by hand: `text` is each control's statement verbatim, with OSCAL parameters rendered as [Assignment: ...] / [Selection: ...] the way the publication prints them. NIST publications are US government works and not subject to copyright, so unlike the CIS files these are quotes, not summaries. Only the controls rule_mappings.json cites are included. See corpus/README.md.",
+  "controls": [
+    {
+      "control_id": "AC-3",
+      "title": "Access Enforcement",
+      "text": "Enforce approved authorizations for logical access to information and system resources in accordance with applicable access control policies."
+    },
+    {
+      "control_id": "AC-6",
+      "title": "Least Privilege",
+      "text": "Employ the principle of least privilege, allowing only authorized accesses for users (or processes acting on behalf of users) that are necessary to accomplish assigned organizational tasks."
+    },
+    {
+      "control_id": "AU-11",
+      "title": "Audit Record Retention",
+      "text": "Retain audit records for [Assignment: time period] to provide support for after-the-fact investigations of incidents and to meet regulatory and organizational information retention requirements."
+    },
+    {
+      "control_id": "AU-12",
+      "title": "Audit Record Generation",
+      "text": "a. Provide audit record generation capability for the event types the system is capable of auditing as defined in AU-2a on [Assignment: system components]; b. Allow [Assignment: personnel or roles] to select the event types that are to be logged by specific components of the system; and c. Generate audit records for the event types defined in AU-2c that include the audit record content defined in AU-3."
+    },
+    {
+      "control_id": "CM-14",
+      "title": "Signed Components",
+      "text": "Prevent the installation of [Assignment: organization-defined software and firmware components] without verification that the component has been digitally signed using a certificate that is recognized and approved by the organization."
+    },
+    {
+      "control_id": "CP-6",
+      "title": "Alternate Storage Site",
+      "text": "a. Establish an alternate storage site, including necessary agreements to permit the storage and retrieval of system backup information; and b. Ensure that the alternate storage site provides controls equivalent to that of the primary site."
+    },
+    {
+      "control_id": "CP-9",
+      "title": "System Backup",
+      "text": "a. Conduct backups of user-level information contained in [Assignment: system components] [Assignment: frequency]; b. Conduct backups of system-level information contained in the system [Assignment: frequency]; c. Conduct backups of system documentation, including security- and privacy-related documentation [Assignment: frequency]; and d. Protect the confidentiality, integrity, and availability of backup information."
+    },
+    {
+      "control_id": "CP-10",
+      "title": "System Recovery and Reconstitution",
+      "text": "Provide for the recovery and reconstitution of the system to a known state within [Assignment: organization-defined time period consistent with recovery time and recovery point objectives] after a disruption, compromise, or failure."
+    },
+    {
+      "control_id": "RA-5",
+      "title": "Vulnerability Monitoring and Scanning",
+      "text": "a. Monitor and scan for vulnerabilities in the system and hosted applications [Assignment: organization-defined frequency and/or randomly in accordance with organization-defined process] and when new vulnerabilities potentially affecting the system are identified and reported; b. Employ vulnerability monitoring tools and techniques that facilitate interoperability among tools and automate parts of the vulnerability management process by using standards for: 1. Enumerating platforms, software flaws, and improper configurations; 2. Formatting checklists and test procedures; and 3. Measuring vulnerability impact; c. Analyze vulnerability scan reports and results from vulnerability monitoring; d. Remediate legitimate vulnerabilities [Assignment: response times] in accordance with an organizational assessment of risk; e. Share information obtained from the vulnerability monitoring process and control assessments with [Assignment: personnel or roles] to help eliminate similar vulnerabilities in other systems; and f. Employ vulnerability monitoring tools that include the capability to readily update the vulnerabilities to be scanned."
+    },
+    {
+      "control_id": "SA-22",
+      "title": "Unsupported System Components",
+      "text": "a. Replace system components when support for the components is no longer available from the developer, vendor, or manufacturer; or b. Provide the following options for alternative sources for continued support for unsupported components [Selection (one-or-more): in-house support; [Assignment] ]."
+    },
+    {
+      "control_id": "SC-6",
+      "title": "Resource Availability",
+      "text": "Protect the availability of resources by allocating [Assignment: resources] by [Selection (one-or-more): priority; quota; [Assignment] ]."
+    },
+    {
+      "control_id": "SC-7",
+      "title": "Boundary Protection",
+      "text": "a. Monitor and control communications at the external managed interfaces to the system and at key internal managed interfaces within the system; b. Implement subnetworks for publicly accessible system components that are [Selection (one): physically; logically] separated from internal organizational networks; and c. Connect to external networks or systems only through managed interfaces consisting of boundary protection devices arranged in accordance with an organizational security and privacy architecture."
+    },
+    {
+      "control_id": "SC-8(1)",
+      "title": "Transmission Confidentiality and Integrity | Cryptographic Protection",
+      "text": "Implement cryptographic mechanisms to [Selection (one-or-more): prevent unauthorized disclosure of information; detect changes to information] during transmission."
+    },
+    {
+      "control_id": "SC-12",
+      "title": "Cryptographic Key Establishment and Management",
+      "text": "Establish and manage cryptographic keys when cryptography is employed within the system in accordance with the following key management requirements: [Assignment: requirements]."
+    },
+    {
+      "control_id": "SC-28(1)",
+      "title": "Protection of Information at Rest | Cryptographic Protection",
+      "text": "Implement cryptographic mechanisms to prevent unauthorized disclosure and modification of the following information at rest on [Assignment: system components or media]: [Assignment: information]."
+    },
+    {
+      "control_id": "SC-36",
+      "title": "Distributed Processing and Storage",
+      "text": "Distribute the following processing and storage components across multiple [Selection (one): physical locations; logical domains]: [Assignment: organization-defined processing and storage components]."
+    },
+    {
+      "control_id": "SI-2",
+      "title": "Flaw Remediation",
+      "text": "a. Identify, report, and correct system flaws; b. Test software and firmware updates related to flaw remediation for effectiveness and potential side effects before installation; c. Install security-relevant software and firmware updates within [Assignment: time period] of the release of the updates; and d. Incorporate flaw remediation into the organizational configuration management process."
+    },
+    {
+      "control_id": "SI-4",
+      "title": "System Monitoring",
+      "text": "a. Monitor the system to detect: 1. Attacks and indicators of potential attacks in accordance with the following monitoring objectives: [Assignment: monitoring objectives]; and 2. Unauthorized local, network, and remote connections; b. Identify unauthorized use of the system through the following techniques and methods: [Assignment: techniques and methods]; c. Invoke internal monitoring capabilities or deploy monitoring devices: 1. Strategically within the system to collect organization-determined essential information; and 2. At ad hoc locations within the system to track specific types of transactions of interest to the organization; d. Analyze detected events and anomalies; e. Adjust the level of system monitoring activity when there is a change in risk to organizational operations and assets, individuals, other organizations, or the Nation; f. Obtain legal opinion regarding system monitoring activities; and g. Provide [Assignment: system monitoring information] to [Assignment: personnel or roles] [Selection (one-or-more): as needed; [Assignment] ]."
+    }
+  ]
+}

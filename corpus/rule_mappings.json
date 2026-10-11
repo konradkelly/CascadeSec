@@ -23,16 +23,46 @@
         "control_id": "2.2.1"
       }
     ],
+    "checkov:CKV2_AWS_52": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-3"
+      }
+    ],
     "checkov:CKV2_AWS_6": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.1.5"
       }
     ],
+    "checkov:CKV2_AWS_64": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
+      }
+    ],
+    "checkov:CKV2_AWS_69": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-8(1)"
+      }
+    ],
+    "checkov:CKV2_AWS_8": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-9"
+      }
+    ],
     "checkov:CKV2_AZURE_27": [
       {
         "framework": "CIS-Azure-3.0",
         "control_id": "5.1.4"
+      }
+    ],
+    "checkov:CKV2_K8S_5": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.1.2"
       }
     ],
     "checkov:CKV2_K8S_6": [
@@ -45,6 +75,12 @@
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "1.16"
+      }
+    ],
+    "checkov:CKV_AWS_101": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
       }
     ],
     "checkov:CKV_AWS_109": [
@@ -65,10 +101,40 @@
         "control_id": "1.16"
       }
     ],
+    "checkov:CKV_AWS_115": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-6"
+      }
+    ],
+    "checkov:CKV_AWS_119": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
+      }
+    ],
+    "checkov:CKV_AWS_129": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
+      }
+    ],
     "checkov:CKV_AWS_130": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-1"
+      }
+    ],
+    "checkov:CKV_AWS_133": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-9"
+      }
+    ],
+    "checkov:CKV_AWS_136": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
       }
     ],
     "checkov:CKV_AWS_137": [
@@ -77,10 +143,28 @@
         "control_id": "CNAS-6"
       }
     ],
+    "checkov:CKV_AWS_144": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-6"
+      }
+    ],
     "checkov:CKV_AWS_145": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.1.1"
+      }
+    ],
+    "checkov:CKV_AWS_157": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-36"
+      }
+    ],
+    "checkov:CKV_AWS_158": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
       }
     ],
     "checkov:CKV_AWS_16": [
@@ -89,10 +173,22 @@
         "control_id": "2.3.1"
       }
     ],
+    "checkov:CKV_AWS_163": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "RA-5"
+      }
+    ],
     "checkov:CKV_AWS_17": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
+      }
+    ],
+    "checkov:CKV_AWS_173": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
       }
     ],
     "checkov:CKV_AWS_18": [
@@ -101,10 +197,50 @@
         "control_id": "3.6"
       }
     ],
+    "checkov:CKV_AWS_186": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
+      }
+    ],
+    "checkov:CKV_AWS_189": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
+      }
+    ],
+    "checkov:CKV_AWS_21": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-9"
+      },
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-10"
+      }
+    ],
+    "checkov:CKV_AWS_226": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SI-2"
+      }
+    ],
+    "checkov:CKV_AWS_228": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-8(1)"
+      }
+    ],
     "checkov:CKV_AWS_24": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "5.2"
+      }
+    ],
+    "checkov:CKV_AWS_247": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
       }
     ],
     "checkov:CKV_AWS_25": [
@@ -113,10 +249,28 @@
         "control_id": "5.2"
       }
     ],
+    "checkov:CKV_AWS_26": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
     "checkov:CKV_AWS_260": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
+      }
+    ],
+    "checkov:CKV_AWS_27": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
+    "checkov:CKV_AWS_272": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CM-14"
       }
     ],
     "checkov:CKV_AWS_277": [
@@ -129,10 +283,100 @@
         "control_id": "CNAS-6"
       }
     ],
+    "checkov:CKV_AWS_279": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
+    "checkov:CKV_AWS_280": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
+      }
+    ],
+    "checkov:CKV_AWS_283": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
+    "checkov:CKV_AWS_286": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
+    "checkov:CKV_AWS_287": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
+    "checkov:CKV_AWS_288": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
+    "checkov:CKV_AWS_289": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
+    "checkov:CKV_AWS_290": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
     "checkov:CKV_AWS_3": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.2.1"
+      }
+    ],
+    "checkov:CKV_AWS_317": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
+      }
+    ],
+    "checkov:CKV_AWS_324": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
+      }
+    ],
+    "checkov:CKV_AWS_325": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
+      }
+    ],
+    "checkov:CKV_AWS_326": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-10"
+      }
+    ],
+    "checkov:CKV_AWS_327": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
+      }
+    ],
+    "checkov:CKV_AWS_338": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-11"
+      }
+    ],
+    "checkov:CKV_AWS_347": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
       }
     ],
     "checkov:CKV_AWS_35": [
@@ -141,10 +385,46 @@
         "control_id": "3.7"
       }
     ],
+    "checkov:CKV_AWS_355": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
+    "checkov:CKV_AWS_356": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
     "checkov:CKV_AWS_36": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "3.2"
+      }
+    ],
+    "checkov:CKV_AWS_361": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-9"
+      }
+    ],
+    "checkov:CKV_AWS_363": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SA-22"
+      }
+    ],
+    "checkov:CKV_AWS_37": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
+      }
+    ],
+    "checkov:CKV_AWS_376": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-8(1)"
       }
     ],
     "checkov:CKV_AWS_38": [
@@ -181,6 +461,18 @@
         "control_id": "CICD-SEC-6"
       }
     ],
+    "checkov:CKV_AWS_42": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
+    "checkov:CKV_AWS_44": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
     "checkov:CKV_AWS_45": [
       {
         "framework": "OWASP-CloudNative",
@@ -201,6 +493,12 @@
         "control_id": "CICD-SEC-6"
       }
     ],
+    "checkov:CKV_AWS_5": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
     "checkov:CKV_AWS_51": [
       {
         "framework": "OWASP-CloudNative",
@@ -209,6 +507,18 @@
       {
         "framework": "OWASP-CICD-Top10",
         "control_id": "CICD-SEC-9"
+      }
+    ],
+    "checkov:CKV_AWS_58": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
+    "checkov:CKV_AWS_60": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
       }
     ],
     "checkov:CKV_AWS_62": [
@@ -221,6 +531,12 @@
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "1.16"
+      }
+    ],
+    "checkov:CKV_AWS_66": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-11"
       }
     ],
     "checkov:CKV_AWS_67": [
@@ -247,10 +563,22 @@
         "control_id": "2.2.1"
       }
     ],
+    "checkov:CKV_AWS_84": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
+      }
+    ],
     "checkov:CKV_AWS_88": [
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-1"
+      }
+    ],
+    "checkov:CKV_AWS_92": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
       }
     ],
     "checkov:CKV_AWS_96": [
@@ -281,6 +609,12 @@
       {
         "framework": "CIS-Azure-3.0",
         "control_id": "3.3.5"
+      }
+    ],
+    "checkov:CKV_AZURE_112": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
       }
     ],
     "checkov:CKV_AZURE_113": [
@@ -337,6 +671,30 @@
         "control_id": "3.3.7"
       }
     ],
+    "checkov:CKV_AZURE_206": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-6"
+      }
+    ],
+    "checkov:CKV_AZURE_216": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
+      }
+    ],
+    "checkov:CKV_AZURE_225": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-36"
+      }
+    ],
+    "checkov:CKV_AZURE_229": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-36"
+      }
+    ],
     "checkov:CKV_AZURE_23": [
       {
         "framework": "CIS-Azure-3.0",
@@ -347,6 +705,24 @@
       {
         "framework": "CIS-Azure-3.0",
         "control_id": "5.1.6"
+      }
+    ],
+    "checkov:CKV_AZURE_25": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SI-4"
+      }
+    ],
+    "checkov:CKV_AZURE_26": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SI-4"
+      }
+    ],
+    "checkov:CKV_AZURE_27": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SI-4"
       }
     ],
     "checkov:CKV_AZURE_28": [
@@ -403,6 +779,12 @@
         "control_id": "8.7"
       }
     ],
+    "checkov:CKV_AZURE_52": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-8(1)"
+      }
+    ],
     "checkov:CKV_AZURE_54": [
       {
         "framework": "CIS-Azure-3.0",
@@ -427,6 +809,94 @@
         "control_id": "8.3"
       }
     ],
+    "checkov:CKV_GCP_12": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
+      },
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
+      }
+    ],
+    "checkov:CKV_GCP_20": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
+      },
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
+      }
+    ],
+    "checkov:CKV_GCP_25": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
+      },
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
+      }
+    ],
+    "checkov:CKV_GCP_61": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
+      }
+    ],
+    "checkov:CKV_GCP_64": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
+      },
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
+      }
+    ],
+    "checkov:CKV_GCP_66": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CM-14"
+      }
+    ],
+    "checkov:CKV_GCP_69": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-1"
+      }
+    ],
+    "checkov:CKV_GCP_70": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SI-2"
+      }
+    ],
+    "checkov:CKV_K8S_10": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-6"
+      }
+    ],
+    "checkov:CKV_K8S_11": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-6"
+      }
+    ],
+    "checkov:CKV_K8S_12": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-6"
+      }
+    ],
+    "checkov:CKV_K8S_13": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-6"
+      }
+    ],
     "checkov:CKV_K8S_14": [
       {
         "framework": "OWASP-CloudNative",
@@ -445,6 +915,18 @@
       {
         "framework": "OWASP-CICD-Top10",
         "control_id": "CICD-SEC-9"
+      }
+    ],
+    "checkov:CKV_K8S_155": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
+    "checkov:CKV_K8S_156": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
       }
     ],
     "checkov:CKV_K8S_157": [
@@ -511,6 +993,12 @@
       {
         "framework": "CIS-Kubernetes-2.0",
         "control_id": "5.2.12"
+      }
+    ],
+    "checkov:CKV_K8S_27": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.11"
       }
     ],
     "checkov:CKV_K8S_28": [
@@ -780,6 +1268,12 @@
         "control_id": "9.2"
       }
     ],
+    "trivy:AWS-0009": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-1"
+      }
+    ],
     "trivy:AWS-0014": [
       {
         "framework": "CIS-AWS-1.4",
@@ -798,10 +1292,28 @@
         "control_id": "3.2"
       }
     ],
+    "trivy:AWS-0017": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
+      }
+    ],
+    "trivy:AWS-0025": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
+      }
+    ],
     "trivy:AWS-0026": [
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "2.2.1"
+      }
+    ],
+    "trivy:AWS-0027": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
       }
     ],
     "trivy:AWS-0028": [
@@ -820,6 +1332,12 @@
         "control_id": "CICD-SEC-6"
       }
     ],
+    "trivy:AWS-0030": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "RA-5"
+      }
+    ],
     "trivy:AWS-0031": [
       {
         "framework": "OWASP-CloudNative",
@@ -828,6 +1346,30 @@
       {
         "framework": "OWASP-CICD-Top10",
         "control_id": "CICD-SEC-9"
+      }
+    ],
+    "trivy:AWS-0033": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
+      }
+    ],
+    "trivy:AWS-0037": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
+    "trivy:AWS-0038": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
+      }
+    ],
+    "trivy:AWS-0039": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
       }
     ],
     "trivy:AWS-0040": [
@@ -842,6 +1384,30 @@
         "control_id": "CNAS-6"
       }
     ],
+    "trivy:AWS-0042": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
+      }
+    ],
+    "trivy:AWS-0043": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-8(1)"
+      }
+    ],
+    "trivy:AWS-0046": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-8(1)"
+      }
+    ],
+    "trivy:AWS-0048": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
     "trivy:AWS-0053": [
       {
         "framework": "OWASP-CloudNative",
@@ -852,6 +1418,24 @@
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "3.8"
+      }
+    ],
+    "trivy:AWS-0075": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
+      }
+    ],
+    "trivy:AWS-0076": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
+    "trivy:AWS-0077": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-9"
       }
     ],
     "trivy:AWS-0079": [
@@ -884,6 +1468,16 @@
         "control_id": "3.6"
       }
     ],
+    "trivy:AWS-0090": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-9"
+      },
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-10"
+      }
+    ],
     "trivy:AWS-0091": [
       {
         "framework": "CIS-AWS-1.4",
@@ -902,6 +1496,18 @@
         "control_id": "2.1.5"
       }
     ],
+    "trivy:AWS-0095": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
+    "trivy:AWS-0096": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-28(1)"
+      }
+    ],
     "trivy:AWS-0104": [
       {
         "framework": "OWASP-CloudNative",
@@ -918,6 +1524,18 @@
       {
         "framework": "CIS-AWS-1.4",
         "control_id": "5.2"
+      }
+    ],
+    "trivy:AWS-0126": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-8(1)"
+      }
+    ],
+    "trivy:AWS-0128": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
       }
     ],
     "trivy:AWS-0131": [
@@ -954,6 +1572,12 @@
       {
         "framework": "OWASP-CloudNative",
         "control_id": "CNAS-6"
+      }
+    ],
+    "trivy:AWS-0345": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
       }
     ],
     "trivy:AZU-0002": [
@@ -1034,6 +1658,12 @@
         "control_id": "5.1.7"
       }
     ],
+    "trivy:AZU-0026": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-8(1)"
+      }
+    ],
     "trivy:AZU-0027": [
       {
         "framework": "CIS-Azure-3.0",
@@ -1058,6 +1688,12 @@
         "control_id": "4.13"
       }
     ],
+    "trivy:AZU-0058": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "CP-6"
+      }
+    ],
     "trivy:AZU-0059": [
       {
         "framework": "CIS-Azure-3.0",
@@ -1078,6 +1714,44 @@
       {
         "framework": "CIS-Azure-3.0",
         "control_id": "9.1"
+      }
+    ],
+    "trivy:GCP-0050": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
+    "trivy:GCP-0059": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
+      },
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
+      }
+    ],
+    "trivy:GCP-0061": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
+      },
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
+      }
+    ],
+    "trivy:GCP-0066": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
+      }
+    ],
+    "trivy:GCP-0077": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AU-12"
       }
     ],
     "trivy:IACP-0001": [
@@ -1124,6 +1798,12 @@
         "control_id": "5.2.9"
       }
     ],
+    "trivy:KSV-0006": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.2.11"
+      }
+    ],
     "trivy:KSV-0008": [
       {
         "framework": "CIS-Kubernetes-2.0",
@@ -1142,6 +1822,12 @@
         "control_id": "5.2.3"
       }
     ],
+    "trivy:KSV-0011": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-6"
+      }
+    ],
     "trivy:KSV-0012": [
       {
         "framework": "CIS-Kubernetes-2.0",
@@ -1158,10 +1844,28 @@
         "control_id": "CICD-SEC-9"
       }
     ],
+    "trivy:KSV-0015": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-6"
+      }
+    ],
+    "trivy:KSV-0016": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-6"
+      }
+    ],
     "trivy:KSV-0017": [
       {
         "framework": "CIS-Kubernetes-2.0",
         "control_id": "5.2.2"
+      }
+    ],
+    "trivy:KSV-0018": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-6"
       }
     ],
     "trivy:KSV-0022": [
@@ -1194,6 +1898,16 @@
         "control_id": "5.1.3"
       }
     ],
+    "trivy:KSV-0046": [
+      {
+        "framework": "CIS-Kubernetes-2.0",
+        "control_id": "5.1.3"
+      },
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
+      }
+    ],
     "trivy:KSV-0104": [
       {
         "framework": "CIS-Kubernetes-2.0",
@@ -1216,6 +1930,12 @@
       {
         "framework": "CIS-Kubernetes-2.0",
         "control_id": "5.6.4"
+      }
+    ],
+    "trivy:KSV-0111": [
+      {
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
       }
     ],
     "trivy:KSV-0112": [
@@ -1248,5 +1968,227 @@
         "control_id": "5.5.1"
       }
     ]
+  },
+  "unmapped": {
+    "checkov:CKV2_AWS_19": {
+      "reason": "hygiene",
+      "note": "Unattached security groups and Elastic IPs."
+    },
+    "checkov:CKV2_AWS_41": {
+      "reason": "no-control",
+      "note": "An instance profile on every EC2 instance; no loaded control asks for one."
+    },
+    "checkov:CKV2_AWS_5": {
+      "reason": "hygiene",
+      "note": "Unattached security groups and Elastic IPs."
+    },
+    "checkov:CKV2_AWS_58": {
+      "reason": "no-control",
+      "note": "Deletion protection. AWS's own Security Hub mapping puts RDS.8 under CM-3 and SC-5(2), but neither control's text says anything about deletion, so citing them would be citing the mapping rather than the control."
+    },
+    "checkov:CKV2_AWS_59": {
+      "reason": "no-control",
+      "note": "Dedicated or three master nodes: cluster stability, not distribution across locations (SC-36)."
+    },
+    "checkov:CKV2_AWS_60": {
+      "reason": "hygiene",
+      "note": "Copying tags to snapshots."
+    },
+    "checkov:CKV2_AWS_61": {
+      "reason": "hygiene",
+      "note": "An S3 lifecycle configuration."
+    },
+    "checkov:CKV2_AWS_62": {
+      "reason": "no-control",
+      "note": "Tracing, monitoring granularity, performance and delivery settings. Useful, and not audit records (AU-12) or a security control."
+    },
+    "checkov:CKV_AWS_116": {
+      "reason": "no-control",
+      "note": "Tracing, monitoring granularity, performance and delivery settings. Useful, and not audit records (AU-12) or a security control."
+    },
+    "checkov:CKV_AWS_117": {
+      "reason": "no-control",
+      "note": "Lambda inside a VPC. Placement, not a boundary control on its own."
+    },
+    "checkov:CKV_AWS_118": {
+      "reason": "no-control",
+      "note": "Tracing, monitoring granularity, performance and delivery settings. Useful, and not audit records (AU-12) or a security control."
+    },
+    "checkov:CKV_AWS_126": {
+      "reason": "no-control",
+      "note": "Tracing, monitoring granularity, performance and delivery settings. Useful, and not audit records (AU-12) or a security control."
+    },
+    "checkov:CKV_AWS_127": {
+      "reason": "no-control",
+      "note": "Certificates from ACM specifically. SC-17 asks for an approved provider, and ACM is one choice of many."
+    },
+    "checkov:CKV_AWS_135": {
+      "reason": "no-control",
+      "note": "Tracing, monitoring granularity, performance and delivery settings. Useful, and not audit records (AU-12) or a security control."
+    },
+    "checkov:CKV_AWS_139": {
+      "reason": "no-control",
+      "note": "Deletion protection. AWS's own Security Hub mapping puts RDS.8 under CM-3 and SC-5(2), but neither control's text says anything about deletion, so citing them would be citing the mapping rather than the control."
+    },
+    "checkov:CKV_AWS_148": {
+      "reason": "no-control",
+      "note": "Default VPC. CIS AWS 1.4's 5.3 is about the default security group, not the VPC."
+    },
+    "checkov:CKV_AWS_161": {
+      "reason": "no-control",
+      "note": "IAM database authentication. IA-2 asks for unique identification, which password users already have; nothing loaded asks for the IAM mechanism."
+    },
+    "checkov:CKV_AWS_162": {
+      "reason": "no-control",
+      "note": "IAM database authentication. IA-2 asks for unique identification, which password users already have; nothing loaded asks for the IAM mechanism."
+    },
+    "checkov:CKV_AWS_23": {
+      "reason": "hygiene",
+      "note": "Descriptions on security groups and rules."
+    },
+    "checkov:CKV_AWS_248": {
+      "reason": "no-control",
+      "note": "Elasticsearch on the default security group. CIS 5.3 is about what the default group allows, not who uses it."
+    },
+    "checkov:CKV_AWS_273": {
+      "reason": "no-control",
+      "note": "SSO rather than IAM users: an account-level choice no loaded control makes."
+    },
+    "checkov:CKV_AWS_293": {
+      "reason": "no-control",
+      "note": "Deletion protection. AWS's own Security Hub mapping puts RDS.8 under CM-3 and SC-5(2), but neither control's text says anything about deletion, so citing them would be citing the mapping rather than the control."
+    },
+    "checkov:CKV_AWS_313": {
+      "reason": "hygiene",
+      "note": "Copying tags to snapshots."
+    },
+    "checkov:CKV_AWS_318": {
+      "reason": "no-control",
+      "note": "Dedicated or three master nodes: cluster stability, not distribution across locations (SC-36)."
+    },
+    "checkov:CKV_AWS_359": {
+      "reason": "no-control",
+      "note": "IAM database authentication. IA-2 asks for unique identification, which password users already have; nothing loaded asks for the IAM mechanism."
+    },
+    "checkov:CKV_AWS_362": {
+      "reason": "hygiene",
+      "note": "Copying tags to snapshots."
+    },
+    "checkov:CKV_AWS_50": {
+      "reason": "no-control",
+      "note": "Tracing, monitoring granularity, performance and delivery settings. Useful, and not audit records (AU-12) or a security control."
+    },
+    "checkov:CKV_AZURE_1": {
+      "reason": "no-control",
+      "note": "SSH keys rather than passwords on a VM. CIS Azure 3.0 section 8 has no such control, and NIST IA-5(1)/(2) govern each method without preferring one."
+    },
+    "checkov:CKV_AZURE_114": {
+      "reason": "hygiene",
+      "note": "A content type on Key Vault secrets."
+    },
+    "checkov:CKV_AZURE_149": {
+      "reason": "no-control",
+      "note": "SSH keys rather than passwords on a VM. CIS Azure 3.0 section 8 has no such control, and NIST IA-5(1)/(2) govern each method without preferring one."
+    },
+    "checkov:CKV_AZURE_178": {
+      "reason": "no-control",
+      "note": "SSH keys rather than passwords on a VM. CIS Azure 3.0 section 8 has no such control, and NIST IA-5(1)/(2) govern each method without preferring one."
+    },
+    "checkov:CKV_AZURE_43": {
+      "reason": "hygiene",
+      "note": "Storage account naming rules."
+    },
+    "checkov:CKV_GCP_13": {
+      "reason": "no-control",
+      "note": "Legacy client-certificate auth on GKE; no loaded control."
+    },
+    "checkov:CKV_GCP_21": {
+      "reason": "hygiene",
+      "note": "Labels on GKE clusters."
+    },
+    "checkov:CKV_GCP_65": {
+      "reason": "no-control",
+      "note": "Google Groups for GKE RBAC; an identity-provider choice."
+    },
+    "checkov:CKV_K8S_22": {
+      "reason": "no-control",
+      "note": "Read-only root filesystem. CIS Kubernetes reaches it only by reference (5.6.3 pointing at the Docker benchmark), and 5.6.3 is satisfied by any securityContext. NIST SI-14 (non-persistence) and SI-7 (integrity) were considered and are about something else."
+    },
+    "checkov:CKV_K8S_40": {
+      "reason": "no-control",
+      "note": "UID/GID above 10000, to avoid colliding with host accounts. Stricter than CIS Kubernetes 5.2.7, which asks for not-root, and no NIST control asks for it either."
+    },
+    "checkov:CKV_K8S_8": {
+      "reason": "no-control",
+      "note": "Liveness and readiness probes: operational health, not a security control in any loaded framework."
+    },
+    "checkov:CKV_K8S_9": {
+      "reason": "no-control",
+      "note": "Liveness and readiness probes: operational health, not a security control in any loaded framework."
+    },
+    "kics:6797f581-0433-4768-ae3e-7ceb2f8b138e": {
+      "reason": "no-control",
+      "note": "SSH keys rather than passwords on a VM. CIS Azure 3.0 section 8 has no such control, and NIST IA-5(1)/(2) govern each method without preferring one."
+    },
+    "trivy:AWS-0066": {
+      "reason": "no-control",
+      "note": "Tracing, monitoring granularity, performance and delivery settings. Useful, and not audit records (AU-12) or a security control."
+    },
+    "trivy:AWS-0099": {
+      "reason": "hygiene",
+      "note": "Descriptions on security groups and rules."
+    },
+    "trivy:AWS-0101": {
+      "reason": "no-control",
+      "note": "Default VPC. CIS AWS 1.4's 5.3 is about the default security group, not the VPC."
+    },
+    "trivy:AWS-0124": {
+      "reason": "hygiene",
+      "note": "Descriptions on security groups and rules."
+    },
+    "trivy:AWS-0133": {
+      "reason": "no-control",
+      "note": "Tracing, monitoring granularity, performance and delivery settings. Useful, and not audit records (AU-12) or a security control."
+    },
+    "trivy:AWS-0176": {
+      "reason": "no-control",
+      "note": "IAM database authentication. IA-2 asks for unique identification, which password users already have; nothing loaded asks for the IAM mechanism."
+    },
+    "trivy:AWS-0177": {
+      "reason": "no-control",
+      "note": "Deletion protection. AWS's own Security Hub mapping puts RDS.8 under CM-3 and SC-5(2), but neither control's text says anything about deletion, so citing them would be citing the mapping rather than the control."
+    },
+    "trivy:AWS-0343": {
+      "reason": "no-control",
+      "note": "Deletion protection. AWS's own Security Hub mapping puts RDS.8 under CM-3 and SC-5(2), but neither control's text says anything about deletion, so citing them would be citing the mapping rather than the control."
+    },
+    "trivy:AZU-0015": {
+      "reason": "hygiene",
+      "note": "A content type on Key Vault secrets."
+    },
+    "trivy:AZU-0039": {
+      "reason": "no-control",
+      "note": "SSH keys rather than passwords on a VM. CIS Azure 3.0 section 8 has no such control, and NIST IA-5(1)/(2) govern each method without preferring one."
+    },
+    "trivy:GCP-0051": {
+      "reason": "hygiene",
+      "note": "Labels on GKE clusters."
+    },
+    "trivy:KSV-0014": {
+      "reason": "no-control",
+      "note": "Read-only root filesystem. CIS Kubernetes reaches it only by reference (5.6.3 pointing at the Docker benchmark), and 5.6.3 is satisfied by any securityContext. NIST SI-14 (non-persistence) and SI-7 (integrity) were considered and are about something else."
+    },
+    "trivy:KSV-0020": {
+      "reason": "no-control",
+      "note": "UID/GID above 10000, to avoid colliding with host accounts. Stricter than CIS Kubernetes 5.2.7, which asks for not-root, and no NIST control asks for it either."
+    },
+    "trivy:KSV-0021": {
+      "reason": "no-control",
+      "note": "UID/GID above 10000, to avoid colliding with host accounts. Stricter than CIS Kubernetes 5.2.7, which asks for not-root, and no NIST control asks for it either."
+    },
+    "trivy:KSV-0117": {
+      "reason": "no-control",
+      "note": "Binding to a port below 1024. CM-7's restricted ports are the organisation's list, not this one."
+    }
   }
 }

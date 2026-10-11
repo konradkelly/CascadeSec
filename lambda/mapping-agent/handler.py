@@ -9,6 +9,13 @@ rule_id has no candidate mapping is left with status "raw" (spec's
 FindingRecord status enum has no "unmapped" state); grow coverage by
 extending corpus/rule_mappings.json, not by relaxing this Lambda.
 
+A finding left raw for want of a candidate is tagged with *why*, as
+`unmapped_reason`, so the dashboard can tell the backlog from the decided:
+the reason rule_mappings.json's `unmapped` section records for its rule
+(`no-control`, `hygiene`, `not-fixable`), or `unreviewed` when the rule is
+in neither section -- nobody has looked at it yet, and that is the only one
+of the four that is work waiting. The tag is cleared when a finding maps.
+
 Event shape:
 { "pr_id": "manual-test-1" }
 -- or, continuing a pass that yielded (see `remaining` below) --
@@ -78,7 +85,12 @@ DETECTION_ONLY_TARGET_TYPES = {"cdk"}
 
 _anthropic_client = None
 _rule_mappings = None
+_unmapped_rules = None
 _framework_cache = {}
+
+# The reason a rule with no candidate gets when rule_mappings.json's
+# `unmapped` section does not name it.
+UNREVIEWED = "unreviewed"
 
 _FRAMEWORK_FILES = {
     "CIS-AWS-1.4": "cis-aws-1.4.json",
@@ -86,6 +98,7 @@ _FRAMEWORK_FILES = {
     "OWASP-CICD-Top10": "owasp-cicd-top10.json",
     "CIS-Kubernetes-2.0": "cis-kubernetes-2.0.json",
     "CIS-Azure-3.0": "cis-azure-3.0.json",
+    "NIST-800-53-r5": "nist-800-53-r5.json",
 }
 
 MAPPING_OUTPUT_SCHEMA = {
@@ -135,6 +148,16 @@ def handler(event, context):
     for index, finding in enumerate(raw_findings):
         candidate_refs = _candidates_for(rule_mappings, finding)
         if not candidate_refs:
+            # Written only when it changes: a yielded pass looks at every
+            # still-raw finding again, and the reason is the same each time.
+            reason = _unmapped_reason(finding)
+            if finding.get("unmapped_reason") != reason:
+                try:
+                    _write_unmapped_reason(finding, reason)
+                except Exception:
+                    logger.exception("could not tag unmapped finding %s", finding.get("finding_id"))
+                    error_count += 1
+                    continue
             skipped_count += 1
             continue
 
@@ -291,12 +314,26 @@ def _candidates_for(rule_mappings, finding):
             if "target_type" not in r or r["target_type"] in matches]
 
 
+def _unmapped_reason(finding):
+    """Why this finding has no candidate. Keyed on (source, rule_id) like
+    the mappings: a rule is triaged once, not per finding or per target."""
+    entry = _load_unmapped_rules().get(f"{finding['source']}:{finding['rule_id']}")
+    return entry["reason"] if entry else UNREVIEWED
+
+
 def _load_rule_mappings():
-    global _rule_mappings
+    global _rule_mappings, _unmapped_rules
     if _rule_mappings is None:
         obj = s3.get_object(Bucket=ARTIFACTS_BUCKET, Key="corpus/rule_mappings.json")
-        _rule_mappings = json.loads(obj["Body"].read())["mappings"]
+        corpus = json.loads(obj["Body"].read())
+        _rule_mappings = corpus["mappings"]
+        _unmapped_rules = corpus.get("unmapped", {})
     return _rule_mappings
+
+
+def _load_unmapped_rules():
+    _load_rule_mappings()
+    return _unmapped_rules
 
 
 def _load_control(framework, control_id):
@@ -399,7 +436,12 @@ def _write_mapping(finding, mapping):
     table = dynamodb.Table(DYNAMODB_TABLE)
     table.update_item(
         Key={"pk": finding["pk"], "sk": finding["sk"]},
-        UpdateExpression="SET control_mappings = :cm, #status = :status, updated_at = :now",
+        # A finding tagged unmapped on an earlier run, mapped now that the
+        # corpus has a candidate for it, must not keep the old reason.
+        UpdateExpression=(
+            "SET control_mappings = :cm, #status = :status, updated_at = :now "
+            "REMOVE unmapped_reason"
+        ),
         ExpressionAttributeNames={"#status": "status"},
         ExpressionAttributeValues={
             ":cm": [{
@@ -413,6 +455,20 @@ def _write_mapping(finding, mapping):
                 "rationale": mapping["rationale"],
             }],
             ":status": "mapped",
+            ":now": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+def _write_unmapped_reason(finding, reason):
+    """Tag a finding that stays raw. Only the reason and updated_at: status
+    is untouched, so remediation still never sees it."""
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    table.update_item(
+        Key={"pk": finding["pk"], "sk": finding["sk"]},
+        UpdateExpression="SET unmapped_reason = :reason, updated_at = :now",
+        ExpressionAttributeValues={
+            ":reason": reason,
             ":now": datetime.now(timezone.utc).isoformat(),
         },
     )
