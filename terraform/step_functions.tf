@@ -88,7 +88,7 @@ locals {
           cdk_runs = [], cdk_skipped = [], allow_empty_scan = false,
         }
         ResultPath = "$.fetch"
-        Next       = "Scan"
+        Next       = "NoSynth"
       }
 
       # Opens the in-progress check run and replaces scans/<pr_id>/ with the
@@ -176,7 +176,16 @@ locals {
         Choices = [
           { Variable = "$.fetch.cdk_runs[0]", IsPresent = true, Next = "Synthesize" },
         ]
-        Default = "Scan"
+        Default = "NoSynth"
+      }
+
+      # No app was synthesized. $.synth exists anyway: the Remediate Map
+      # hands it to every file, and a path into a missing field fails.
+      NoSynth = {
+        Type       = "Pass"
+        Result     = []
+        ResultPath = "$.synth"
+        Next       = "Scan"
       }
 
       # One sandbox run per CDK app. Every outcome is a result, not a
@@ -419,6 +428,11 @@ locals {
         ItemSelector = {
           "pr_id.$" = "$.pr_id"
           "file.$"  = "$$.Map.Item.Value"
+          # For a CDK app's source file: which run synthesized the app, and
+          # its project, so a fix can be re-synthesized on that run's
+          # dependencies (docs/sandbox-spec.md §9 step 3). Unused otherwise.
+          "synth.$"    = "$.synth"
+          "cdk_runs.$" = "$.fetch.cdk_runs"
         }
         ItemProcessor = {
           ProcessorConfig = { Mode = "INLINE" }
@@ -446,6 +460,9 @@ locals {
             MoreInThisFile = {
               Type = "Choice"
               Choices = [
+                # A CDK fix waiting on its re-synth: the handler returned the
+                # sandbox request instead of waiting on it (spec §7).
+                { Variable = "$.sandbox", IsPresent = true, Next = "Resynthesize" },
                 {
                   Variable           = "$.remaining"
                   NumericGreaterThan = 0
@@ -453,6 +470,49 @@ locals {
                 },
               ]
               Default = "FileDone"
+            }
+            # The fix's self-check: the app synthesized again with the fixed
+            # file, on the detection run's dependencies. Its templates land
+            # under the fix's own prefix; RemediateFile scans them when it
+            # resumes, so only the outcome comes back here.
+            Resynthesize = {
+              Type     = "Task"
+              Resource = "arn:aws:states:::states:startExecution.sync:2"
+              Parameters = {
+                StateMachineArn = local.sandbox_run_arn
+                "Input.$"       = "$.sandbox"
+              }
+              TimeoutSeconds = local.synth_phase_timeout_seconds + 300
+              ResultSelector = {
+                "status.$"    = "$.Output.synth.status"
+                "reason.$"    = "$.Output.synth.reason"
+                "templates.$" = "$.Output.synth.templates"
+              }
+              ResultPath = "$.sandbox_result"
+              Retry = [{
+                ErrorEquals     = ["StepFunctions.ExecutionLimitExceededException", "StepFunctions.SdkClientException"]
+                IntervalSeconds = 5
+                MaxAttempts     = 3
+                BackoffRate     = 2
+              }]
+              # A run that could not finish is a fix that could not be
+              # verified, which RemediateFile records as such.
+              Catch = [{
+                ErrorEquals = ["States.ALL"]
+                ResultPath  = "$.sandbox_error"
+                Next        = "ResynthesizeFailed"
+              }]
+              Next = "RemediateFile"
+            }
+            ResynthesizeFailed = {
+              Type = "Pass"
+              Parameters = {
+                status     = "error"
+                "reason.$" = "$.sandbox_error.Error"
+                templates  = []
+              }
+              ResultPath = "$.sandbox_result"
+              Next       = "RemediateFile"
             }
             FileDone = {
               Type = "Succeed"

@@ -834,6 +834,16 @@ def _emit_metrics(metrics, **context):
 # the copies identical -- corpus/test_corpus.py asserts it.
 # ======================================================================
 
+def work_file(finding):
+    """The file a finding's fix edits: its own, or for a finding on a
+    synthesized CDK template, the source file that made its resource
+    (docs/sandbox-spec.md §9 step 3). Must stay identical to github-gateway's
+    copy and the other agent's (corpus/test_corpus.py)."""
+    if finding.get("target_type") == "cdk":
+        return (finding.get("origin") or {}).get("file") or finding["file"]
+    return finding["file"]
+
+
 def plan_commit(pr_id, findings, latest_actions, read_fix, read_head):
     """Per file with an approved fix, what committing it would do.
 
@@ -871,7 +881,7 @@ def plan_commit(pr_id, findings, latest_actions, read_fix, read_head):
         fix = f.get("proposed_fix") or {}
         if (fix.get("diff") and not fix.get("committed") and not f.get("no_longer_detected")
                 and latest_actions.get(f["finding_id"]) in ("approved", "edited")):
-            approved_by_file.setdefault(f["file"], {})[f["finding_id"]] = f
+            approved_by_file.setdefault(work_file(f), {})[f["finding_id"]] = f
 
     plans = []
     for path in sorted(approved_by_file):

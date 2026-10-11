@@ -487,6 +487,127 @@ someone the repository already trusts to push to it.
      reported as needing approval, with nothing yet to give it.
 3. **CDK remediation.** The yield round trip of §7, and the cold-start
    measurement it exists to get.
+
+   **Measured first, 2026-10-10.** Before changing remediation-agent, the
+   fixture app was fixed by hand, the way a CDK author would, and
+   re-synthesized and rescanned the way the sandbox does. The comparison
+   was by (source, rule, construct path).
+
+   | Resource | Findings | Cleared by one edit to its constructor | Still firing |
+   |---|---:|---:|---|
+   | the bucket (`Data`) | 16 | 16 | none |
+   | the security group (`Net/Ssh`) | 10 | 9 | KICS: a /16 is "open to large scope" |
+   | the policy (`AdminPolicy`) | 6 | 5 | KICS: data exfiltration, on `s3:GetObject` |
+   | the VPC and its subnet and route | 7 | 2 | KICS ignores the flow log CDK attaches by reference; a public subnet is public by design |
+   | the template as a whole | 1 | 0 | KICS's Access Analyzer check |
+
+   The fixes also brought **four new findings**, each correctly placed
+   on the line that made it. A new KMS key's policy (KICS) is on
+   `storage.ts:6`. The flow log's log group is not encrypted with a
+   customer key, which checkov and Trivy both flag, on `network.ts:8`.
+   And `allowAllOutbound: false` adds a placeholder egress rule that KICS
+   flags as a port range, on `network.ts:9`. Three things follow:
+
+   - **The unit of a CDK fix is a resource, not a finding.** One edit to
+     the bucket's constructor cleared all 16 of its findings. Drafting per
+     finding, each with a round trip of about a minute through the
+     sandbox, would cost sixteen round trips where one suffices. Each
+     finding's verdict still comes from the rescan, by its own (source,
+     rule, construct path). Construct paths survive a re-synth where
+     template lines do not, so the comparison is exact in a way
+     Terraform's line-shifted one is not.
+   - **Idiomatic fixes create resources, and new resources bring
+     findings.** CDK's higher-level constructs make helpers: a key, a log
+     group, a role. Under today's rule, cleared and nothing new, three of
+     the four fixes above fail.
+   - **Some findings cannot be cleared by any reasonable fix.** These are
+     a scanner that does not follow CDK's references, and design choices
+     such as a public subnet. They need to end as "held for review" in
+     one draft, not burn the draft budget.
+
+   **Decided 2026-10-10:**
+
+   - **New findings get one redraft, then the rule is strict.** When a fix
+     clears its resource's findings but brings new ones, they are given
+     back to the model for one redraft and one more re-synth. Whatever is
+     still new after that holds the fix for review, as today. "Nothing
+     new" stays the bar. The redraft is the chance for an idiomatic fix to
+     finish what it started, such as encrypting the log group it just
+     made.
+   - **A fix edits one file: the one holding the resource's creation
+     line.** That is the per-file chain remediation already has, and
+     everything downstream (the diff, the suggestions, the committer)
+     assumes one file per fix. A fix that needs another file, such as a
+     prop threaded down from the stack, is held for review.
+
+   **The build, in order:**
+
+   1. *The sandbox:* a `cdk-resynth` kind. It is execute only, reuses the
+      detection run's installed dependencies (a fix to source does not
+      change the lockfile, §7), and overlays one patched file on the
+      project. `collect` writes its templates under the fix's own prefix,
+      never the PR's scan prefix.
+   2. *The snapshot:* a CDK app's own source files join `scans/<pr_id>/`.
+      The scanner admits none of them, so nothing new is scanned. Every
+      reader that already takes a file's head content from there gets
+      them: remediation's base, the suggestions' head, the committer's
+      check.
+   3. *remediation-agent:* the Map item for CDK is a source file. Within
+      it, one draft per resource covers all of that resource's mapped
+      findings, and the fix is held on the first. The others are
+      superseded if the rescan clears them, and held for review if not.
+      The draft yields to the state machine with a re-synth request and
+      resumes with its result: scan, compare by construct path, and
+      redraft once if anything new appeared. A CDK suppression (checkov
+      or cdk-nag metadata, `NagSuppressions`) is refused before the
+      sandbox ever runs, as a Terraform one is before the scanner.
+   4. *The pipeline:* a `Choice` in the Remediate Map routes a yield
+      through `sandbox-run` and back into `RemediateFile`.
+   5. *Downstream:* a fix's file is the file it edits, the source file, not
+      the template its finding was found in. This touches suggestions, the
+      offer, the committer and the dashboard.
+
+   **Built 2026-10-10, tested locally; not yet run on AWS.** All five, in
+   that order:
+
+   - `cdk-resynth` in the image and in sandbox-dispatch. The fetch it
+     reuses, the file it replaces and the prefix it writes to are each
+     checked, and only under this PR's `fixes/`. Each attempt writes to its
+     own prefix (`synth-1/`, `synth-2/`), so a redraft is never scanned
+     beside its first draft's templates. Detection's `collect` now reports
+     its run id, which is what a re-synth reuses.
+   - github-gateway adds a runnable app's `.ts` and `.js` files, but not
+     `.d.ts`, to the snapshot. A changed source file is therefore a
+     changed file, and Draft fixes is offered for a CDK finding whose
+     source the PR changed.
+   - remediation-agent routes a CDK source file to its own path. It drafts
+     one resource at a time, yields a re-synth, and on resuming scans the
+     rebuilt templates and compares by (source, rule, construct path).
+     Every CDK finding it touches ends the run decided, as `fix-proposed`,
+     `superseded`, `needs-human-only` or `not-drafted` with a reason, so a
+     resumed invocation never drafts the same resource twice. A fix that
+     removes a construct is held, as a dropped resource is in Terraform. A
+     fix that does not synthesize, or whose templates do not parse, is
+     recorded unverified, with the reason in `scan_errors`. A stale fix is
+     reopened on a run's first look at the file, by the function the
+     Terraform path uses. `proposed_fix.file` names the source file.
+   - The Remediate Map routes a returned `sandbox` request through
+     `Resynthesize` (`sandbox-run`, `.sync:2`) and back into
+     `RemediateFile`. Every path now carries `$.synth`, so each file can be
+     handed the run's synth results.
+   - `work_file` (a CDK finding's source file, or any other finding's own
+     file) replaces the finding's file wherever a fix is selected, offered,
+     posted, previewed, edited or committed. Its three copies are held
+     identical by `corpus/test_corpus.py`, as `plan_commit`'s are.
+
+   **Not measured, or not built:**
+
+   - Whether the model writes CDK fixes that pass. This build is the
+     harness; the first Draft fixes run on cascadesec-testbed #4 is the
+     measurement, along with the round-trip time per fix that §7 asked
+     for.
+   - Pulling a fix's helper resources into the same draft as the resource
+     it fixes, and fixes that span files (decided against above).
 4. **Pulumi.** The mock harness and the converter, with a hardened twin for
    every corpus case (multi-iac §7.2: only the hardened twin can fail).
 5. **The dependency test gate**, which is when `safe-to-apply` becomes

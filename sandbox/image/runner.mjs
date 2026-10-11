@@ -8,6 +8,8 @@
 //   sleep      outlive the state's timeout, so the run can show it is stopped
 //   cdk-synth  install a CDK app (fetch), then synthesize it (execute):
 //              cdk.mjs (spec §9 step 2)
+//   cdk-resynth  synthesize it again with one file fixed, on the
+//              dependencies an earlier fetch installed (spec §9 step 3)
 //
 // The leak test REPORTS and never judges. It shares a container with
 // whatever a run executes, so the verdict is lambda/sandbox-dispatch/leak.py's,
@@ -211,7 +213,7 @@ async function main() {
     // what to read when result.json never arrives.
     for (const p of probes) console.log(`${PHASE} ${p.name}: ${p.observed}`);
     result = { probes };
-  } else if (KIND === "cdk-synth") {
+  } else if (KIND === "cdk-synth" || KIND === "cdk-resynth") {
     result = await cdkSynth();
   } else {
     throw new Error(`unknown kind ${KIND}`);

@@ -370,6 +370,17 @@ def test_the_preview_and_the_committer_plan_alike(name):
     assert len(set(bodies.values())) == 1, bodies
 
 
+def test_everyone_agrees_on_which_file_a_fix_edits():
+    """A CDK finding is on a synthesized template and its fix edits the app's
+    source (sandbox-spec §9 step 3). github-gateway selects and posts by
+    that file, review-api previews and edits by it, the committer commits
+    it. A drift would read one file's content and write it under another's
+    name."""
+    bodies = _function_bodies("work_file", "lambda/github-gateway/handler.py",
+                              "lambda/review-api/handler.py", "lambda/github-committer/handler.py")
+    assert len(set(bodies.values())) == 1, bodies
+
+
 def test_the_receiver_and_the_gateway_agree_on_the_check_run():
     """github-gateway names the check run and its Draft fixes and Commit
     fixes buttons; webhook-receiver recognises a click by the same strings. A drift
