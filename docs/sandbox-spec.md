@@ -446,11 +446,23 @@ someone the repository already trusts to push to it.
    decides nothing. An annotation goes only on a line the PR adds, so a
    claim that names any other line is simply not shown.
 
+   **First run on AWS, 2026-10-10**, after the leak test passed again on
+   the new image. `scripts/sandbox.py synth sandbox/fixtures/cdk-app`
+   took 118 seconds end to end, and the jobs were the small part of it.
+   Fetch's state took 61 seconds, of which the install was 18 (npm's own
+   count was 9). Execute's took 55, of which the synth was 7. So each task
+   costs about 45 seconds before its job starts, and an app costs two of
+   them. The source map matched the local run line for line: 13
+   resources, none without a source line, and the ingress rule on
+   `lib/network.ts:9`. This is the cold start §7 said to measure, and for
+   detection it is paid once per app per push. For step 3's round trip per
+   fix it is the number that decides whether a warm worker is needed.
+
    **Not measured, or not built:**
 
-   - Any of it on AWS: the Fargate cold start, the mirror's first fetch of
-     `aws-cdk-lib`, and whether `TimeoutSeconds` on the `.sync:2` state
-     also stops the child execution.
+   - The pipeline half on AWS: a pull request through `Synthesize`, and
+     whether `TimeoutSeconds` on the `.sync:2` state also stops the child
+     execution.
    - Execute runs even when fetch failed. It then fails at once with no
      dependencies, but only after a task start. Skipping it needs a state
      that reads fetch's result, which is one more Lambda call per run.
