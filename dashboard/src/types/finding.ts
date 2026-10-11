@@ -18,6 +18,12 @@ export type FindingStatus =
   | 'not-drafted'
   | 'resolved'
 
+/** Why a raw finding has no control, as mapping-agent recorded it. The
+ *  first three come from corpus/rule_mappings.json's `unmapped` section,
+ *  where someone judged the rule; `unreviewed` means the rule is in neither
+ *  section, and is the only one that is work waiting. */
+export type UnmappedReason = 'no-control' | 'hygiene' | 'not-fixable' | 'unreviewed'
+
 export type ReviewAction = 'approved' | 'edited' | 'rejected'
 
 /** What can appear in an audit trail. "reopened" and "committed" are never
@@ -177,11 +183,17 @@ export interface Finding {
   origin?: CdkOrigin | null
   source: string
   rule_id: string
+  /** The scanner's own name for the rule. Absent on records written before
+   *  iac-scanner kept it (2026-09-21). */
+  title?: string
   file: string
   line_range?: [number | null, number | null]
   severity?: string
   control_mappings?: ControlMapping[]
   status: FindingStatus
+  /** Only on a raw finding mapping-agent examined and found no candidate
+   *  for. Absent on a raw finding means it was never examined. */
+  unmapped_reason?: UnmappedReason
   /** Set with status 'superseded': the finding whose fix cleared this one. */
   superseded_by?: string
   /** Set with status 'not-drafted': which budget ran out, and how far it got. */

@@ -1087,3 +1087,44 @@ textarea {
   background: var(--accent-dim);
   color: var(--accent);
 }
+
+/* Raw findings, grouped by why they have no control (UnmappedFindings). */
+.unmapped {
+  margin-top: 2.5rem;
+}
+
+.unmapped-group {
+  margin-top: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  padding: 0.6rem 0.9rem;
+}
+
+.unmapped-group > summary {
+  cursor: pointer;
+}
+
+.unmapped-group__label {
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+/* The one group that is a backlog. */
+.unmapped-group__label--unreviewed {
+  color: var(--warn-text);
+}
+
+.unmapped-group__why {
+  margin: 0.5rem 0 0.75rem;
+}
+
+.unmapped-table__title {
+  font-size: 0.85em;
+  margin-top: 0.15rem;
+}
+
+.unmapped-table__locations {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+}
