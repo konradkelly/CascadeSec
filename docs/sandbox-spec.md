@@ -458,10 +458,24 @@ someone the repository already trusts to push to it.
    detection it is paid once per app per push. For step 3's round trip per
    fix it is the number that decides whether a warm worker is needed.
 
+   **End to end, the same day: cascadesec-testbed #4**, which adds the
+   fixture as `infra/`. The pipeline took 298 seconds, of which
+   `Synthesize` was 129 and `Scan` 116. The check run carries 41
+   annotations, every one on `infra/bin/app.ts:4`, `infra/lib/network.ts:7`
+   or `:8`, `infra/lib/stack.ts:12` or `infra/lib/storage.ts:6`, the same
+   41 the local run placed. Its summary lists `infra` with one stack. It
+   offers no Draft fixes, since the PR's only findings are CDK ones.
+   mapping-agent mapped 13 of them, through `changed_prefixes`, and
+   skipped 28 with no candidate control; it put nothing in `files`. The
+   first main-stack apply also hit one deploy-order catch. Step Functions
+   refused the new definition, because the role could not "create
+   managed-rule" for `.sync`, although the policy granting that had been
+   applied seconds before. IAM had not propagated it, and the same apply
+   run again went through.
+
    **Not measured, or not built:**
 
-   - The pipeline half on AWS: a pull request through `Synthesize`, and
-     whether `TimeoutSeconds` on the `.sync:2` state also stops the child
+   - Whether `TimeoutSeconds` on the `.sync:2` state also stops the child
      execution.
    - Execute runs even when fetch failed. It then fails at once with no
      dependencies, but only after a task start. Skipping it needs a state
