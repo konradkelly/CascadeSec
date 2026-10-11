@@ -76,6 +76,14 @@ data "aws_iam_policy_document" "dispatch" {
     resources = ["${local.artifacts_bucket_arn}/scans/*"]
   }
   statement {
+    # cdk-resynth (spec §9 step 3): the fix under test, copied into runs/
+    # for the task, and the templates rebuilt from it, under the fix's own
+    # prefix where remediation-agent's self-check reads them.
+    sid       = "Fixes"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${local.artifacts_bucket_arn}/fixes/*"]
+  }
+  statement {
     # So a missing result.json is a 404 rather than a 403.
     sid       = "ListRuns"
     actions   = ["s3:ListBucket"]

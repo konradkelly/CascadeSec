@@ -62,6 +62,10 @@ export interface RepositoryQuestion {
 
 export interface ProposedFix {
   diff?: string
+  /** The file the fix edits, when it is not the finding's own: a CDK
+   *  finding is on a synthesized template, and its fix is to the app's
+   *  source (docs/sandbox-spec.md §9 step 3). */
+  file?: string
   /** The agent's original diff, preserved the first time a reviewer edits the
    *  fix and never overwritten afterwards. Null/absent until an edit happens
    *  -- that's what lets the UI offer an "agent's original / reviewer's edit"

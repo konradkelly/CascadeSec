@@ -243,24 +243,28 @@ CFN_LOGICAL_ID_RE = re.compile(r"^[ \t]*([A-Za-z0-9]+):[ \t]*\r?$")
 CFN_TYPE_RE = re.compile(r"""^[ \t]*Type:[ \t]*['"]?([A-Za-z0-9:_-]+)""")
 
 
-# Mapped and shown, never drafted. mapping-agent keeps the same set.
+# Never drafted by the template's name: fixed through the app's source
+# instead (the CDK section below). mapping-agent keeps the same set.
 DETECTION_ONLY_TARGET_TYPES = {"cdk"}
 
 
 def handler(event, context):
     pr_id = event["pr_id"]
     only_file = event.get("file")
+    # A CDK app's source file: its findings are on synthesized templates,
+    # and verifying a fix to it means synthesizing again (see the CDK
+    # section below; docs/sandbox-spec.md §9 step 3).
+    if _is_cdk_source(only_file):
+        return _remediate_cdk_file(event, context)
     resume_from = event.get("resume_from")
     if resume_from and not only_file:
         # A fix belongs to one file, so a chain can only be resumed per file.
         raise ValueError("resume_from requires file")
 
-    # A finding on a synthesized CDK template is detection only: a fix
-    # belongs in the app's source, and verifying one means synthesizing
-    # again, which this function cannot do yet (docs/sandbox-spec.md §9
-    # step 3). The pipeline never asks for one; this holds for a direct
-    # invoke too, before a model call is spent on a draft the structural
-    # guard would refuse anyway.
+    # A finding on a synthesized CDK template is fixed in its app's source,
+    # by the CDK path, which the pipeline reaches with the source file as
+    # `file`. Never here, by the template's name: the template is not a
+    # file anyone wrote, and this path has no re-synth to verify against.
     mapped_findings = [f for f in _query_mapped_findings(pr_id, only_file)
                        if f.get("target_type") not in DETECTION_ONLY_TARGET_TYPES]
 
@@ -1204,9 +1208,20 @@ def _call_remediation_agent(finding, original_content, answers=None, flagged="")
 #                          YAML form (covered above) and cannot be
 #                          suppressed in the JSON form at all, which is ARM's
 #                          finding again: JSON has no comment syntax.
+#   CDK                 -- TypeScript, so the comment markers above reach
+#                          its comments; but a CDK app suppresses through the
+#                          template. `node.addMetadata('checkov', {skip: ...})`
+#                          and its cfn_nag twin write the CloudFormation block
+#                          above from code, with the token single-quoted (the
+#                          `'checkov'` entry) or as a key (`checkov:`, already
+#                          in). And cdk-nag, the CDK-native rule pack, has
+#                          `NagSuppressions.add*Suppressions` -- it does not
+#                          silence these scanners, but a fix that adds one has
+#                          silenced something for a reader, the reason the
+#                          cfn_nag entry is here.
 SUPPRESSION_MARKERS = ("tfsec:ignore", "trivy:ignore", "checkov:", "checkov.io/skip",
-                       '"checkov"', "cfn_nag", "rules_to_suppress", "kics-scan",
-                       "nosec")
+                       '"checkov"', "'checkov'", "cfn_nag", "rules_to_suppress", "kics-scan",
+                       "nagsuppressions", "nosec")
 
 
 def _find_added_suppressions(diff_text):
@@ -1723,7 +1738,7 @@ def _write_superseded(finding, superseded_by):
     )
 
 
-def _write_not_drafted(finding, drafted):
+def _write_not_drafted(finding, drafted, reason=None):
     """Record that the file's draft budget ran out before this finding.
 
     Like superseded, no proposed_fix is written and review-api refuses an
@@ -1741,7 +1756,7 @@ def _write_not_drafted(finding, drafted):
         ExpressionAttributeNames={"#status": "status"},
         ExpressionAttributeValues={
             ":status": "not-drafted",
-            ":reason": f"file draft budget reached ({drafted} of {MAX_DRAFTS_PER_FILE})",
+            ":reason": reason or f"file draft budget reached ({drafted} of {MAX_DRAFTS_PER_FILE})",
             ":now": datetime.now(timezone.utc).isoformat(),
         },
     )
@@ -1804,9 +1819,13 @@ def _content_sha256(content):
 def _write_result(
     finding, diff_text, rationale, self_check_passed, self_check_new_findings, cleared,
     suppression_attempt=None, dropped_resources=None, assumptions=None, scan_errors=None,
-    applies_after=None, questions=None, base_sha256=None,
+    applies_after=None, questions=None, base_sha256=None, file=None,
 ):
     table = dynamodb.Table(DYNAMODB_TABLE)
+    # The file the fix edits, when it is not the finding's own: a CDK
+    # finding is on a synthesized template, and its fix is to the app's
+    # source. Readers of a fix take its file from here first.
+    edited = {"file": file} if file else {}
     table.update_item(
         Key={"pk": finding["pk"], "sk": finding["sk"]},
         UpdateExpression="SET proposed_fix = :pf, #status = :status, updated_at = :now",
@@ -1853,8 +1872,498 @@ def _write_result(
                 # same way an assumption does; it is not copied into
                 # assumptions as a question-shaped fact.
                 "questions": questions or [],
+                **edited,
             },
             ":status": "fix-proposed" if self_check_passed else "needs-human-only",
             ":now": datetime.now(timezone.utc).isoformat(),
         },
     )
+
+
+# ======================================================================
+# CDK (docs/sandbox-spec.md §9 step 3)
+# ======================================================================
+#
+# A finding on a synthesized CDK template is fixed in the app's source: the
+# file holding its resource's creation line. Three things differ from the
+# path above, each measured or decided in the spec:
+#
+#   - The unit is a resource, not a finding. One edit to a bucket's
+#     constructor cleared all 16 of its findings, so one draft covers all
+#     of a resource's mapped findings. The fix is held on the first finding
+#     it cleared; the others it cleared are superseded by it.
+#   - The self-check is a re-synth, which the sandbox runs and this
+#     function never waits on (spec §7). A draft is uploaded and the
+#     handler returns a `sandbox` request; the state machine runs it and
+#     calls back with `sandbox_result`, and the handler resumes: scan the
+#     new templates, compare by (source, rule, construct path).
+#   - New findings get one redraft. A CDK fix routinely creates a helper
+#     resource -- a key, a log group -- and that resource's findings are
+#     handed back to the model once. Whatever is still new after that holds
+#     the fix, as everywhere else.
+#
+# The continuation carries what has to survive a yield: which resources this
+# run has finished (`done`), the chain the next draft builds on, and the
+# draft awaiting its re-synth (`pending`). What is too big for the state --
+# the draft's rationale, assumptions and diff -- is in S3 beside the fix.
+
+CDK_SOURCE_SUFFIXES = (".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs")
+# Per re-synth: the sandbox's per-phase limit (terraform step_functions.tf
+# uses the same for detection).
+CDK_RESYNTH_TIMEOUT_SECONDS = 600
+CDK_MAX_ATTEMPTS = 2
+# The resource as CDK synthesized it, shown to the model. A bucket is a few
+# hundred characters; a Lambda's inline policy can be long.
+CDK_EXCERPT_CHARS = 8000
+SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+CDK_COUNTERS = ("fix_proposed_count", "needs_human_only_count", "superseded_count",
+                "not_drafted_count", "error_count")
+
+
+def _is_cdk_source(file_path):
+    return bool(file_path) and file_path.endswith(CDK_SOURCE_SUFFIXES)
+
+
+def _int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _remediate_cdk_file(event, context):
+    pr_id, source = event["pr_id"], event["file"]
+    counts = {k: event.get(k, 0) for k in CDK_COUNTERS}
+    carry = {"synth": event.get("synth") or [], "cdk_runs": event.get("cdk_runs") or []}
+    state = dict(event.get("cdk") or {})
+    done = set(state.get("done") or [])
+
+    def finish(remaining=0, sandbox=None):
+        out = {"pr_id": pr_id, "file": source, **counts, "remaining": remaining, **carry,
+               "cdk": {**state, "done": sorted(done)}}
+        if sandbox:
+            out["sandbox"] = sandbox
+        return out
+
+    on_source = _cdk_findings_on(pr_id, source)
+    if not on_source:
+        return finish()
+    app = on_source[0]["origin"].get("app")
+    run = _cdk_run_for(carry, app)
+    if not event.get("cdk"):
+        # This run's first look at the file. A fix drafted on an older
+        # version of it can neither land nor be built on: back to mapped,
+        # to be redrafted with the rest (as the path above does).
+        _reopen_stale_fixes(pr_id, source, on_source)
+    open_now = [f for f in on_source
+                if f.get("status") in ("mapped", "not-drafted") and not f.get("no_longer_detected")]
+    if run is None:
+        # Nothing to re-synthesize on: the app did not synthesize in this
+        # run (the sandbox was off, or the app failed). Retried next run.
+        for f in open_now:
+            _write_not_drafted(f, 0, reason="its CDK app did not synthesize in this run")
+        counts["not_drafted_count"] += len(open_now)
+        return finish()
+
+    if not state.get("chain"):
+        content = _s3_text(f"scans/{pr_id}/{source}")
+        state["chain"] = {"content_key": f"scans/{pr_id}/{source}", "base_sha256": _content_sha256(content),
+                          "applies_after": [], "templates_prefix": f"scans/{pr_id}/",
+                          "templates": list(run["templates"]), "baseline_key": None}
+    state.setdefault("drafts", 0)
+
+    if event.get("sandbox_result") is not None and state.get("pending"):
+        step = _cdk_judge(pr_id, source, run, state, on_source, event["sandbox_result"], counts)
+        if step.get("sandbox"):
+            return finish(remaining=1, sandbox=step["sandbox"])
+        done.add(state["pending"]["path"])
+        state["pending"] = None
+
+    groups = _cdk_groups(open_now, done)
+    for index, (path, group) in enumerate(groups):
+        if _time_left_ms(context) < FINDING_TIME_RESERVE_MS:
+            return finish(remaining=sum(len(g) for _, g in groups[index:]))
+        done.add(path)
+        if not path:
+            # About the template as a whole -- KICS's Access Analyzer check --
+            # so there is no construct to edit.
+            for f in group:
+                _write_not_drafted(f, 0, reason="it is about the stack as a whole, not one resource to fix")
+            counts["not_drafted_count"] += len(group)
+            continue
+        if state["drafts"] >= MAX_DRAFTS_PER_FILE:
+            for f in group:
+                _write_not_drafted(f, state["drafts"])
+            counts["not_drafted_count"] += len(group)
+            continue
+        try:
+            step = _cdk_draft(pr_id, source, run, state, path, group, attempt=1)
+        except Exception:
+            logger.exception("drafting a CDK fix for %s in %s failed", path, source)
+            counts["error_count"] += len(group)
+            continue
+        if step.get("refused"):
+            counts["needs_human_only_count"] += 1
+            counts["not_drafted_count"] += len(group) - 1
+            continue
+        state["pending"] = step["pending"]
+        done.discard(path)  # not finished until it is judged
+        return finish(remaining=1, sandbox=step["sandbox"])
+    return finish()
+
+
+def _cdk_findings_on(pr_id, source):
+    """Every CDK finding whose resource was made in `source`, any status."""
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    items = _query_all(
+        table,
+        KeyConditionExpression="pk = :pk AND begins_with(sk, :sk_prefix)",
+        ExpressionAttributeValues={":pk": f"PR#{pr_id}", ":sk_prefix": "FINDING#"},
+    )
+    return [f for f in items if f.get("target_type") == "cdk"
+            and isinstance(f.get("origin"), dict) and f["origin"].get("file") == source]
+
+
+def _cdk_run_for(carry, app):
+    """This run's synth of `app`: the run whose fetch to reuse, the project
+    it ran, and the templates it wrote. None if it did not synthesize."""
+    synth = next((s for s in carry["synth"] if s.get("app_dir") == app and s.get("status") == "ok"), None)
+    project = next((r for r in carry["cdk_runs"] if r.get("app_dir") == app), None)
+    if not synth or not project or not synth.get("run_id"):
+        return None
+    return {"app_dir": app, "run_id": synth["run_id"], "project_key": project["project_key"],
+            "templates": synth.get("templates") or []}
+
+
+def _cdk_groups(findings, done):
+    """[(construct path, findings)], in the order their resources appear in
+    the file, each group's findings most severe first. A finding with no
+    construct path is grouped under "" and never drafted."""
+    groups = collections.defaultdict(list)
+    for f in findings:
+        path = f["origin"].get("construct_path") or ""
+        if path not in done:
+            groups[path].append(f)
+    for group in groups.values():
+        group.sort(key=lambda f: (SEVERITY_RANK.get(str(f.get("severity", "")).upper(), 9),
+                                  f.get("source", ""), f.get("rule_id", ""), f["finding_id"]))
+    return sorted(groups.items(), key=lambda kv: (_int(kv[1][0]["origin"].get("line")) or 0, kv[0]))
+
+
+def _s3_text(key):
+    return s3.get_object(Bucket=ARTIFACTS_BUCKET, Key=key)["Body"].read().decode("utf-8")
+
+
+def _s3_json(key):
+    return json.loads(_s3_text(key))
+
+
+def _sources_key(template_key):
+    return template_key[: -len(".json")] + ".sources"
+
+
+def _cdk_excerpt(state, finding):
+    """The resource as CDK synthesized it, from the chain's current templates."""
+    chain, origin = state["chain"], finding["origin"]
+    try:
+        template = _s3_json(chain["templates_prefix"] + finding["file"])
+        resource = template.get("Resources", {}).get(origin.get("logical_id"))
+    except (ClientError, ValueError):
+        resource = None
+    if resource is None:
+        return "(not available)"
+    text = json.dumps(resource, indent=1)
+    return text if len(text) <= CDK_EXCERPT_CHARS else text[:CDK_EXCERPT_CHARS] + "\n... (truncated)"
+
+
+def _cdk_draft(pr_id, source, run, state, path, group, attempt, introduced=None, previous=None):
+    """Draft (or redraft) one resource's fix, refuse it if it silences the
+    scanner, and otherwise upload it and return the re-synth to run."""
+    chain, lead0 = state["chain"], group[0]
+    base = _s3_text(chain["content_key"])
+    shown = previous if previous is not None else base
+    excerpt = _cdk_excerpt(state, lead0)
+
+    remediation = _call_cdk_remediation(group, source, shown, excerpt, introduced=introduced)
+    state["drafts"] += 1
+    questions = remediation.get("questions") or []
+    answers = []
+    if questions and CONTEXT_AGENT_FUNCTION_NAME:
+        answers = _ask_context_agent(pr_id, questions)
+        remediation = _call_cdk_remediation(group, source, shown, excerpt, answers=answers, introduced=introduced)
+        state["drafts"] += 1
+        answers += [_not_looked_up(q, "Asked after the lookup; there is no second one.")
+                    for q in remediation.get("questions") or []]
+    elif questions:
+        answers = [_not_looked_up(q, "No context-agent is deployed to answer it.") for q in questions]
+    corrected = remediation["corrected_file_content"]
+    diff_text = _compute_diff(base, corrected, source)
+
+    suppressions = _find_added_suppressions(diff_text)
+    if suppressions:
+        logger.warning("CDK fix for %s tried to suppress the scanner: %s", path, suppressions)
+        _write_result(lead0, diff_text, remediation["rationale"], self_check_passed=False,
+                      self_check_new_findings=[], cleared=False, suppression_attempt=suppressions,
+                      applies_after=chain["applies_after"], questions=answers,
+                      base_sha256=chain["base_sha256"], file=source)
+        for f in group[1:]:
+            _write_not_drafted(f, state["drafts"], reason=f"the fix drafted for its resource ({lead0['finding_id']}) "
+                                                          "tried to suppress the scanner")
+        return {"refused": True}
+
+    s3.put_object(Bucket=ARTIFACTS_BUCKET, Key=f"{_self_check_prefix(pr_id, lead0['finding_id'])}{source}",
+                  Body=corrected.encode("utf-8"))
+    s3.put_object(
+        Bucket=ARTIFACTS_BUCKET, Key=f"{_self_check_prefix(pr_id, lead0['finding_id'])}pending.json",
+        Body=json.dumps({"diff": diff_text, "rationale": remediation["rationale"],
+                         "assumptions": list(remediation.get("assumptions") or []),
+                         "questions": answers}).encode("utf-8"),
+    )
+    return {
+        "pending": {"path": path, "ids": [f["finding_id"] for f in group], "attempt": attempt},
+        "sandbox": {
+            "kind": "cdk-resynth", "phases": ["execute"], "timeout_seconds": CDK_RESYNTH_TIMEOUT_SECONDS,
+            "pr_id": pr_id, "app_dir": run["app_dir"], "project_key": run["project_key"],
+            "deps_run_id": run["run_id"], "finding_id": lead0["finding_id"], "patch_path": source,
+            "attempt": attempt,
+        },
+    }
+
+
+def _count_triples(findings):
+    """(source, rule_id, resource) occurrence counts, one per finding id --
+    _count_pairs's rule, with the resource: a CDK finding's resource is its
+    construct path, which survives a re-synth where template lines do not."""
+    seen, counts = set(), collections.Counter()
+    for f in findings:
+        if f.get("finding_id") is not None:
+            if f["finding_id"] in seen:
+                continue
+            seen.add(f["finding_id"])
+        counts[(f["source"], f["rule_id"], f.get("resource") or "")] += 1
+    return counts
+
+
+def _construct_paths(prefix, templates):
+    """Every resource's construct path in a set of synthesized templates,
+    from the source maps beside them."""
+    paths = set()
+    for template in templates:
+        try:
+            source_map = _s3_json(_sources_key(prefix + template))
+        except (ClientError, ValueError):
+            continue
+        paths |= {r.get("path") for r in (source_map.get("resources") or {}).values()
+                  if isinstance(r, dict) and r.get("path")}
+    return paths
+
+
+def _cdk_baseline(pr_id, state, run, app):
+    """The chain's current finding counts and construct paths: the app's
+    scanned templates at the root, or the last verified fix's rescan."""
+    chain = state["chain"]
+    if chain.get("baseline_key"):
+        saved = _s3_json(chain["baseline_key"])
+        return (collections.Counter({tuple(t[:3]): t[3] for t in saved["triples"]}), set(saved["paths"]))
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    items = _query_all(
+        table,
+        KeyConditionExpression="pk = :pk AND begins_with(sk, :sk_prefix)",
+        ExpressionAttributeValues={":pk": f"PR#{pr_id}", ":sk_prefix": "FINDING#"},
+    )
+    on_app = [f for f in items if f.get("target_type") == "cdk" and not f.get("no_longer_detected")
+              and (f.get("origin") or {}).get("app") == app]
+    return _count_triples(on_app), _construct_paths(chain["templates_prefix"], chain["templates"])
+
+
+def _cdk_judge(pr_id, source, run, state, on_source, result, counts):
+    """The re-synth came back: scan it, and decide every finding of the
+    pending resource -- or redraft once if the fix brought new findings."""
+    pending, chain = state["pending"], state["chain"]
+    by_id = {f["finding_id"]: f for f in on_source}
+    group = [by_id[i] for i in pending["ids"] if i in by_id]
+    lead0 = group[0]
+    draft = _s3_json(f"{_self_check_prefix(pr_id, lead0['finding_id'])}pending.json")
+    output_prefix = f"{_self_check_prefix(pr_id, lead0['finding_id'])}synth-{pending['attempt']}/"
+
+    def unverified(why):
+        _write_result(lead0, draft["diff"], draft["rationale"], self_check_passed=False,
+                      self_check_new_findings=[], cleared=False, assumptions=draft["assumptions"],
+                      scan_errors=[why], applies_after=chain["applies_after"], questions=draft["questions"],
+                      base_sha256=chain["base_sha256"], file=source)
+        for f in group[1:]:
+            _write_not_drafted(f, state["drafts"], reason=f"the fix drafted for its resource "
+                                                          f"({lead0['finding_id']}) could not be verified")
+        counts["needs_human_only_count"] += 1
+        counts["not_drafted_count"] += len(group) - 1
+        return {}
+
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        reason = (result or {}).get("reason") if isinstance(result, dict) else None
+        status = (result or {}).get("status") if isinstance(result, dict) else "error"
+        return unverified(f"the fixed app did not synthesize ({status}): {reason or 'no reason given'}")
+    payload = {"pr_id": f"{pr_id}-self-check-{lead0['finding_id']}", "s3_prefix": output_prefix,
+               "persist": False}
+    response = lambda_client.invoke(FunctionName=IAC_SCANNER_FUNCTION_NAME, InvocationType="RequestResponse",
+                                    Payload=json.dumps(payload).encode("utf-8"))
+    scanned = json.loads(response["Payload"].read())
+    if "FunctionError" in response:
+        raise RuntimeError(f"iac-scanner self-check invocation failed: {scanned}")
+    if scanned.get("scan_errors"):
+        return unverified(f"the rebuilt templates did not parse: {scanned['scan_errors']}")
+    rescan = scanned["findings"]
+
+    baseline, baseline_paths = _cdk_baseline(pr_id, state, run, run["app_dir"])
+    rescan_counts = _count_triples(rescan)
+    rescan_paths = _construct_paths(output_prefix, result.get("templates") or [])
+
+    def triple(f):
+        return (f["source"], f["rule_id"], f.get("resource") or "")
+
+    cleared = {f["finding_id"]: rescan_counts[triple(f)] < baseline[triple(f)] for f in group}
+    new = sorted(t for t, n in rescan_counts.items() if n > baseline.get(t, 0))
+
+    if new and any(cleared.values()) and pending["attempt"] < CDK_MAX_ATTEMPTS \
+            and state["drafts"] < MAX_DRAFTS_PER_FILE:
+        # One redraft, on top of this draft, told what it brought with it.
+        titles = {triple(f): f.get("title") or "" for f in rescan}
+        introduced = [f"{s} {r} on {res}" + (f": {titles.get((s, r, res))}" if titles.get((s, r, res)) else "")
+                      for s, r, res in new]
+        previous = _s3_text(f"{_self_check_prefix(pr_id, lead0['finding_id'])}{source}")
+        logger.info("CDK fix for %s brought %d new finding(s); redrafting once", pending["path"], len(new))
+        step = _cdk_draft(pr_id, source, run, state, pending["path"], group, attempt=pending["attempt"] + 1,
+                          introduced=introduced, previous=previous)
+        if step.get("refused"):
+            counts["needs_human_only_count"] += 1
+            counts["not_drafted_count"] += len(group) - 1
+            return {}
+        state["pending"] = step["pending"]
+        return {"sandbox": step["sandbox"]}
+
+    # The fix is held on the first finding it cleared, so a reviewer finds
+    # it on a finding it fixed.
+    lead = next((f for f in group if cleared[f["finding_id"]]), lead0)
+    if lead is not lead0:
+        s3.copy_object(Bucket=ARTIFACTS_BUCKET,
+                       Key=f"{_self_check_prefix(pr_id, lead['finding_id'])}{source}",
+                       CopySource={"Bucket": ARTIFACTS_BUCKET,
+                                   "Key": f"{_self_check_prefix(pr_id, lead0['finding_id'])}{source}"})
+    verified = cleared[lead["finding_id"]] and not new
+    dropped = sorted(baseline_paths - rescan_paths)
+    unanswered = [a["question"] for a in draft["questions"] if a.get("answer") == "unknown"]
+    passed = verified and not (dropped or draft["assumptions"] or unanswered)
+    _write_result(lead, draft["diff"], draft["rationale"], passed,
+                  [f"{s}:{r} on {res}" for s, r, res in new], cleared[lead["finding_id"]],
+                  dropped_resources=dropped, assumptions=draft["assumptions"],
+                  applies_after=chain["applies_after"], questions=draft["questions"],
+                  base_sha256=chain["base_sha256"], file=source)
+    counts["fix_proposed_count" if passed else "needs_human_only_count"] += 1
+    for f in group:
+        if f is lead:
+            continue
+        if verified and cleared[f["finding_id"]]:
+            _write_superseded(f, lead["finding_id"])
+            counts["superseded_count"] += 1
+        else:
+            why = ("the fix for its resource did not clear it" if verified
+                   else f"the fix drafted for its resource ({lead['finding_id']}) did not pass its self-check")
+            _write_not_drafted(f, state["drafts"], reason=why)
+            counts["not_drafted_count"] += 1
+
+    if verified:
+        # The next resource's fix is drafted on this one, against its rescan.
+        baseline_key = f"{_self_check_prefix(pr_id, lead['finding_id'])}baseline.json"
+        s3.put_object(Bucket=ARTIFACTS_BUCKET, Key=baseline_key, Body=json.dumps({
+            "triples": [[*t, n] for t, n in rescan_counts.items()], "paths": sorted(rescan_paths),
+        }).encode("utf-8"))
+        state["chain"] = {
+            "content_key": f"{_self_check_prefix(pr_id, lead['finding_id'])}{source}",
+            "base_sha256": chain["base_sha256"],
+            "applies_after": chain["applies_after"] + [{"finding_id": lead["finding_id"],
+                                                        "diff_sha256": _diff_sha256(draft["diff"])}],
+            "templates_prefix": output_prefix, "templates": result.get("templates") or [],
+            "baseline_key": baseline_key,
+        }
+    return {}
+
+
+def _call_cdk_remediation(group, source, content, excerpt, answers=None, introduced=None):
+    lead = group[0]
+    origin = lead["origin"]
+    lines = [f"CDK resource to fix: {origin.get('construct_path')}",
+             f"  CloudFormation type: {origin.get('type')}",
+             f"  created at: {source}:{_int(origin.get('line'))}"]
+    for a in origin.get("assignments") or []:
+        lines.append(f"  its {a.get('property')} is set at: {a.get('file')}:{_int(a.get('line'))}")
+    lines.append("")
+    lines.append("Scanner findings on this resource, all to be fixed by one edit:")
+    for f in group:
+        lines.append(f"- {f['source']} {f['rule_id']} ({f.get('severity', 'UNKNOWN')})")
+        lines.append(_describe_rule({k: v for k, v in f.items() if k != "resource"}).rstrip("\n"))
+    prompt = "\n".join(lines) + (
+        f"\n\nThe resource as CDK synthesized it (CloudFormation JSON):\n{excerpt}\n\n"
+        f"Current contents of {source}:\n{content}\n\n"
+        f"This is an AWS CDK app. Fix these findings by changing how {source} builds the "
+        "resource -- the construct's props, or calls on it -- using aws-cdk-lib's API as a CDK "
+        "author would (a Bucket's encryption, blockPublicAccess, enforceSSL and versioned props, "
+        "say). Return the complete corrected file, not a diff or a snippet, and a short "
+        "rationale. Edit only this file. If a fix needs another file -- a prop passed down from "
+        "a stack, a shared construct -- say so in the rationale and return the file unchanged; a "
+        "human will decide.\n\n"
+        "Fix every finding listed and nothing else: do not restructure unrelated code or touch "
+        "other resources. If the fix means adding a resource -- a KMS key, a log group, a logging "
+        "bucket -- configure it completely: scanners check every resource, so a helper left on "
+        "defaults raises findings of its own (a flow log's log group not encrypted with a "
+        "customer key, a key without rotation).\n\n"
+        "Fix the underlying configuration. Never silence the scanner: no cdk-nag "
+        "NagSuppressions, no checkov or cfn_nag skip metadata (addMetadata), no suppression "
+        "comments of any kind. If a finding is intentional and correct as written, or cannot "
+        "be fixed in this file, say so in the rationale. Suppressing a finding is not a fix "
+        "and will be rejected.\n\n"
+        "Prefer constraining a resource over removing it. Removing a construct always satisfies "
+        "the scanner, but may remove something the running system depends on; only remove one "
+        "when it is genuinely unnecessary, and say so.\n\n"
+        "You are shown ONE file. You cannot see the rest of the repository, the running "
+        "infrastructure, or how any of this is used. In `assumptions`, list ONLY claims you "
+        "could not verify from this file AND whose falsity would break the running system or "
+        "leave a finding unfixed. An empty list is the correct and expected answer for a "
+        "self-contained fix."
+    )
+    if introduced:
+        prompt += (
+            "\n\nThe file above is your previous draft. It was synthesized and scanned: it cleared "
+            "findings, but brought these new ones, on resources it created or changed:\n"
+            + "\n".join(f"- {line}" for line in introduced)
+            + "\n\nRevise the draft so these are fixed too, without undoing what it fixed. Return "
+            "the complete file."
+        )
+    if answers is not None:
+        prompt += (
+            "\n\nYou asked about the rest of the repository and it was read for you:\n\n"
+            f"{_format_answers(answers)}\n\n"
+            "Draft the fix knowing this. A `yes` or `no` answer is established and must not "
+            "appear in `assumptions`. Return an empty `questions` list: there is no second lookup."
+        )
+    elif CONTEXT_AGENT_FUNCTION_NAME:
+        prompt += (
+            "\n\nIf another file in this repository would settle an assumption -- the stack that "
+            "creates this construct, a config file -- put it in `questions` instead, one specific "
+            "yes-or-no question each. They will be answered and you will draft again."
+        )
+    else:
+        prompt += "\n\nReturn an empty `questions` list."
+
+    response = _get_anthropic_client().messages.create(
+        model=MODEL,
+        max_tokens=16000,
+        output_config={
+            "effort": "medium",
+            "format": {"type": "json_schema", "schema": REMEDIATION_OUTPUT_SCHEMA},
+        },
+        messages=[{"role": "user", "content": prompt}],
+    )
+    _log_usage(response, finding_id=lead["finding_id"], call="cdk-redraft" if introduced else "cdk-draft")
+    text = next((b.text for b in response.content if b.type == "text"), None)
+    if text is None:
+        raise RuntimeError(f"remediation-agent got no text block for CDK resource {origin.get('construct_path')}")
+    return json.loads(text)

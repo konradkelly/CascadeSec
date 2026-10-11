@@ -14,6 +14,6 @@ export function cdkSource(finding: Finding): string | null {
   return `${origin.file}:${origin.line}`
 }
 
-export const CDK_DETECTION_ONLY =
-  'Found in a template synthesized from a CDK app. Fixes are not drafted for CDK findings yet: ' +
-  'a fix belongs in the app’s source, and verifying one means synthesizing it again.'
+export const CDK_EXPLAINER =
+  'Found in a template synthesized from a CDK app. Its fix is drafted in the app’s source, ' +
+  'the file that made the resource, and verified by synthesizing the app again and rescanning.'

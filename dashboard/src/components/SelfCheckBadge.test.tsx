@@ -195,10 +195,10 @@ describe('coverage caveat', () => {
 })
 
 describe('SelfCheckBadge on a CDK finding', () => {
-  it('says detection only rather than no self-check', () => {
-    render(<SelfCheckBadge proposedFix={null} targetType="cdk" />)
-    expect(screen.getByText('Detection only')).toBeTruthy()
-    expect(screen.queryByText('No self-check')).toBeNull()
+  // Since step 3 a CDK fix is self-checked like any other: by a re-synth.
+  it('shows the verdict like any other finding', () => {
+    render(<SelfCheckBadge proposedFix={{ self_check_passed: true }} targetType="cdk" />)
+    expect(screen.getByText('Self-check passed')).toBeTruthy()
     cleanup()
   })
 })
