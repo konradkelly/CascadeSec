@@ -600,12 +600,41 @@ someone the repository already trusts to push to it.
      posted, previewed, edited or committed. Its three copies are held
      identical by `corpus/test_corpus.py`, as `plan_commit`'s are.
 
-   **Not measured, or not built:**
+   **First Draft fixes run, cascadesec-testbed #4, 2026-10-11.** The run
+   took 655 seconds: synth and scan for 151, then remediation of
+   `network.ts` and `storage.ts` in parallel. (`stack.ts` had no mapped
+   findings.) Each re-synth round trip took 55 to 60 seconds. With the
+   model's draft and the rescan, a resource costs about three minutes, and
+   a redraft about two more. **All four resources' fixes were
+   scanner-verified**: their findings cleared and nothing new remained.
+   One needed its redraft for that. The bucket's first draft created a
+   KMS key whose default policy KICS flagged; the redraft wrote an
+   explicit one. One fix passed, the security group's, and superseded
+   two. The bucket's superseded seven. Three fixes were held, each by a
+   gate doing what it is for:
 
-   - Whether the model writes CDK fixes that pass. This build is the
-     harness; the first Draft fixes run on cascadesec-testbed #4 is the
-     measurement, along with the round-trip time per fix that §7 asked
-     for.
+   - The bucket and the VPC flow log: replacing CDK's default key policy
+     declares an assumption, that nothing else needs the key. For the
+     bucket, context-agent also could not answer two questions about
+     cross-account use. Both are true risks of the edit.
+   - The public subnet: the fix rewrote the VPC's subnet layout, and the
+     isolated subnet's constructs disappeared from the template. The
+     dropped-resource check held it.
+
+   **Nothing was posted, and the chain rule is why.** In `network.ts` the
+   security group's fix, the one that passed, was drafted on top of the
+   two held ones, because they had been scanner-verified, and the gateway
+   will not post a suggestion that carries changes held for review. This
+   is the Terraform rule (remediation-agent chains on scanner-verified
+   fixes, deliberately), and it is still correct. Approving the held fixes
+   in the dashboard makes the chain committable. But it bites harder for
+   CDK, where one file builds several resources: every fix after a held
+   one in that file is held with it. Whether CDK should chain only on
+   fixes that passed outright is an open question (§10).
+
+   One oddity: the passing fix's rationale came back empty.
+
+   **Not measured, or not built:**
    - Pulling a fix's helper resources into the same draft as the resource
      it fixes, and fixes that span files (decided against above).
 4. **Pulumi.** The mock harness and the converter, with a hardened twin for
@@ -648,7 +677,14 @@ someone the repository already trusts to push to it.
       commit. Per commit is stricter -- a push after approval is new code
       -- and is what GitHub Actions does.
 - [ ] Warm reuse within a pull request (§7): only if step 3's measurement
-      makes the cold start the bottleneck.
+      makes the cold start the bottleneck. **Measured 2026-10-11:** a re-synth
+      round trip is 55 to 60 seconds, about a third of each resource's three
+      minutes. The draft and the rescan are the rest. It is not yet the
+      bottleneck.
+- [ ] Whether a CDK fix is drafted on top of a fix held for review (§9 step
+      3). Today it is, as in Terraform, so one held fix holds every later
+      fix in its file. Chaining only on fixes that passed would let the
+      others post, at the cost of separate rewrites of one file.
 - [ ] Whether `result.json`'s `log_tail` is shown to reviewers. It is the
       most useful thing in a failed run and entirely attacker-written, so
       it renders as escaped text in a collapsed block, if at all.
