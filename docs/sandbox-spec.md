@@ -633,6 +633,31 @@ someone the repository already trusts to push to it.
    fixes that passed outright was open (§10). It does now, as decided
    2026-10-11.
 
+   **Second run, cascadesec-testbed #5, 2026-10-11**: the same app on a
+   fresh PR, after the two changes below were deployed. It took 689
+   seconds. **A fix reached the PR**: the public subnet's, posted as a
+   suggestion on `infra/lib/network.ts:7` and offered to Commit fixes. It
+   sets `mapPublicIpOnLaunch: false` in an explicit subnet layout, and this
+   time the layout kept CDK's own subnet names, so nothing was dropped.
+   The security group's and the flow log's fixes were drafted on it, and
+   both were held. The bucket's was held, as before.
+
+   - **The chain rule did what it was changed for.** The passing fix is
+     the root, the two held ones branch from it, and nothing is drafted on
+     a held fix. On #4 the same shape posted nothing.
+   - **Which fix passes varies from run to run.** On #4 the security group
+     passed and the subnet was held for dropping constructs. On #5 the
+     subnet passed, and the security group was held on two assumptions
+     and two unanswered questions about who uses SSH. The flow log's fix
+     did not clear its finding at all this time. Same app, same findings,
+     a different draft each time. Only the self-check and the gates keep
+     that variance off the PR, and they did.
+   - **No rationale came back empty**: 0 of 11 drafts (four first drafts,
+     three redrafts with context-agent's answers, four after a re-synth)
+     and 0 of 4 recorded fixes. At September's rate, one in six, about two
+     blanks would be expected. A sample of eleven is encouraging, not
+     proof; `RationaleEmpty` will settle it over more runs.
+
    One oddity: the passing fix's rationale came back empty. That turned out
    to be one in six fixes since September, in every language, and is
    addressed separately: the rationale is now asked for before the file,
