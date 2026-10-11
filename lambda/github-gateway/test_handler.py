@@ -685,7 +685,7 @@ def test_a_cdk_finding_is_annotated_on_the_source_line_that_made_it():
     [ann] = request.call_args.args[3]["output"]["annotations"]
     assert (ann["path"], ann["start_line"], ann["end_line"]) == ("infra/lib/network.ts", 2, 2)
     assert "infra/cdk.out/ProbeStack.template.json" in ann["message"]
-    assert "not drafted" in ann["message"]
+    assert "synthesizing the app again" in ann["message"]
 
 
 @pytest.mark.parametrize("origin", [
@@ -707,10 +707,26 @@ def test_a_cdk_finding_is_never_placed_on_the_template_itself():
     assert "annotations" not in request.call_args.args[3]["output"]
 
 
-def test_a_cdk_finding_alone_offers_no_draft_fixes():
+def test_a_cdk_finding_on_a_source_file_the_pr_changed_offers_draft_fixes():
+    # sandbox-spec §9 step 3: its fix is drafted in the source file, which is
+    # what the PR changed -- not the template, which it never could.
     finding = _cdk_finding("1", {"file": "f.tf", "line": 2})
     _, request, _ = _report([finding])
+    assert request.call_args.args[3]["actions"][0]["identifier"] == "draft_fixes"
+
+
+def test_a_cdk_finding_whose_source_the_pr_did_not_change_offers_nothing():
+    finding = _cdk_finding("1", {"file": "infra/lib/untouched.ts", "line": 2})
+    _, request, _ = _report([finding])
     assert "actions" not in request.call_args.args[3]
+
+
+def test_select_files_takes_the_source_file_of_a_cdk_finding():
+    finding = {**_cdk_finding("1", {"file": "infra/lib/storage.ts", "line": 6}), "status": "mapped"}
+    with patch.object(handler, "query_findings", return_value=[finding]):
+        out = handler.handler({"action": "select_files", "pr_id": "p",
+                               "changed_files": ["infra/lib/storage.ts"], "map": {}}, None)
+    assert out["files"] == ["infra/lib/storage.ts"]
 
 
 def test_the_summary_accounts_for_every_cdk_app():
@@ -1023,3 +1039,20 @@ def test_a_push_run_offers_draft_fixes_and_never_commit_fixes():
     with patch.object(handler, "COMMIT_FIXES_ENABLED", True):
         _, request, _ = _report([_finding("1", 2)])
     assert [a["identifier"] for a in request.call_args.args[3]["actions"]] == ["draft_fixes"]
+
+
+def test_a_runnable_apps_source_joins_the_snapshot():
+    # sandbox-spec §9 step 3: a CDK fix edits this file, and remediation,
+    # suggestions and the committer read its head content from scans/.
+    members = CDK_APP + [("o-r-sha/infra/lib/types.d.ts", b"x"), ("o-r-sha/main.tf", b"x")]
+    result, puts = _fetch_with(members, pr_files=[
+        {"filename": "infra/bin/app.ts", "status": "modified", "patch": "@@ -1 +1 @@\n+x"}])
+    snapshot = sorted(k[len("scans/gh-123456-7/"):] for k in puts if k.startswith("scans/"))
+    assert snapshot == ["infra/bin/app.ts", "main.tf"]
+    assert result["kept_count"] == 1  # IaC files, as the summary says
+    assert result["changed_files"] == ["infra/bin/app.ts"]
+
+
+def test_a_skipped_apps_source_stays_out():
+    result, puts = _fetch_with(CDK_APP + [("o-r-sha/main.tf", b"x")], github={"from_fork": True})
+    assert not any(k.startswith("scans/") and k.endswith(".ts") for k in puts)

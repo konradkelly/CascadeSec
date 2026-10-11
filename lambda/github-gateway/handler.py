@@ -283,13 +283,20 @@ def _fetch(event, project):
                 f"The CDK app in `{a['app_dir']}` was not synthesized: {a['reason']}" for a in skipped)
         return {**result, "status": "empty", "reason": reason, "cdk_skipped": skipped}
 
-    replace_snapshot(pr_id, kept)
-    cdk_runs = []
+    cdk_runs, sources = [], {}
     if runnable:
         project_key = f"projects/{pr_id}/{github['head_sha']}.tgz"
-        s3.put_object(Bucket=ARTIFACTS_BUCKET, Key=project_key, Body=project.finish(),
+        body = project.finish()
+        s3.put_object(Bucket=ARTIFACTS_BUCKET, Key=project_key, Body=body,
                       ContentType="application/gzip")
         cdk_runs = [{"app_dir": a["app_dir"], "project_key": project_key} for a in runnable]
+        sources = cdk_sources(body, [a["app_dir"] for a in runnable])
+    # A CDK app's own source joins the snapshot (sandbox-spec §9 step 3):
+    # a fix to a CDK finding is an edit to it, and every reader of a file's
+    # head content -- remediation's base, the suggestions, the committer --
+    # takes it from here. No scanner admits these suffixes, so nothing new
+    # is scanned.
+    replace_snapshot(pr_id, {**kept, **sources})
 
     pr_files = _paginate(f"/repos/{github['repository']}/pulls/{int(github['pr_number'])}/files", token)
     s3.put_object(
@@ -299,7 +306,7 @@ def _fetch(event, project):
         ContentType="application/json",
     )
     changed = sorted(f["filename"] for f in pr_files
-                     if f["status"] != "removed" and f["filename"] in kept)
+                     if f["status"] != "removed" and (f["filename"] in kept or f["filename"] in sources))
     if len(changed) > MAX_CHANGED_FILES:
         return {**result, "status": "too_large", "kept_count": len(kept),
                 "reason": f"{len(changed)} changed IaC files, over the {MAX_CHANGED_FILES} limit."}
@@ -316,6 +323,28 @@ def _fetch(event, project):
             # A repository that is only CDK has nothing to scan unless the
             # synth succeeds, and that is a result, not a scanner fault.
             "allow_empty_scan": not kept}
+
+
+# What of a CDK app is source a fix might edit. Not .json: cdk.json and
+# package.json are configuration, and a fix to either is out of scope.
+CDK_SOURCE_SUFFIXES = (".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs")
+MAX_CDK_SOURCE_BYTES = 1024 * 1024
+
+
+def cdk_sources(project_tgz, app_dirs):
+    """{path: bytes} for each source file under the given apps, read back
+    from the project tarball this function's caller just built -- so under
+    the same path rules as everything else in it."""
+    prefixes = tuple("" if d == "." else d + "/" for d in app_dirs)
+    found = {}
+    with tarfile.open(fileobj=io.BytesIO(project_tgz), mode="r:gz") as tar:
+        for member in tar:
+            if (member.isreg() and member.name.startswith(prefixes)
+                    and member.name.endswith(CDK_SOURCE_SUFFIXES)
+                    and not member.name.endswith(".d.ts")
+                    and member.size <= MAX_CDK_SOURCE_BYTES):
+                found[member.name] = tar.extractfile(member).read()
+    return found
 
 
 def cdk_out(app_dir):
@@ -561,11 +590,22 @@ def select_files(event):
     pr_id = event["pr_id"]
     changed = set(event.get("changed_files") or [])
     on_changed = [f for f in query_findings(pr_id)
-                  if f["file"] in changed and not f.get("no_longer_detected")]
-    mapped = {f["file"] for f in on_changed if f.get("status") == "mapped"}
-    files = sorted(mapped | stale_files(pr_id, [f for f in on_changed if f["file"] not in mapped]))
+                  if work_file(f) in changed and not f.get("no_longer_detected")]
+    mapped = {work_file(f) for f in on_changed if f.get("status") == "mapped"}
+    files = sorted(mapped | stale_files(pr_id, [f for f in on_changed if work_file(f) not in mapped]))
     carried = event.get("map") or {}
     return {**carried, "files": files, "remaining": 0}
+
+
+def work_file(finding):
+    """The file a finding is worked on in: its own, or for a finding on a
+    synthesized CDK template, the source file that made its resource
+    (sandbox-spec §9 step 3). Its fix edits this file, its head content is
+    in the snapshot under this name, and it is what the PR changes -- the
+    template is none of those."""
+    if finding.get("target_type") == "cdk":
+        return (finding.get("origin") or {}).get("file") or finding["file"]
+    return finding["file"]
 
 
 def stale_files(pr_id, findings):
@@ -574,7 +614,7 @@ def stale_files(pr_id, findings):
     by_file = {}
     for f in findings:
         if f.get("status") in ("fix-proposed", "resolved"):
-            by_file.setdefault(f["file"], []).append(f)
+            by_file.setdefault(work_file(f), []).append(f)
     stale = set()
     for path, fixes in by_file.items():
         try:
@@ -663,9 +703,9 @@ def report(event):
     changed = set(fetched.get("changed_files") or [])
     if remediate:
         posted, held = post_suggestions(github, pr_id, execution_name, findings, visible, token)
-        offer = plan_offer(pr_id, [f for f in findings if f["file"] in changed])
+        offer = plan_offer(pr_id, [f for f in findings if work_file(f) in changed])
 
-    on_changed = [f for f in findings if f["file"] in changed]
+    on_changed = [f for f in findings if work_file(f) in changed]
     # The same test select_files makes, so the button is offered exactly when
     # the run it starts has something to do. Stale fixes are only looked for
     # when nothing is mapped: each is a snapshot read.
@@ -829,7 +869,7 @@ def annotation(finding):
         message += f". Controls: {', '.join(controls)}"
     if finding.get("target_type") == "cdk":
         message += (f"\n\nFound in {finding['file']}, the template CDK synthesized from this line. "
-                    "Fixes are not drafted for CDK findings yet.")
+                    "A fix is drafted here, in the source, and checked by synthesizing the app again.")
     return {
         "path": path,
         "start_line": start,
@@ -933,8 +973,8 @@ def cdk_section(state):
     if not runs and not skipped:
         return []
     lines = ["**CDK apps** are synthesized in an isolated sandbox and their templates scanned as "
-             "CloudFormation. A finding is annotated on the line that made its resource. "
-             "Fixes are not drafted for CDK findings yet.", ""]
+             "CloudFormation. A finding is annotated on the line that made its resource, and "
+             "its fix is drafted in that source file and verified by synthesizing the app again.", ""]
     for r in runs:
         app = _code(r.get("app_dir"))
         if r.get("status") == "ok":
@@ -974,7 +1014,7 @@ def plan_offer(pr_id, findings):
         if (f.get("status") in ("fix-proposed", "resolved") and fix.get("self_check_passed")
                 and fix.get("diff") and not fix.get("committed")
                 and not f.get("no_longer_detected")):
-            by_file.setdefault(f["file"], {})[f["finding_id"]] = f
+            by_file.setdefault(work_file(f), {})[f["finding_id"]] = f
 
     offer = []
     for path in sorted(by_file):
@@ -1069,7 +1109,7 @@ def post_suggestions(github, pr_id, execution_name, findings, visible, token):
     posted, held = [], []
     by_file = {}
     for f in findings:
-        by_file.setdefault(f["file"], []).append(f)
+        by_file.setdefault(work_file(f), []).append(f)
     for path in sorted(visible):
         plan = plan_file(pr_id, path, by_file.get(path, []), visible[path])
         if plan is None:

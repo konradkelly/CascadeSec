@@ -14,6 +14,9 @@
 //            66s through the CLI on the same app, and a CLI pinned here
 //            would refuse any aws-cdk-lib newer than itself. The assembly's
 //            manifests, templates and metadata go up as the output.
+//            For cdk-resynth (remediation's self-check, spec §9 step 3) the
+//            same, with one file of the project replaced by a fix first,
+//            and the dependencies the detection run's fetch installed.
 //
 // Everything this reports is an observation. Whether a template is a
 // template, and which line made which resource, is decided by
@@ -211,6 +214,13 @@ export async function executePhase(manifest) {
   await download(manifest.SNAPSHOT_URL, `${WORK}/project.tgz`);
   await untar(`${WORK}/project.tgz`, SRC);
   fs.rmSync(`${WORK}/project.tgz`);
+  if (manifest.PATCH_URL) {
+    // The fix under test: one file, at a repository path sandbox-dispatch
+    // checked, written over the project's own.
+    const target = path.join(SRC, manifest.PATCH_PATH);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    await download(manifest.PATCH_URL, target);
+  }
   await download(manifest.DEPS_URL, `${WORK}/deps.tgz`);
   await untar(`${WORK}/deps.tgz`, app);
   fs.rmSync(`${WORK}/deps.tgz`);

@@ -86,7 +86,7 @@ class FakeS3:
         self.copies = []
 
     def put_object(self, Bucket, Key, Body, ContentType):
-        assert (Bucket, Key.split("/")[0]) in {("sb", "runs"), ("art", "scans")}
+        assert (Bucket, Key.split("/")[0]) in {("sb", "runs"), ("art", "scans"), ("art", "fixes")}
         self.objects[(Bucket, Key)] = Body
 
     def copy_object(self, Bucket, Key, CopySource):
@@ -356,9 +356,9 @@ def test_a_switched_off_sandbox_starts_nothing(s3, monkeypatch):
 RUN = "a" * 32
 
 
-def put_result(s3, phase, **result):
+def put_result(s3, phase, kind="cdk-synth", **result):
     s3.objects[("sb", f"runs/{RUN}/{phase}/result.json")] = json.dumps(
-        {"phase": phase, "kind": "cdk-synth", **result}).encode()
+        {"phase": phase, "kind": kind, **result}).encode()
 
 
 def collect(**over):
@@ -459,3 +459,67 @@ def test_prepare_takes_the_executions_input_as_request(s3):
     leak = handler.handler({"action": "prepare", "request": {
         "kind": "leak-test", "phases": ["fetch", "execute"], "timeout_seconds": 300}}, None)["prepared"]
     assert (leak["pr_id"], leak["app_dir"], leak["unavailable"]) == (None, None, False)
+
+
+# --- cdk-resynth: a fix's self-check (spec §9 step 3) ------------------------------
+
+FINDING = "0123456789abcdef"
+DEPS_RUN = "b" * 32
+
+
+def resynth_request(**over):
+    return {"kind": "cdk-resynth", "phases": ["execute"], "timeout_seconds": 600,
+            "pr_id": PR, "app_dir": "infra", "project_key": PROJECT,
+            "deps_run_id": DEPS_RUN, "finding_id": FINDING, "patch_path": "infra/lib/storage.ts", **over}
+
+
+def test_a_resynth_overlays_the_fix_on_the_detection_runs_dependencies(s3):
+    out = handler.prepare(resynth_request())
+    p = out["prepared"]
+    run_id = p["run_id"]
+    assert p["phases"] == ["execute"] and not p["run_fetch"]
+    assert p["output_prefix"] == f"fixes/{PR}/{FINDING}/synth-1/"
+    assert ("art", f"fixes/{PR}/{FINDING}/infra/lib/storage.ts", "sb", f"runs/{run_id}/input/patch") in s3.copies
+    m = manifest_of(s3, out, "execute")
+    assert f"runs/{DEPS_RUN}/fetch/output.tgz?op=get_object" in m["DEPS_URL"]
+    assert f"runs/{run_id}/input/patch?op=get_object" in m["PATCH_URL"]
+    assert m["PATCH_PATH"] == "infra/lib/storage.ts"
+    assert "CODEARTIFACT_TOKEN" not in m
+
+
+@pytest.mark.parametrize("over", [
+    {"phases": ["fetch", "execute"]}, {"deps_run_id": "../x"}, {"deps_run_id": None},
+    {"finding_id": "../../x"}, {"finding_id": "ABC"}, {"patch_path": "../etc/passwd"},
+    {"patch_path": "infra/node_modules/x.js"}, {"patch_path": None},
+    {"attempt": 3}, {"attempt": 0}, {"attempt": True}, {"attempt": "2"},
+])
+def test_prepare_refuses_a_resynth_it_cannot_trust(over):
+    with pytest.raises(handler.BadRequest):
+        handler.prepare(resynth_request(**over))
+
+
+def test_a_resynths_templates_go_under_the_fix_never_the_scan_prefix(s3):
+    put_result(s3, "execute", kind="cdk-resynth", status="ok")
+    s3.objects[("sb", f"runs/{RUN}/execute/output.tgz")] = tgz(assembly())
+    synth = collect(kind="cdk-resynth", phases=["execute"], output_prefix=f"fixes/{PR}/{FINDING}/synth-2/")["synth"]
+    assert synth["status"] == "ok"
+    written = sorted(k for b, k in s3.objects if b == "art")
+    assert written == [f"fixes/{PR}/{FINDING}/synth-2/infra/cdk.out/ProbeStack.template.json",
+                       f"fixes/{PR}/{FINDING}/synth-2/infra/cdk.out/ProbeStack.template.sources"]
+
+
+@pytest.mark.parametrize("prefix", [None, f"scans/{PR}/", f"fixes/other-pr/{FINDING}/synth-1/",
+                                    f"fixes/{PR}/../../scans/{PR}/synth-1/", f"fixes/{PR}/{FINDING}/synth-3/",
+                                    f"fixes/{PR}/{FINDING}/synth/"])
+def test_a_resynth_never_writes_anywhere_prepare_did_not_name(s3, prefix):
+    put_result(s3, "execute", kind="cdk-resynth", status="ok")
+    s3.objects[("sb", f"runs/{RUN}/execute/output.tgz")] = tgz(assembly())
+    with pytest.raises(handler.BadRequest):
+        collect(kind="cdk-resynth", phases=["execute"], output_prefix=prefix)
+
+
+def test_detection_reports_its_run_for_remediation_to_reuse(s3):
+    put_result(s3, "fetch", status="ok")
+    put_result(s3, "execute", status="ok")
+    s3.objects[("sb", f"runs/{RUN}/execute/output.tgz")] = tgz(assembly())
+    assert collect()["synth"]["run_id"] == RUN

@@ -11,6 +11,8 @@
 #         "phases": ["fetch", "execute"], "timeout_seconds": 300}
 #        cdk-synth adds {"pr_id", "app_dir", "project_key"}: the main
 #        pipeline's Synthesize state starts one execution per CDK app.
+#        cdk-resynth (phases ["execute"]) adds {"deps_run_id", "finding_id",
+#        "patch_path"}: a fix's self-check, from the Remediate Map.
 # Output: Collect's. For cdk-synth its "synth" is what the pipeline reads.
 
 locals {
@@ -135,6 +137,8 @@ locals {
             "pr_id.$"       = "$.prepared.pr_id"
             "app_dir.$"     = "$.prepared.app_dir"
             "unavailable.$" = "$.prepared.unavailable"
+            # cdk-resynth's: where the fix's templates go.
+            "output_prefix.$" = "$.prepared.output_prefix"
           }
         }
         OutputPath = "$.Payload"

@@ -238,7 +238,7 @@ def _post_review(pr_id, finding_id, raw_body, event):
     edited_diff = None
     if action == "edited":
         base = _read_base_content(pr_id, finding)
-        edited_diff = _unified_diff(base, edited_content, finding["file"])
+        edited_diff = _unified_diff(base, edited_content, work_file(finding))
         if not edited_diff:
             return _error(400, "edited_content is identical to the fix's base; nothing to record")
 
@@ -283,7 +283,7 @@ def _post_review(pr_id, finding_id, raw_body, event):
         # content still in S3 would be the worse failure.
         s3.put_object(
             Bucket=ARTIFACTS_BUCKET,
-            Key=_content_key(pr_id, finding_id, finding["file"]),
+            Key=_content_key(pr_id, finding_id, work_file(finding)),
             Body=edited_content.encode("utf-8"),
         )
 
@@ -610,6 +610,16 @@ def _content_key(pr_id, finding_id, file_path):
     return f"fixes/{pr_id}/{finding_id}/{file_path}"
 
 
+def work_file(finding):
+    """The file a finding's fix edits: its own, or for a finding on a
+    synthesized CDK template, the source file that made its resource
+    (docs/sandbox-spec.md §9 step 3). Must stay identical to github-gateway's
+    copy and the other agent's (corpus/test_corpus.py)."""
+    if finding.get("target_type") == "cdk":
+        return (finding.get("origin") or {}).get("file") or finding["file"]
+    return finding["file"]
+
+
 def _read_s3(key):
     obj = s3.get_object(Bucket=ARTIFACTS_BUCKET, Key=key)
     return obj["Body"].read().decode("utf-8")
@@ -622,10 +632,10 @@ def _read_base_content(pr_id, finding):
     earlier fix applied."""
     chain = (finding.get("proposed_fix") or {}).get("applies_after") or []
     if not chain:
-        return _read_s3(f"scans/{pr_id}/{finding['file']}")
+        return _read_s3(f"scans/{pr_id}/{work_file(finding)}")
     last = chain[-1]
     last_id = last.get("finding_id") if isinstance(last, dict) else last
-    return _read_s3(_content_key(pr_id, last_id, finding["file"]))
+    return _read_s3(_content_key(pr_id, last_id, work_file(finding)))
 
 
 def _unified_diff(base, corrected, file_path):
@@ -650,10 +660,10 @@ def _get_content(pr_id, finding_id):
     if not finding.get("proposed_fix"):
         return _error(404, "finding has no proposed fix, so no corrected content")
     try:
-        content = _read_s3(_content_key(pr_id, finding_id, finding["file"]))
+        content = _read_s3(_content_key(pr_id, finding_id, work_file(finding)))
     except s3.exceptions.NoSuchKey:
         return _error(404, "no corrected content stored for this fix")
-    return _ok({"finding_id": finding_id, "file": finding["file"], "content": content})
+    return _ok({"finding_id": finding_id, "file": work_file(finding), "content": content})
 
 
 def _reopen_dependents(pr_id, changed_finding_id, action, actor, now):
@@ -920,7 +930,7 @@ def plan_commit(pr_id, findings, latest_actions, read_fix, read_head):
         fix = f.get("proposed_fix") or {}
         if (fix.get("diff") and not fix.get("committed") and not f.get("no_longer_detected")
                 and latest_actions.get(f["finding_id"]) in ("approved", "edited")):
-            approved_by_file.setdefault(f["file"], {})[f["finding_id"]] = f
+            approved_by_file.setdefault(work_file(f), {})[f["finding_id"]] = f
 
     plans = []
     for path in sorted(approved_by_file):

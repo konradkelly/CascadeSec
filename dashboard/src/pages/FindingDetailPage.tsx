@@ -22,7 +22,7 @@ import {
   normalizePrerequisite,
   type UnmetPrerequisite,
 } from '../review/prerequisites'
-import { CDK_DETECTION_ONLY, cdkSource, isCdk } from '../review/cdk'
+import { CDK_EXPLAINER, cdkSource, isCdk } from '../review/cdk'
 import type { Finding, ReviewEvent } from '../types/finding'
 
 export function FindingDetailPage() {
@@ -206,7 +206,7 @@ export function FindingDetailPage() {
       {isCdk(finding) && (
         <div className="alert alert--info">
           <p>
-            {CDK_DETECTION_ONLY}
+            {CDK_EXPLAINER}
             {finding.origin?.construct_path && (
               <>
                 {' '}
