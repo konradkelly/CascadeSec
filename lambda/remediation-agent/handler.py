@@ -1938,6 +1938,8 @@ def _write_result(
 #     resource -- a key, a log group -- and that resource's findings are
 #     handed back to the model once. Whatever is still new after that holds
 #     the fix, as everywhere else.
+#   - The chain is built only of fixes that passed outright. A held fix is
+#     drafted on it but never under the next one (_cdk_judge).
 #
 # The continuation carries what has to survive a yield: which resources this
 # run has finished (`done`), the chain the next draft builds on, and the
@@ -2307,8 +2309,15 @@ def _cdk_judge(pr_id, source, run, state, on_source, result, counts):
             _write_not_drafted(f, state["drafts"], reason=why)
             counts["not_drafted_count"] += 1
 
-    if verified:
+    if passed:
         # The next resource's fix is drafted on this one, against its rescan.
+        # Only on a fix that passed outright (decided 2026-10-11, sandbox-spec
+        # §10): the Terraform path also builds on one held for review, which
+        # in a CDK file -- several resources, most fixes adding a helper that
+        # trips a gate -- held every fix after the first held one with it
+        # (cascadesec-testbed #4). A held fix branches from the chain instead:
+        # drafted on what passed before it, built on by nothing. Approved and
+        # committed later, it is stale against the file and redrafted.
         baseline_key = f"{_self_check_prefix(pr_id, lead['finding_id'])}baseline.json"
         s3.put_object(Bucket=ARTIFACTS_BUCKET, Key=baseline_key, Body=json.dumps({
             "triples": [[*t, n] for t, n in rescan_counts.items()], "paths": sorted(rescan_paths),

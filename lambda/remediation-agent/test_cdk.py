@@ -108,10 +108,12 @@ class World:
 
     def create(self, **kw):
         self.prompts.append(kw["messages"][0]["content"])
-        content = self.drafts.pop(0)
+        draft = self.drafts.pop(0)
+        # A draft is its file's content, or a dict with assumptions too.
+        content, assumptions = (draft["content"], draft["assumptions"]) if isinstance(draft, dict) else (draft, [])
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps({
             "corrected_file_content": content, "rationale": getattr(self, "create_rationale", "fixed"),
-            "assumptions": [], "questions": []}))])
+            "assumptions": assumptions, "questions": []}))])
 
     def __enter__(self):
         dynamodb = SimpleNamespace(Table=lambda name: self.table)
@@ -368,3 +370,26 @@ def test_the_three_cdk_calls_are_told_apart(capsys):
         handler._call_cdk_remediation(group, SOURCE, "c", "{}", introduced=["trivy AWS-0065 on k"])
     calls = [json.loads(line)["call"] for line in capsys.readouterr().out.splitlines() if "RationaleEmpty" in line]
     assert calls == ["cdk-draft", "cdk-answers", "cdk-redraft"]
+
+
+def test_a_held_fix_branches_off_and_the_next_is_drafted_without_it():
+    # Decided 2026-10-11: on testbed #4 the security group's passing fix was
+    # drafted on two held ones, and none of the three could be posted.
+    held = {"content": ORIGINAL.replace("'Data')", "'Data', { encryptionKey: key })"),
+            "assumptions": ["nothing else needs the key"]}
+    world = World(items(), drafts=[held, "logs fixed"], scans=[
+        (scanned(("trivy", "AWS-0132", LOGS)), [DATA, LOGS]),
+        (scanned(("trivy", "AWS-0086", DATA), ("checkov", "CKV_AWS_18", DATA)), [DATA, LOGS]),
+    ])
+    with world:
+        out = handler.handler(first_event(), None)
+        out = handler.handler(resumed(out), None)
+        assert world.status(B1) == "needs-human-only" and world.status(B2) == "superseded"
+        # The log bucket is drafted on the original file, not on the held fix.
+        assert "encryptionKey: key" not in world.prompts[1]
+        handler.handler(resumed(out), None)
+    fix = world.table.items[f"FINDING#{K1}"]["proposed_fix"]
+    assert world.status(K1) == "fix-proposed" and fix["applies_after"] == []
+    # Its rescan baseline is the original scan's, so the held fix's findings
+    # still firing in it are not "new".
+    assert fix["self_check_new_findings"] == []
