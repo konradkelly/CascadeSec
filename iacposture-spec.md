@@ -151,8 +151,10 @@ FindingRecord (DynamoDB)
 ├── rule_id: string
 ├── file, line_range
 ├── severity
-├── control_mappings: [{ framework: "CIS-AWS" | "CIS-Kubernetes" | "OWASP-CICD" | "OWASP-CloudNative", control_id, control_text_ref (S3 key), citation_span }]
+├── control_mappings: [{ framework: "CIS-AWS" | "CIS-Kubernetes" | "OWASP-CICD" | "OWASP-CloudNative" | "NIST-800-53-r5", control_id, control_text_ref (S3 key), citation_span }]
 ├── status: raw | mapped | fix-proposed | needs-human-only | superseded | resolved
+├── unmapped_reason: no-control | hygiene | not-fixable | unreviewed, only on a raw finding mapping-agent
+│                    found no candidate for (corpus/README.md); cleared when the finding maps
 ├── superseded_by: finding_id, only with status superseded
 ├── proposed_fix: { diff, rationale, self_check_passed, cleared, self_check_new_findings: [], agent_diff?, applies_after: [], scan_errors: [],
 │                   base_sha256, committed?: { sha, request_id, at } }   # v4, write-back-spec §5, §7

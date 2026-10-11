@@ -310,6 +310,11 @@ pairs actually raise 123 distinct rules, and a reviewer's queue reflects the
 RDS backup retention — which are real findings with no control in the three
 frameworks loaded.
 
+**2026-10-11:** with NIST SP 800-53 Rev. 5 loaded (`corpus/README.md`),
+131 of the 133 distinct labelled pairs across every case have a candidate
+(98%, from 86%). Measured offline from the labels and the file, not from a
+run.
+
 It measures whether a finding *can* be mapped, not whether the agent picks
 well among the candidates. That would need a labelled expected control per
 case and a live run, and is not measured.

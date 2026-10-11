@@ -29,6 +29,20 @@ Reference text `mapping-agent` cites when it maps a raw finding to a control
   them — the field is only needed for a rule that fires on more than one
   language. Added 2026-09-20; see below.
 
+  Its **`unmapped`** section lists the rules that were looked at and
+  deliberately given no candidate, each with a `reason` and a `note`:
+
+  ```json
+  "checkov:CKV_AZURE_43": { "reason": "hygiene", "note": "Storage account naming rules." }
+  ```
+
+  `no-control` (no loaded framework has a control it violates), `hygiene`
+  (conventions, not exposure) or `not-fixable` (no edit to the file can clear
+  it with the current scanners). `mapping-agent` copies the reason onto the
+  finding as `unmapped_reason`, and a rule in neither section gets
+  `unreviewed` -- the only one of the four that is a backlog. The dashboard
+  groups raw findings by it. Added 2026-10-11; see below.
+
 ## On the control text
 
 The `text` field in each framework file is an **original summary I wrote**,
@@ -37,6 +51,11 @@ text in particular isn't freely redistributable. Control IDs, titles, and
 framework versions were verified against the sources listed in each file's
 `source` field; the summaries are accurate to the control's actual meaning
 but are our own wording, not a copy of the official text.
+
+`nist-800-53-r5.json` is the exception: its `text` **is** the official
+text, generated from NIST's own OSCAL catalog rather than written. NIST
+publications are US government works and not subject to copyright, so the
+citation `mapping-agent` quotes is a quote of the control itself.
 
 ## Coverage
 
@@ -341,6 +360,99 @@ properties, the mappings are four lines.
 Closing the first three needs new framework content rather than new mappings,
 and that is the judgement call the top of this file describes: a control's
 `text` is quoted as ground truth, so writing one is not a mechanical step.
+
+### NIST SP 800-53 Rev. 5, and the unmapped section (added 2026-10-11)
+
+Every section above ends the same way: the tail that stays unmapped is a gap
+in the *frameworks*, not in the mappings, and "closing those needs new
+framework content". This is that content. One framework rather than one per
+cloud, because the gaps were the same kind everywhere -- encryption for
+services the CIS benchmarks stop short of, customer-managed keys, log
+retention, backups, resource limits, least privilege narrower than `*:*` --
+and 800-53 states each of them once, for AWS, Azure, GCP and Kubernetes
+alike.
+
+It also removes the objection the AWS section raised against adding control
+text: that `text` "will be quoted as ground truth", so writing one is a
+judgement call. Nothing here was written. `nist-800-53-r5.json` is generated
+from `NIST_SP-800-53_rev5_catalog.json` (release 5.2.0) at the
+`usnistgov/oscal-content` commit its `source` pins, each `text` the
+control's statement verbatim, with parameters printed as `[Assignment: ...]`
+and enhancements titled under their base (`Protection of Information at Rest
+| Cryptographic Protection`) the way the publication prints them. Only the 18
+controls something cites are included.
+
+**Measured on every external repository** (`external/`, scanned 2026-10-11
+from the deployed scanner, 2,636 findings), counting a finding as covered
+when it has a candidate:
+
+| repository | findings | before | after |
+|---|---|---|---|
+| terragoat | 333 | 39% | 75% |
+| terraform-aws-vpc | 58 | 71% | 84% |
+| kubernetes-goat | 591 | 68% | 83% |
+| microservices-demo | 618 | 69% | 77% |
+| argocd-example-apps | 832 | 67% | 84% |
+| azure-quickstart-templates | 204 | 71% | 84% |
+| **total** | **2,636** | **64%** | **81%** |
+
+And on the eval labels, 114 → 131 of 133 pairs (86% → 98%); the two left
+are the read-only root filesystem pair below.
+
+114 rules gained candidates. Most take one NIST control; where an existing
+precedent fits, the precedent comes first and NIST sits beside it:
+
+- **SC-28(1)** encryption at rest -- Elasticsearch, Neptune, EKS secrets,
+  SNS, SQS, EFS. **SC-12** key management -- every "use a CMK" rule, KMS key
+  policies, HSM-backed Key Vault keys. **SC-8(1)** in transit -- OpenSearch
+  TLS, load-balancer listeners, RDS, and the MSSQL and generic-database TLS
+  rules the Azure section could not place.
+- **AU-11** log retention; **AU-12** logging turned on (EKS control plane,
+  OpenSearch, Neptune, RDS, ELB, GCS, VPC flow logs).
+- **CP-9** backups, **CP-10** point-in-time recovery (Aurora backtracking;
+  S3 versioning is offered both), **CP-6** a copy in another region
+  (S3 cross-region replication, Azure geo-redundant storage), **SC-36**
+  spread across zones (RDS Multi-AZ, Azure zone redundancy).
+- **SC-6** Kubernetes requests and limits, and Lambda reserved concurrency --
+  the largest Kubernetes gap in the section above.
+- **AC-6** the cloudsplaining family (`CKV_AWS_286`-`290`), `*` resources,
+  any-principal trust, GKE's default node service account, and the RBAC
+  rules CIS 2.0 does not number. **AC-3** OpenSearch fine-grained access.
+- **RA-5** ECR scan on push; **CM-14** Lambda code signing and GKE Binary
+  Authorization; **SA-22** deprecated Lambda runtimes; **SI-2** automatic
+  minor upgrades and GKE release channels; **SI-4** SQL threat detection and
+  its alert recipients.
+- **Precedent rather than NIST:** `docker.sock` is a hostPath, so CIS 5.2.11;
+  reading every secret is CIS 5.1.2; `KSV-0046` is wildcard RBAC beside
+  `KSV-0044` on 5.1.3; GKE private clusters and authorized networks join the
+  other public-exposure rules on CNAS-6 (with SC-7); the launch-configuration
+  public IP and GKE's metadata server join the instance forms and IMDSv1 on
+  CNAS-1.
+
+**What is left, and why it is written down.** 55 rules are in the new
+`unmapped` section; on the external scan they are **432 `no-control` and 62
+`hygiene` findings, and no `unreviewed` ones**. Over half of the
+`no-control` volume is one cluster:
+
+- **High UID/GID** (`KSV-0020`/`0021`, `CKV_K8S_40`; 237 findings). Stricter
+  than 5.2.7, and nothing in 800-53 asks for it either.
+- **Read-only root filesystem** (`KSV-0014`, `CKV_K8S_22`; 63). SI-14
+  (non-persistence) and SI-7 (integrity) were considered and are about
+  something else; it stays where the Kubernetes section left it.
+- **Deletion protection.** AWS's Security Hub mapping puts RDS.8 under CM-3
+  and SC-5(2), but neither control's text mentions deletion, so citing them
+  would be citing AWS's mapping rather than the control. Same test for **IAM
+  database authentication** (IA-2 asks for unique identification, which
+  password users have) and **SSH keys over passwords** (IA-5(1) and (2)
+  govern each method and prefer neither).
+- Probes, tracing, monitoring granularity and performance settings: real
+  advice, not a security control.
+
+Some of the Azure section's "What is not mapped" list is now mapped -- MSSQL
+TLS, geo- and zone-redundancy, SQL threat detection -- and the rest is in the
+`unmapped` section with the same reasons. Its Azure rules were triaged from
+the ids that section records; KICS queries it names without an id are not,
+and will show as `unreviewed` until someone keys them.
 
 ## Not the corpus: `eval/`
 

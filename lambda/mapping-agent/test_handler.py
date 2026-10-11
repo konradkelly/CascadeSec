@@ -53,10 +53,12 @@ def reset_module_caches():
     there for the next -- and a test could pass because of what another
     test fetched."""
     handler._rule_mappings = None
+    handler._unmapped_rules = None
     handler._framework_cache = {}
     handler._anthropic_client = None
     yield
     handler._rule_mappings = None
+    handler._unmapped_rules = None
     handler._framework_cache = {}
     handler._anthropic_client = None
 
@@ -75,10 +77,10 @@ def _body(payload):
     return {"Body": SimpleNamespace(read=lambda: json.dumps(payload).encode())}
 
 
-def _s3_corpus(mock_s3, mappings):
+def _s3_corpus(mock_s3, mappings, unmapped=None):
     """Serve rule_mappings.json and the framework files by key."""
     files = {
-        "corpus/rule_mappings.json": {"mappings": mappings},
+        "corpus/rule_mappings.json": {"mappings": mappings, "unmapped": unmapped or {}},
         "corpus/frameworks/cis-aws-1.4.json": FRAMEWORK_FILE,
         "corpus/frameworks/owasp-cloud-native.json": OWASP_FILE,
     }
@@ -95,12 +97,13 @@ def _mapping(finding_id="f1", framework="CIS-AWS-1.4", control_id="5.2",
             "citation": citation, "rationale": rationale}
 
 
-def _run(mock_dynamodb, mock_s3, mock_client, findings, mappings, replies, event=None, context=None):
+def _run(mock_dynamodb, mock_s3, mock_client, findings, mappings, replies, event=None, context=None,
+         unmapped=None):
     """Drive handler() over `findings` with a canned corpus and model."""
     table = MagicMock()
     table.query.return_value = {"Items": findings}
     mock_dynamodb.Table.return_value = table
-    _s3_corpus(mock_s3, mappings)
+    _s3_corpus(mock_s3, mappings, unmapped)
     create = mock_client.return_value.messages.create
     create.side_effect = [_model_reply(r) for r in replies]
     result = handler.handler(event or {"pr_id": "pr-1"}, context)
@@ -296,7 +299,87 @@ def test_a_rule_with_no_mapping_stays_raw_and_costs_no_model_call(
 
     assert (result["mapped_count"], result["skipped_count"]) == (0, 1)
     create.assert_not_called()
+    # Tagged with why, and nothing else: status is not in the write.
+    (call,) = table.update_item.call_args_list
+    assert call.kwargs["UpdateExpression"] == "SET unmapped_reason = :reason, updated_at = :now"
+    assert call.kwargs["ExpressionAttributeValues"][":reason"] == "unreviewed"
+
+
+# ---------- why an unmapped finding is unmapped ----------
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_triaged_rule_carries_the_reason_the_corpus_gives_it(
+    mock_dynamodb, mock_s3, mock_client
+):
+    """The dashboard separates the backlog from the decided on this tag, so
+    a rule someone has already judged must not read as unreviewed."""
+    _, table, _ = _run(
+        mock_dynamodb, mock_s3, mock_client,
+        findings=[_finding(rule_id="CKV_AZURE_43")],
+        mappings={},
+        unmapped={"checkov:CKV_AZURE_43": {"reason": "hygiene", "note": "naming"}},
+        replies=[],
+    )
+
+    (call,) = table.update_item.call_args_list
+    assert call.kwargs["ExpressionAttributeValues"][":reason"] == "hygiene"
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_an_unchanged_reason_is_not_written_again(
+    mock_dynamodb, mock_s3, mock_client
+):
+    """A yielded pass looks at every still-raw finding again; one write per
+    finding per pass would be pure cost."""
+    finding = {**_finding(rule_id="CKV_AWS_999"), "unmapped_reason": "unreviewed"}
+    result, table, _ = _run(
+        mock_dynamodb, mock_s3, mock_client, findings=[finding], mappings={}, replies=[],
+    )
+
+    assert result["skipped_count"] == 1
     table.update_item.assert_not_called()
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_mapping_a_finding_clears_its_old_unmapped_reason(
+    mock_dynamodb, mock_s3, mock_client
+):
+    """A rule unreviewed last week and mapped today: the finding must not
+    show as mapped and unreviewed at once."""
+    finding = {**_finding(), "unmapped_reason": "unreviewed"}
+    _, table, _ = _run(
+        mock_dynamodb, mock_s3, mock_client,
+        findings=[finding],
+        mappings={"checkov:CKV_AWS_24": [{"framework": "CIS-AWS-1.4", "control_id": "5.2"}]},
+        replies=[_mapping()],
+    )
+
+    (call,) = table.update_item.call_args_list
+    assert "REMOVE unmapped_reason" in call.kwargs["UpdateExpression"]
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_failed_tag_is_an_error_and_does_not_stop_the_pass(
+    mock_dynamodb, mock_s3, mock_client
+):
+    table = MagicMock()
+    table.query.return_value = {"Items": [_finding("f1", rule_id="CKV_AWS_999"), _finding("f2")]}
+    table.update_item.side_effect = [RuntimeError("ProvisionedThroughputExceeded"), None]
+    mock_dynamodb.Table.return_value = table
+    _s3_corpus(mock_s3, {"checkov:CKV_AWS_24": [{"framework": "CIS-AWS-1.4", "control_id": "5.2"}]})
+    mock_client.return_value.messages.create.side_effect = [_model_reply(_mapping("f2"))]
+
+    result = handler.handler({"pr_id": "pr-1"}, None)
+
+    assert (result["mapped_count"], result["skipped_count"], result["error_count"]) == (1, 0, 1)
 
 
 @patch.object(handler, "_get_anthropic_client")
