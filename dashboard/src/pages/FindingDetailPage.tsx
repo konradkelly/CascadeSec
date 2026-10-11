@@ -256,10 +256,19 @@ export function FindingDetailPage() {
         </section>
       )}
 
-      {finding.proposed_fix?.rationale && (
+      {(finding.proposed_fix?.rationale || finding.proposed_fix?.diff) && (
         <section className="panel">
           <h2>Remediation rationale</h2>
-          <p>{finding.proposed_fix.rationale}</p>
+          {finding.proposed_fix.rationale?.trim() ? (
+            <p>{finding.proposed_fix.rationale}</p>
+          ) : (
+            // Said, not hidden: a passing fix with nothing here read as if
+            // the section had never existed.
+            <p className="muted">
+              No rationale given: the model returned none with this fix. Read the diff below
+              for what it changes.
+            </p>
+          )}
 
           {finding.proposed_fix.suppression_attempt &&
             finding.proposed_fix.suppression_attempt.length > 0 && (
