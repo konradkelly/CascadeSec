@@ -110,7 +110,8 @@ class World:
         self.prompts.append(kw["messages"][0]["content"])
         content = self.drafts.pop(0)
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps({
-            "corrected_file_content": content, "rationale": "fixed", "assumptions": [], "questions": []}))])
+            "corrected_file_content": content, "rationale": getattr(self, "create_rationale", "fixed"),
+            "assumptions": [], "questions": []}))])
 
     def __enter__(self):
         dynamodb = SimpleNamespace(Table=lambda name: self.table)
@@ -327,3 +328,43 @@ def test_a_fix_drafted_on_an_older_file_is_reopened_and_redrafted():
     assert world.table.events and "stale" in json.dumps(world.table.events[0])
     assert out["sandbox"]["finding_id"] == B1
     assert world.s3.objects[f"fixes/{PR}/{B1}/{SOURCE}"] == b"fixed again"
+
+
+# --- the empty rationale (27 of 154 fixes, Sept-Oct 2026) ---------------------------
+
+def test_the_rationale_is_asked_for_before_the_file():
+    assert list(handler.REMEDIATION_OUTPUT_SCHEMA["properties"])[:2] == ["rationale", "corrected_file_content"]
+    assert handler.REMEDIATION_OUTPUT_SCHEMA["required"][0] == "rationale"
+
+
+@pytest.mark.parametrize("rationale,empty", [("", 1), ("   \n", 1), (None, 1), ("Encrypts the bucket.", 0)])
+def test_every_draft_counts_whether_it_came_with_a_rationale(capsys, rationale, empty):
+    out = handler._record_rationale({"rationale": rationale}, finding_id="f", call="draft")
+    assert out == {"rationale": rationale}
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert line["RationaleEmpty"] == empty and line["call"] == "draft"
+    assert line["_aws"]["CloudWatchMetrics"][0]["Metrics"] == [{"Name": "RationaleEmpty", "Unit": "Count"}]
+
+
+def test_a_fix_without_a_rationale_says_so_on_the_record():
+    world = World(items()[:2], drafts=["fixed"], scans=[(scanned(), [DATA, LOGS])])
+    world.create_rationale = ""
+    with world:
+        out = handler.handler(first_event(), None)
+        handler.handler(resumed(out), None)
+    fix = world.table.items[f"FINDING#{B1}"]["proposed_fix"]
+    assert fix["rationale"] == "" and fix["rationale_missing"] is True
+
+
+def test_the_three_cdk_calls_are_told_apart(capsys):
+    group = [finding(B1, "AWS-0086", DATA, 2)]
+    client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: SimpleNamespace(content=[
+        SimpleNamespace(type="text", text=json.dumps({"corrected_file_content": "x", "rationale": "r",
+                                                      "assumptions": [], "questions": []}))])))
+    with patch.object(handler, "_get_anthropic_client", lambda: client), \
+            patch.object(handler, "CONTEXT_AGENT_FUNCTION_NAME", None):
+        handler._call_cdk_remediation(group, SOURCE, "c", "{}")
+        handler._call_cdk_remediation(group, SOURCE, "c", "{}", answers=[])
+        handler._call_cdk_remediation(group, SOURCE, "c", "{}", introduced=["trivy AWS-0065 on k"])
+    calls = [json.loads(line)["call"] for line in capsys.readouterr().out.splitlines() if "RationaleEmpty" in line]
+    assert calls == ["cdk-draft", "cdk-answers", "cdk-redraft"]

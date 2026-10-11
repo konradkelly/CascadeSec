@@ -62,6 +62,8 @@ export interface RepositoryQuestion {
 
 export interface ProposedFix {
   diff?: string
+  /** True when the model returned no rationale with the fix. */
+  rationale_missing?: boolean
   /** The file the fix edits, when it is not the finding's own: a CDK
    *  finding is on a synthesized template, and its fix is to the app's
    *  source (docs/sandbox-spec.md §9 step 3). */
