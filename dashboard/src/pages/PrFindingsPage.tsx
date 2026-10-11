@@ -4,7 +4,9 @@ import { ApiClientError, listFindings } from '../api/client'
 import { CommitPanel } from '../components/CommitPanel'
 import { FindingsTable } from '../components/FindingsTable'
 import { FixGroups } from '../components/FixGroups'
+import { UnmappedFindings } from '../components/UnmappedFindings'
 import { DRAFTED_STATUSES } from '../review/fixGroups'
+import { isUnmapped, mappedShare } from '../review/unmapped'
 import type { Finding, FindingStatus } from '../types/finding'
 
 export function PrFindingsPage() {
@@ -40,7 +42,13 @@ export function PrFindingsPage() {
     return <p className="alert alert--error">Missing PR ID.</p>
   }
 
-  const statusCounts = findings.reduce(
+  // Raw findings have no control and nothing is drafted for them, so they
+  // are not in the review table or the status cards; UnmappedFindings shows
+  // them below, grouped by why.
+  const reviewable = findings.filter((f) => !isUnmapped(f))
+  const share = mappedShare(findings)
+
+  const statusCounts = reviewable.reduce(
     (acc, f) => {
       acc[f.status] = (acc[f.status] ?? 0) + 1
       return acc
@@ -59,7 +67,15 @@ export function PrFindingsPage() {
       <div className="page-header">
         <div>
           <h1>PR: {prId}</h1>
-          <p className="muted">{findings.length} finding{findings.length === 1 ? '' : 's'}</p>
+          <p className="muted">
+            {findings.length} finding{findings.length === 1 ? '' : 's'}
+            {share !== null && (
+              <>
+                {' '}
+                · {reviewable.length} mapped to a control ({Math.round(share * 100)}%)
+              </>
+            )}
+          </p>
         </div>
         <button type="button" className="btn btn--secondary" onClick={load} disabled={loading}>
           Refresh
@@ -77,7 +93,7 @@ export function PrFindingsPage() {
       {!loading && !error && (
         <>
           <div className="summary-cards">
-            {(['fix-proposed', 'needs-human-only', 'not-drafted', 'mapped', 'raw', 'resolved'] as const).map(
+            {(['fix-proposed', 'needs-human-only', 'not-drafted', 'mapped', 'resolved'] as const).map(
               (status) =>
                 statusCounts[status] ? (
                   <button
@@ -119,11 +135,13 @@ export function PrFindingsPage() {
           ) : (
             <FindingsTable
               prId={prId}
-              findings={findings}
+              findings={reviewable}
               statusFilter={statusFilter}
               onStatusFilterChange={setStatusFilter}
             />
           )}
+
+          <UnmappedFindings prId={prId} findings={findings} />
         </>
       )}
     </div>

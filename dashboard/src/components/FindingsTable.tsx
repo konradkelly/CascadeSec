@@ -20,8 +20,9 @@ function severityRank(finding: Finding): number {
   return SEVERITY_RANK[finding.severity?.toLowerCase() ?? ''] ?? 5
 }
 
+// No 'raw': the page hands this table mapped findings only, and shows the
+// raw ones in UnmappedFindings.
 const ALL_STATUSES: FindingStatus[] = [
-  'raw',
   'mapped',
   'fix-proposed',
   'needs-human-only',
