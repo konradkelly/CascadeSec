@@ -145,8 +145,14 @@ class _Outcome(typing.NamedTuple):
 REMEDIATION_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "corrected_file_content": {"type": "string"},
+        # First, before the file. Structured output is generated in this
+        # order, and with the file first the model wrote a whole corrected
+        # file and then, in 27 of 154 fixes (18%, every language, Sept-Oct
+        # 2026), left the explanation empty. Explaining the change before
+        # writing it is the better order regardless; whether it closes the
+        # gap is what the RationaleEmpty metric is for (_record_rationale).
         "rationale": {"type": "string"},
+        "corrected_file_content": {"type": "string"},
         # Facts the fix depends on that couldn't be checked against the one
         # file the agent was given, AND whose falsity would break something.
         # Schema-required so the model has to answer rather than quietly fold
@@ -165,7 +171,7 @@ REMEDIATION_OUTPUT_SCHEMA = {
         # from the questions record. See _remediate_finding.
         "questions": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["corrected_file_content", "rationale", "assumptions", "questions"],
+    "required": ["rationale", "corrected_file_content", "assumptions", "questions"],
     "additionalProperties": False,
 }
 
@@ -1113,7 +1119,8 @@ def _call_remediation_agent(finding, original_content, answers=None, flagged="")
     if text is None:
         raise RuntimeError(f"remediation-agent got no text block for finding {finding['finding_id']}")
 
-    return json.loads(text)
+    return _record_rationale(json.loads(text), finding_id=finding["finding_id"],
+                             call="redraft" if answers else "draft")
 
 
 # Directives that make a scanner stop reporting a finding without changing
@@ -1794,6 +1801,33 @@ def _log_usage(response, **context):
     }))
 
 
+def _record_rationale(remediation, **context):
+    """Count drafts that came back without a rationale, and return the draft.
+
+    One Embedded Metric Format line per draft, RationaleEmpty 0 or 1, beside
+    _log_usage's token counts: the mean is the rate, and the field order in
+    REMEDIATION_OUTPUT_SCHEMA is the change it measures. A blank is not a
+    reason to hold a fix -- the review gates are about what the edit risks,
+    and GitHub is only ever shown the diff -- but it is recorded as one
+    (_write_result), so a reviewer reads "none given" instead of nothing."""
+    empty = not str(remediation.get("rationale") or "").strip()
+    dimensions = {"Environment": ENVIRONMENT, "Agent": AGENT_NAME}
+    print(json.dumps({
+        "_aws": {
+            "Timestamp": int(time.time() * 1000),
+            "CloudWatchMetrics": [{
+                "Namespace": METRIC_NAMESPACE,
+                "Dimensions": [sorted(dimensions)],
+                "Metrics": [{"Name": "RationaleEmpty", "Unit": "Count"}],
+            }],
+        },
+        **dimensions, "RationaleEmpty": int(empty), **context,
+    }))
+    if empty:
+        logger.warning("draft came back without a rationale: %s", context)
+    return remediation
+
+
 def _diff_sha256(diff_text):
     """Hash of a fix's diff, recorded by every fix drafted on top of it.
 
@@ -1834,6 +1868,9 @@ def _write_result(
             ":pf": {
                 "diff": diff_text,
                 "rationale": rationale,
+                # Said, rather than left for a reader to notice the absence:
+                # the model returned no explanation (_record_rationale).
+                "rationale_missing": not str(rationale or "").strip(),
                 "self_check_passed": self_check_passed,
                 "self_check_new_findings": self_check_new_findings,
                 "cleared": cleared,
@@ -2362,8 +2399,12 @@ def _call_cdk_remediation(group, source, content, excerpt, answers=None, introdu
         },
         messages=[{"role": "user", "content": prompt}],
     )
-    _log_usage(response, finding_id=lead["finding_id"], call="cdk-redraft" if introduced else "cdk-draft")
+    # Three calls, told apart in the metrics: a first draft, the draft again
+    # with context-agent's answers, and the redraft after a re-synth found
+    # new findings.
+    call = "cdk-redraft" if introduced else "cdk-answers" if answers is not None else "cdk-draft"
+    _log_usage(response, finding_id=lead["finding_id"], call=call)
     text = next((b.text for b in response.content if b.type == "text"), None)
     if text is None:
         raise RuntimeError(f"remediation-agent got no text block for CDK resource {origin.get('construct_path')}")
-    return json.loads(text)
+    return _record_rationale(json.loads(text), finding_id=lead["finding_id"], call=call)
