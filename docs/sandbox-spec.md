@@ -630,9 +630,13 @@ someone the repository already trusts to push to it.
    in the dashboard makes the chain committable. But it bites harder for
    CDK, where one file builds several resources: every fix after a held
    one in that file is held with it. Whether CDK should chain only on
-   fixes that passed outright is an open question (§10).
+   fixes that passed outright was open (§10). It does now, as decided
+   2026-10-11.
 
-   One oddity: the passing fix's rationale came back empty.
+   One oddity: the passing fix's rationale came back empty. That turned out
+   to be one in six fixes since September, in every language, and is
+   addressed separately: the rationale is now asked for before the file,
+   and a blank is counted and shown.
 
    **Not measured, or not built:**
    - Pulling a fix's helper resources into the same draft as the resource
@@ -681,10 +685,19 @@ someone the repository already trusts to push to it.
       round trip is 55 to 60 seconds, about a third of each resource's three
       minutes. The draft and the rescan are the rest. It is not yet the
       bottleneck.
-- [ ] Whether a CDK fix is drafted on top of a fix held for review (§9 step
-      3). Today it is, as in Terraform, so one held fix holds every later
-      fix in its file. Chaining only on fixes that passed would let the
-      others post, at the cost of separate rewrites of one file.
+- [x] Whether a CDK fix is drafted on top of a fix held for review (§9 step
+      3). It was, as in Terraform, so one held fix held every later fix in
+      its file. **Decided 2026-10-11: CDK chains only on fixes that passed
+      outright.** A held fix is drafted on the passed chain before it, and
+      nothing is drafted on it. What can be posted is still one chain,
+      drafted in order, so the competing rewrites the chain exists to
+      prevent never reach the PR. Only held fixes branch, and a person acts
+      on each one. Approved and committed after the chain, a held fix is
+      stale against the file and redrafted, through the staleness handling
+      that already exists. github-gateway needed no change: it already
+      posts only chains made entirely of passing fixes. Terraform keeps its
+      rule until its own runs say otherwise. On testbed #4 this would have
+      posted the security group's fix.
 - [ ] Whether `result.json`'s `log_tail` is shown to reviewers. It is the
       most useful thing in a failed run and entirely attacker-written, so
       it renders as escaped text in a collapsed block, if at all.
