@@ -2,12 +2,19 @@
 # runtime, pinned by digest -- here the base, and in terraform/sandbox the
 # image itself. Harnesses arrive with the kinds that run them (spec §9):
 # the containment's own tests, and cdk-synth (cdk.mjs). Both use the base's
-# own tar and npm; the image installs nothing of its own.
+# own tar and npm. Helm is installed at build time for offline rendering.
 #
 # node:22-slim, 22.23.3 at the time of pinning (2026-10-09).
-FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS helm-download
+# Fargate runs linux/amd64. Verify the pinned upstream archive before use.
+RUN node --input-type=module -e 'import fs from "node:fs"; const r = await fetch("https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz"); if (!r.ok) throw new Error("Helm download failed"); fs.writeFileSync("/tmp/helm.tgz", Buffer.from(await r.arrayBuffer()));' \
+ && echo "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  /tmp/helm.tgz" | sha256sum -c - \
+ && tar -xzf /tmp/helm.tgz -C /tmp linux-amd64/helm
 
-COPY runner.mjs cdk.mjs pulumi.mjs pulumi-mock.mjs /opt/sandbox/
+FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+COPY --from=helm-download /tmp/linux-amd64/helm /usr/local/bin/helm
+
+COPY runner.mjs cdk.mjs pulumi.mjs pulumi-mock.mjs helm.mjs /opt/sandbox/
 
 # The task's only writable places. Declared as volumes, owned by the
 # unprivileged user, so the task definition's empty volumes mounted here

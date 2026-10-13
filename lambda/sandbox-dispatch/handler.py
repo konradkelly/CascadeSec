@@ -51,6 +51,7 @@ import cdk
 import leak
 import pulumi
 import pulumi_plan
+import helm
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -73,9 +74,9 @@ SANDBOX_ACTIVE = os.environ.get("SANDBOX_ACTIVE", "true") == "true"
 
 # pulumi-mock and test-suite arrive with the harnesses that run them
 # (spec §9).
-KINDS = {"leak-test", "sleep", "cdk-synth", "cdk-resynth", "pulumi-mock"}
+KINDS = {"leak-test", "sleep", "cdk-synth", "cdk-resynth", "pulumi-mock", "helm-template"}
 SYNTH_KINDS = {"cdk-synth", "cdk-resynth"}
-EXECUTION_KINDS = SYNTH_KINDS | {"pulumi-mock"}
+EXECUTION_KINDS = SYNTH_KINDS | {"pulumi-mock", "helm-template"}
 PHASES = ("fetch", "execute")
 
 MIN_TIMEOUT_SECONDS = 30
@@ -179,6 +180,10 @@ def _validate_request(event):
                          f"[{MIN_TIMEOUT_SECONDS}, {MAX_TIMEOUT_SECONDS}]")
     phases = [p for p in PHASES if p in phases]
     synth = None
+    if kind == "helm-template":
+        synth = {**_validate_synth(event), **_validate_helm(event)}
+        if phases != ["execute"]:
+            raise BadRequest("helm-template runs execute only, with vendored dependencies")
     if kind in {"cdk-synth", "pulumi-mock"}:
         synth = _validate_synth(event)
         if phases != list(PHASES):
@@ -218,6 +223,32 @@ def _validate_synth(event):
             and project_key.endswith(".tgz") and cdk._repo_path(project_key)):
         raise BadRequest(f"project_key {project_key!r} is not this pull request's project")
     return {"pr_id": pr_id, "app_dir": app_dir, "project_key": project_key}
+
+
+def _validate_helm(event):
+    release, namespace = event.get("release", "sandbox"), event.get("namespace", "default")
+    for name, value, cap in (("release", release, 53), ("namespace", namespace, 63)):
+        if not (isinstance(value, str) and len(value) <= cap
+                and re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", value)):
+            raise BadRequest(f"Helm {name} must be a DNS label of at most {cap} characters")
+    values = event.get("values_files", [])
+    if not (isinstance(values, list) and len(values) <= 32
+            and all(isinstance(v, str) and cdk._repo_path(v) and "," not in v for v in values)):
+        raise BadRequest("values_files must be at most 32 repository-relative file paths without commas")
+    version = event.get("kube_version")
+    if version is not None and not (isinstance(version, str) and len(version) <= 64
+                                   and re.fullmatch(r"v?\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?", version)):
+        raise BadRequest("kube_version must be a Kubernetes semantic version")
+    apis = event.get("api_versions", [])
+    if not (isinstance(apis, list) and len(apis) <= 64
+            and all(isinstance(v, str) and len(v) <= 200
+                    and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9./-]*", v) for v in apis)):
+        raise BadRequest("api_versions must be at most 64 Kubernetes API versions")
+    options = dict(release=release, namespace=namespace, values_files=values,
+                   kube_version=version, api_versions=apis)
+    if len(json.dumps(options).encode()) > 16 * 1024:
+        raise BadRequest("Helm options exceed 16KB")
+    return options
 
 
 def _validate_resynth(event):
@@ -310,7 +341,7 @@ def prepare(event):
         return _unavailable(kind, phases, timeout, synth)
     run_id = uuid.uuid4().hex
     expires = timeout + URL_START_ALLOWANCE_SECONDS
-    npm_endpoint = _npm_repository_endpoint()
+    npm_endpoint = _npm_repository_endpoint() if kind != "helm-template" else None
 
     if synth:
         # The task can reach this bucket and no other (spec §5), so the
@@ -332,8 +363,9 @@ def prepare(event):
             "RESULT_URL": _presign("PUT", SANDBOX_BUCKET, run_key(run_id, phase, "result.json"), expires),
             "OUTPUT_URL": _presign("PUT", SANDBOX_BUCKET, run_key(run_id, phase, "output.tgz"), expires),
             # Not a secret: the execute task probes that it cannot reach it.
-            "CODEARTIFACT_HOST": urllib.parse.urlsplit(npm_endpoint).hostname,
         }
+        if npm_endpoint:
+            manifest["CODEARTIFACT_HOST"] = urllib.parse.urlsplit(npm_endpoint).hostname
         if phase == "fetch":
             manifest["CODEARTIFACT_NPM_URL"] = npm_endpoint
             manifest["CODEARTIFACT_TOKEN"] = _codeartifact_token()
@@ -342,6 +374,10 @@ def prepare(event):
             manifest["SNAPSHOT_URL"] = _presign("GET", SANDBOX_BUCKET, run_key(run_id, "input", "project.tgz"), expires)
             manifest["STEP_TIMEOUT_SECONDS"] = max(MIN_TIMEOUT_SECONDS, timeout - STEP_TIMEOUT_MARGIN_SECONDS)
             if phase == "execute":
+                if kind == "helm-template":
+                    manifest.update(HELM_RELEASE=synth["release"], HELM_NAMESPACE=synth["namespace"],
+                                    HELM_VALUES=synth["values_files"], HELM_KUBE_VERSION=synth["kube_version"],
+                                    HELM_API_VERSIONS=synth["api_versions"])
                 if kind == "pulumi-mock":
                     manifest["PULUMI_CONFIG"] = synth["config"]
                     manifest["PULUMI_MOCK_CALLS"] = synth["mock_calls"]
@@ -349,8 +385,9 @@ def prepare(event):
                 # detection run's, since a fix to source does not change the
                 # lockfile (spec §7). Read-only here: execute's own
                 # OUTPUT_URL is the only place it can write.
-                deps_run = synth.get("deps_run_id") or run_id
-                manifest["DEPS_URL"] = _presign("GET", SANDBOX_BUCKET, run_key(deps_run, "fetch", "output.tgz"), expires)
+                if kind != "helm-template":
+                    deps_run = synth.get("deps_run_id") or run_id
+                    manifest["DEPS_URL"] = _presign("GET", SANDBOX_BUCKET, run_key(deps_run, "fetch", "output.tgz"), expires)
             if kind == "cdk-resynth":
                 manifest["PATCH_URL"] = _presign("GET", SANDBOX_BUCKET, run_key(run_id, "input", "patch"), expires)
                 manifest["PATCH_PATH"] = synth["patch_path"]
@@ -558,6 +595,8 @@ def collect(event):
     out = {"run_id": run_id, "kind": kind, "phases": phases, "reaped": (event.get("reap") or {}).get("stopped", [])}
     if kind == "pulumi-mock":
         out["pulumi"] = _collect_pulumi(event, run_id, phases)
+    if kind == "helm-template":
+        out["helm"] = _collect_helm(event, run_id, phases)
     if kind in SYNTH_KINDS:
         out["synth"] = _collect_synth(event, run_id, phases)
         logger.info("%s %s (%s): %s %s", kind, run_id, out["synth"]["app_dir"],
@@ -573,6 +612,41 @@ def collect(event):
 
 
 # --- collect: cdk-synth --------------------------------------------------------
+
+def _collect_helm(event, run_id, phases):
+    pr_id, app_dir = event.get("pr_id"), event.get("app_dir")
+    if not (isinstance(pr_id, str) and PR_ID_RE.match(pr_id)) or not _app_dir_ok(app_dir):
+        raise BadRequest("a helm-template collect needs the pr_id and app_dir prepare checked")
+    base = {"app_dir": app_dir, "run_id": run_id}
+    if event.get("unavailable"):
+        return {**base, "status": "unavailable", "reason": "the sandbox is switched off"}
+    problem = _phase_problem(phases, "execute", "render")
+    if problem:
+        return {**base, **problem}
+    key = run_key(run_id, "execute", "output.tgz")
+    try:
+        size = s3.head_object(Bucket=SANDBOX_BUCKET, Key=key)["ContentLength"]
+        if size > helm.MAX_ARCHIVE_BYTES:
+            return {**base, "status": "rejected", "reason": "Helm output archive exceeds 12MB"}
+        body = s3.get_object(Bucket=SANDBOX_BUCKET, Key=key,
+                             Range=f"bytes=0-{helm.MAX_ARCHIVE_BYTES - 1}")["Body"]
+        try:
+            manifest = helm.read_manifest(body)
+        finally:
+            body.close()
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            return {**base, "status": "error", "reason": "Helm reported success and uploaded nothing"}
+        raise
+    except helm.Hostile as error:
+        return {**base, "status": "rejected", "reason": _clip(str(error), MAX_REASON)}
+    filename = ("" if app_dir == "." else app_dir + "/") + "helm.out/manifests.yaml"
+    prefix = f"scans/{pr_id}/"
+    s3.put_object(Bucket=ARTIFACTS_BUCKET, Key=prefix + filename,
+                  Body=manifest, ContentType="application/yaml")
+    return {**base, "status": "ok", "reason": None, "manifest_key": prefix + filename,
+            "manifest_file": filename, "scan_prefix": prefix}
+
 
 def _collect_pulumi(event, run_id, phases):
     pr_id, app_dir = event.get("pr_id"), event.get("app_dir")

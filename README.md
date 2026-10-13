@@ -108,6 +108,14 @@ python corpus/external/run_external.py           # scan pinned third-party repos
 
 `scan.py` uploads the directory, starts one execution of the pipeline, reports each stage as it runs, and prints the dashboard URL when it finishes. Remediation costs one model call per mapped finding, so `scan.py` asks before running it (`--no-remediate` stops after mapping).
 
+Helm charts can be rendered offline in the sandbox and their generated manifests
+scanned with `python scripts/sandbox.py helm path/to/repo --app-dir charts/app --scan`.
+Vendor dependencies first; use repeatable `--values` options for repository-relative
+values files. Findings point to rendered YAML. This command does not persist or
+remediate findings. The Helm runner was verified on AWS on 2026-10-13; deploying
+it requires rebuilding the sandbox image and applying `terraform/sandbox`
+([sandbox spec](docs/sandbox-spec.md)).
+
 ## Status
 
 **Deployed and running** against a dev AWS account, with a GitHub App installed on a test repository. CI runs the Lambda suites (pytest, 581 tests), the corpus data tests (209) and the dashboard's lint, type-check and tests (90) on every push. It runs deliberately without AWS credentials, so a test run can never touch real infrastructure.
