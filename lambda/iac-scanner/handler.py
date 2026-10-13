@@ -218,7 +218,7 @@ CFN_TYPE_NAMESPACES = frozenset({"AWS", "Alexa", "Custom"})
 # snapshot: AWS key patterns, `password = "..."` assignments, high-entropy
 # strings. It was off, so spec §2's "hardcoded secrets" goal measured 75% on
 # the eval corpus with the miss being a literal RDS master password.
-CHECKOV_FRAMEWORKS = "terraform,kubernetes,arm,bicep,cloudformation,secrets"
+CHECKOV_FRAMEWORKS = "terraform,terraform_plan,kubernetes,arm,bicep,cloudformation,secrets"
 
 # Trivy scans every config type it knows unless told otherwise, so this is
 # the admission list and it is deliberately short. A language reaches
@@ -256,7 +256,7 @@ CHECKOV_FRAMEWORKS = "terraform,kubernetes,arm,bicep,cloudformation,secrets"
 # as off, both templates reported the same 10 AWS-* rules, and nothing
 # claimed the other three. So enabling it costs no cross-talk with the
 # Kubernetes admission that shares the .yaml suffix.
-TRIVY_MISCONFIG_SCANNERS = "terraform,kubernetes,cloudformation"
+TRIVY_MISCONFIG_SCANNERS = "terraform,terraformplan-json,kubernetes,cloudformation"
 
 # KICS's platform names. AzureResourceManager covers both ARM templates and
 # Bicep -- unlike Trivy, KICS parses .bicep natively, which is what gives
@@ -462,7 +462,7 @@ def handler(event, context):
         downloaded, unreadable_templates, classifications = _download_snapshot(
             ARTIFACTS_BUCKET, s3_prefix, work_dir)
         if not downloaded:
-            if event.get("allow_empty"):
+            if event.get("allow_empty") and not unreadable_templates:
                 logger.info("nothing to scan under %s, and the caller allows that", s3_prefix)
                 response = {"pr_id": pr_id, "finding_count": 0, "findings": [], "scan_errors": [],
                             "preserved_count": 0, "no_longer_detected_count": 0}
@@ -485,6 +485,7 @@ def handler(event, context):
             + _normalize_kics(kics_report, work_dir, pr_id, classifications)
         )
         _cdk_origins(findings, _cdk_source_maps(ARTIFACTS_BUCKET, s3_prefix, downloaded, work_dir))
+        _pulumi_origins(findings, downloaded, work_dir)
 
         kics_unparsed = _kics_unparsed_count(kics_report)
         if kics_unparsed:
@@ -780,6 +781,21 @@ def _download_snapshot(bucket, prefix, dest_dir):
             local_path = os.path.join(dest_dir, rel_path)
             os.makedirs(os.path.dirname(local_path) or dest_dir, exist_ok=True)
             s3.download_file(bucket, key, local_path)
+            if key.endswith(".pulumi.plan.json"):
+                try:
+                    with open(local_path, encoding="utf-8") as fh:
+                        plan = json.load(fh)
+                    if (not isinstance(plan, dict) or plan.get("cascade_pulumi", {}).get("mode") != "mock"
+                            or not isinstance(plan.get("planned_values", {}).get("root_module", {}).get("resources"), list)
+                            or not isinstance(plan.get("configuration", {}).get("root_module", {}).get("resources"), list)):
+                        raise ValueError("invalid Pulumi plan")
+                except (ValueError, AttributeError, TypeError, OSError):
+                    os.remove(local_path)
+                    unreadable_templates.append(rel_path.replace(os.sep, "/"))
+                    continue
+                downloaded.append(local_path)
+                classifications[rel_path.replace(os.sep, "/")] = "pulumi"
+                continue
             # An admitted suffix that is also sniffable (.tf.json, .tofu.json,
             # .tfvars.json) is Terraform's and already named by its suffix;
             # SUFFIX_TARGET_TYPES claims those before the sniff is consulted.
@@ -801,7 +817,52 @@ def _download_snapshot(bucket, prefix, dest_dir):
     return downloaded, unreadable_templates, classifications
 
 
+def _pulumi_origins(findings, downloaded, work_dir):
+    plans = {}
+    for file in downloaded:
+        if file.endswith(".pulumi.plan.json"):
+            with open(file, encoding="utf-8") as fh:
+                plans[os.path.relpath(file, work_dir).replace(os.sep, "/")] = json.load(fh).get("cascade_pulumi", {}).get("sources", {})
+    for finding in findings:
+        if finding["file"] not in plans:
+            continue
+        finding["target_type"] = "pulumi"
+        location = finding.get("resource") or repr(finding.get("line_range"))
+        identity = f"{finding['source']}:{finding['rule_id']}:{finding['file']}:{location}"
+        finding["finding_id"] = hashlib.sha1(identity.encode()).hexdigest()[:16]
+        finding["sk"] = "FINDING#" + finding["finding_id"]
+        origin = plans[finding["file"]].get(finding.get("resource"), {})
+        source = origin.get("source") if isinstance(origin, dict) else None
+        if isinstance(source, dict) and isinstance(source.get("file"), str) and source.get("line"):
+            parts = source["file"].split("/")
+            if (not source["file"].startswith("/") and "\\" not in source["file"]
+                    and not any(p in {"", ".", ".."} for p in parts)
+                    and type(source["line"]) is int and 0 < source["line"] <= 1000000):
+                finding["origin"] = {"file": source["file"], "line": source["line"],
+                                     "urn": origin.get("urn"), "resource": finding.get("resource")}
+
+
 def _run_trivy(work_dir):
+    plans = sorted(os.path.join(folder, name) for folder, _, names in os.walk(work_dir)
+                   for name in names if name.endswith(".pulumi.plan.json"))
+    ordinary_scanners = TRIVY_MISCONFIG_SCANNERS
+    if plans:
+        ordinary_scanners = ",".join(s for s in ordinary_scanners.split(",") if s != "terraformplan-json")
+    findings, errors = _run_trivy_once(work_dir, ordinary_scanners)
+    for plan in plans:
+        records, parse_errors = _run_trivy_once(plan, "terraformplan-json")
+        rel = os.path.relpath(plan, work_dir).replace(os.sep, "/")
+        # Trivy renders plan JSON into a virtual main.tf. Running each plan
+        # separately makes its provenance unambiguous, even in mixed snapshots.
+        for record in records:
+            record["Target"] = rel
+        findings.extend(records)
+        if parse_errors:
+            errors.append(rel)
+    return findings, sorted(set(errors))
+
+
+def _run_trivy_once(work_dir, scanners):
     """Returns (misconfigurations, parse_errors).
 
     Each misconfiguration is Trivy's own object plus the three things Trivy
@@ -817,7 +878,7 @@ def _run_trivy(work_dir):
             # egress from the function, and the rule set is pinned to the
             # layer's Trivy version, so a scan is reproducible.
             "--skip-check-update",
-            "--misconfig-scanners", TRIVY_MISCONFIG_SCANNERS,
+            "--misconfig-scanners", scanners,
             "--cache-dir", TRIVY_CACHE_DIR,
             "--config-check", TRIVY_CHECKS_DIR,
             "--check-namespaces", "user",

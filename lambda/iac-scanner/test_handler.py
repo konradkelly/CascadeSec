@@ -126,8 +126,8 @@ def test_trivy_parse_failure_is_reported_not_raised(mock_run):
 # What the scanner is expected to ask each tool for. Spelled out here rather
 # than read off the handler, so a change to either has to be made twice --
 # once in the code and once as a claim about what the code should say.
-TRIVY_SCANNERS = "terraform,kubernetes,cloudformation"
-CHECKOV_FRAMEWORKS = "terraform,kubernetes,arm,bicep,cloudformation,secrets"
+TRIVY_SCANNERS = "terraform,terraformplan-json,kubernetes,cloudformation"
+CHECKOV_FRAMEWORKS = "terraform,terraform_plan,kubernetes,arm,bicep,cloudformation,secrets"
 
 
 @patch.object(handler.subprocess, "run")

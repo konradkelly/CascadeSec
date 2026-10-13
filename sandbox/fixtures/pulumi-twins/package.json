@@ -1,0 +1,11 @@
+{
+  "name": "sandbox-pulumi-fixture",
+  "private": true,
+  "main": "index.ts",
+  "dependencies": {
+    "@pulumi/pulumi": "3.267.0",
+    "@pulumi/aws": "7.48.0",
+    "ts-node": "10.9.2",
+    "typescript": "5.9.3"
+  }
+}

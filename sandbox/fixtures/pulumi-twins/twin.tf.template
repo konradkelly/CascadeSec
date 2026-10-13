@@ -1,0 +1,48 @@
+resource "aws_s3_bucket" "logs" {}
+resource "aws_s3_bucket_public_access_block" "access" {
+  bucket = aws_s3_bucket.logs.id
+  block_public_acls = HARD
+  block_public_policy = HARD
+  ignore_public_acls = HARD
+  restrict_public_buckets = HARD
+}
+resource "aws_s3_bucket_versioning" "version" {
+  bucket = aws_s3_bucket.logs.id
+  versioning_configuration { status = "VERSION" }
+}
+resource "aws_kms_key" "key" { enable_key_rotation = HARD }
+resource "aws_s3_bucket_server_side_encryption_configuration" "encryption" {
+  bucket = aws_s3_bucket.logs.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "ALGORITHM"
+      KMS_FIELD
+    }
+  }
+}
+resource "aws_s3_bucket_logging" "logging" {
+  bucket = aws_s3_bucket.logs.id
+  target_bucket = "external-audit"
+  target_prefix = "logs/"
+}
+resource "aws_instance" "server" {
+  ami = "ami-12345678"
+  instance_type = "t3.small"
+  metadata_options { http_tokens = "TOKENS" }
+  root_block_device { encrypted = HARD }
+}
+resource "aws_security_group" "web" {
+  description = "Managed by Pulumi"
+  ingress {
+    protocol = "tcp"
+    from_port = PORT
+    to_port = PORT
+    cidr_blocks = ["CIDR"]
+  }
+}
+resource "aws_cloudtrail" "trail" {
+  s3_bucket_name = aws_s3_bucket.logs.id
+  enable_log_file_validation = HARD
+  is_multi_region_trail = HARD
+  TRAIL_KEY
+}

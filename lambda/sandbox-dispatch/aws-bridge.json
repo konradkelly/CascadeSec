@@ -1,0 +1,454 @@
+{
+  "provider": "aws",
+  "version": "7.48.0",
+  "source": "https://raw.githubusercontent.com/pulumi/pulumi-aws/v7.48.0/provider/cmd/pulumi-resource-aws/bridge-metadata.json",
+  "sha256": "21ccff1cbe843c9f5d889e5ef072459a74c8d0cc29f03d71fc1ff31108617c66",
+  "resources": {
+    "aws_s3_bucket": {
+      "current": "aws:s3/bucket:Bucket",
+      "past": [
+        {
+          "name": "aws:s3/bucketV2:BucketV2",
+          "inCodegen": true,
+          "majorVersion": 6
+        }
+      ],
+      "majorVersion": 7,
+      "fields": {
+        "cors_rule": {
+          "maxItemsOne": false,
+          "elem": {
+            "fields": {
+              "allowed_headers": {
+                "maxItemsOne": false
+              },
+              "allowed_methods": {
+                "maxItemsOne": false
+              },
+              "allowed_origins": {
+                "maxItemsOne": false
+              },
+              "expose_headers": {
+                "maxItemsOne": false
+              }
+            }
+          }
+        },
+        "grant": {
+          "maxItemsOne": false,
+          "elem": {
+            "fields": {
+              "permissions": {
+                "maxItemsOne": false
+              }
+            }
+          }
+        },
+        "lifecycle_rule": {
+          "maxItemsOne": false,
+          "elem": {
+            "fields": {
+              "expiration": {
+                "maxItemsOne": true
+              },
+              "noncurrent_version_expiration": {
+                "maxItemsOne": true
+              },
+              "noncurrent_version_transition": {
+                "maxItemsOne": false
+              },
+              "transition": {
+                "maxItemsOne": false
+              }
+            }
+          }
+        },
+        "logging": {
+          "maxItemsOne": true
+        },
+        "object_lock_configuration": {
+          "maxItemsOne": true,
+          "elem": {
+            "fields": {
+              "rule": {
+                "maxItemsOne": true,
+                "elem": {
+                  "fields": {
+                    "default_retention": {
+                      "maxItemsOne": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "replication_configuration": {
+          "maxItemsOne": true,
+          "elem": {
+            "fields": {
+              "rules": {
+                "maxItemsOne": false,
+                "elem": {
+                  "fields": {
+                    "destination": {
+                      "maxItemsOne": true,
+                      "elem": {
+                        "fields": {
+                          "access_control_translation": {
+                            "maxItemsOne": true
+                          },
+                          "metrics": {
+                            "maxItemsOne": true
+                          },
+                          "replication_time": {
+                            "maxItemsOne": true
+                          }
+                        }
+                      }
+                    },
+                    "filter": {
+                      "maxItemsOne": true
+                    },
+                    "source_selection_criteria": {
+                      "maxItemsOne": true,
+                      "elem": {
+                        "fields": {
+                          "sse_kms_encrypted_objects": {
+                            "maxItemsOne": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "server_side_encryption_configuration": {
+          "maxItemsOne": true,
+          "elem": {
+            "fields": {
+              "rule": {
+                "maxItemsOne": true,
+                "elem": {
+                  "fields": {
+                    "apply_server_side_encryption_by_default": {
+                      "maxItemsOne": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "versioning": {
+          "maxItemsOne": true
+        },
+        "website": {
+          "maxItemsOne": true
+        }
+      }
+    },
+    "aws_s3_bucket_public_access_block": {
+      "current": "aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock",
+      "majorVersion": 7
+    },
+    "aws_s3_bucket_versioning": {
+      "current": "aws:s3/bucketVersioning:BucketVersioning",
+      "past": [
+        {
+          "name": "aws:s3/bucketVersioningV2:BucketVersioningV2",
+          "inCodegen": true,
+          "majorVersion": 7
+        }
+      ],
+      "majorVersion": 7,
+      "fields": {
+        "versioning_configuration": {
+          "maxItemsOne": true
+        }
+      }
+    },
+    "aws_s3_bucket_server_side_encryption_configuration": {
+      "current": "aws:s3/bucketServerSideEncryptionConfiguration:BucketServerSideEncryptionConfiguration",
+      "past": [
+        {
+          "name": "aws:s3/bucketServerSideEncryptionConfigurationV2:BucketServerSideEncryptionConfigurationV2",
+          "inCodegen": true,
+          "majorVersion": 7
+        }
+      ],
+      "majorVersion": 7,
+      "fields": {
+        "rule": {
+          "maxItemsOne": false,
+          "elem": {
+            "fields": {
+              "apply_server_side_encryption_by_default": {
+                "maxItemsOne": true
+              },
+              "blocked_encryption_types": {
+                "maxItemsOne": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "aws_s3_bucket_logging": {
+      "current": "aws:s3/bucketLogging:BucketLogging",
+      "past": [
+        {
+          "name": "aws:s3/bucketLoggingV2:BucketLoggingV2",
+          "inCodegen": true,
+          "majorVersion": 7
+        }
+      ],
+      "majorVersion": 7,
+      "fields": {
+        "target_grant": {
+          "maxItemsOne": false,
+          "elem": {
+            "fields": {
+              "grantee": {
+                "maxItemsOne": true
+              }
+            }
+          }
+        },
+        "target_object_key_format": {
+          "maxItemsOne": true,
+          "elem": {
+            "fields": {
+              "partitioned_prefix": {
+                "maxItemsOne": true
+              },
+              "simple_prefix": {
+                "maxItemsOne": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "aws_kms_key": {
+      "current": "aws:kms/key:Key",
+      "majorVersion": 7
+    },
+    "aws_security_group": {
+      "current": "aws:ec2/securityGroup:SecurityGroup",
+      "majorVersion": 7,
+      "fields": {
+        "egress": {
+          "maxItemsOne": false,
+          "elem": {
+            "fields": {
+              "cidr_blocks": {
+                "maxItemsOne": false
+              },
+              "ipv6_cidr_blocks": {
+                "maxItemsOne": false
+              },
+              "prefix_list_ids": {
+                "maxItemsOne": false
+              },
+              "security_groups": {
+                "maxItemsOne": false
+              }
+            }
+          }
+        },
+        "ingress": {
+          "maxItemsOne": false,
+          "elem": {
+            "fields": {
+              "cidr_blocks": {
+                "maxItemsOne": false
+              },
+              "ipv6_cidr_blocks": {
+                "maxItemsOne": false
+              },
+              "prefix_list_ids": {
+                "maxItemsOne": false
+              },
+              "security_groups": {
+                "maxItemsOne": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "aws_instance": {
+      "current": "aws:ec2/instance:Instance",
+      "majorVersion": 7,
+      "fields": {
+        "capacity_reservation_specification": {
+          "maxItemsOne": true,
+          "elem": {
+            "fields": {
+              "capacity_reservation_target": {
+                "maxItemsOne": true
+              }
+            }
+          }
+        },
+        "cpu_options": {
+          "maxItemsOne": true
+        },
+        "credit_specification": {
+          "maxItemsOne": true
+        },
+        "ebs_block_device": {
+          "maxItemsOne": false
+        },
+        "enclave_options": {
+          "maxItemsOne": true
+        },
+        "ephemeral_block_device": {
+          "maxItemsOne": false
+        },
+        "instance_market_options": {
+          "maxItemsOne": true,
+          "elem": {
+            "fields": {
+              "spot_options": {
+                "maxItemsOne": true
+              }
+            }
+          }
+        },
+        "ipv6_addresses": {
+          "maxItemsOne": false
+        },
+        "launch_template": {
+          "maxItemsOne": true
+        },
+        "maintenance_options": {
+          "maxItemsOne": true
+        },
+        "metadata_options": {
+          "maxItemsOne": true
+        },
+        "network_interface": {
+          "maxItemsOne": false
+        },
+        "primary_network_interface": {
+          "maxItemsOne": true
+        },
+        "private_dns_name_options": {
+          "maxItemsOne": true
+        },
+        "root_block_device": {
+          "maxItemsOne": true
+        },
+        "secondary_network_interface": {
+          "maxItemsOne": false,
+          "elem": {
+            "fields": {
+              "private_ip_addresses": {
+                "maxItemsOne": false
+              }
+            }
+          }
+        },
+        "secondary_private_ips": {
+          "maxItemsOne": false
+        },
+        "security_groups": {
+          "maxItemsOne": false
+        },
+        "vpc_security_group_ids": {
+          "maxItemsOne": false
+        }
+      }
+    },
+    "aws_cloudtrail": {
+      "current": "aws:cloudtrail/trail:Trail",
+      "majorVersion": 7,
+      "fields": {
+        "advanced_event_selector": {
+          "maxItemsOne": false,
+          "elem": {
+            "fields": {
+              "field_selector": {
+                "maxItemsOne": false,
+                "elem": {
+                  "fields": {
+                    "ends_with": {
+                      "maxItemsOne": false
+                    },
+                    "equals": {
+                      "maxItemsOne": false
+                    },
+                    "not_ends_with": {
+                      "maxItemsOne": false
+                    },
+                    "not_equals": {
+                      "maxItemsOne": false
+                    },
+                    "not_starts_with": {
+                      "maxItemsOne": false
+                    },
+                    "starts_with": {
+                      "maxItemsOne": false
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "event_selector": {
+          "maxItemsOne": false,
+          "elem": {
+            "fields": {
+              "data_resource": {
+                "maxItemsOne": false,
+                "elem": {
+                  "fields": {
+                    "values": {
+                      "maxItemsOne": false
+                    }
+                  }
+                }
+              },
+              "exclude_management_event_sources": {
+                "maxItemsOne": false
+              }
+            }
+          }
+        },
+        "insight_selector": {
+          "maxItemsOne": false
+        }
+      }
+    },
+    "aws_iam_role": {
+      "current": "aws:iam/role:Role",
+      "majorVersion": 7,
+      "fields": {
+        "inline_policy": {
+          "maxItemsOne": false
+        },
+        "managed_policy_arns": {
+          "maxItemsOne": false
+        }
+      }
+    },
+    "aws_iam_policy": {
+      "current": "aws:iam/policy:Policy",
+      "majorVersion": 7
+    },
+    "aws_vpc": {
+      "current": "aws:ec2/vpc:Vpc",
+      "majorVersion": 7
+    },
+    "aws_subnet": {
+      "current": "aws:ec2/subnet:Subnet",
+      "majorVersion": 7
+    }
+  }
+}

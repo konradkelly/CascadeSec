@@ -49,6 +49,8 @@ from botocore.exceptions import ClientError
 
 import cdk
 import leak
+import pulumi
+import pulumi_plan
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -71,8 +73,9 @@ SANDBOX_ACTIVE = os.environ.get("SANDBOX_ACTIVE", "true") == "true"
 
 # pulumi-mock and test-suite arrive with the harnesses that run them
 # (spec §9).
-KINDS = {"leak-test", "sleep", "cdk-synth", "cdk-resynth"}
+KINDS = {"leak-test", "sleep", "cdk-synth", "cdk-resynth", "pulumi-mock"}
 SYNTH_KINDS = {"cdk-synth", "cdk-resynth"}
+EXECUTION_KINDS = SYNTH_KINDS | {"pulumi-mock"}
 PHASES = ("fetch", "execute")
 
 MIN_TIMEOUT_SECONDS = 30
@@ -176,10 +179,26 @@ def _validate_request(event):
                          f"[{MIN_TIMEOUT_SECONDS}, {MAX_TIMEOUT_SECONDS}]")
     phases = [p for p in PHASES if p in phases]
     synth = None
-    if kind == "cdk-synth":
+    if kind in {"cdk-synth", "pulumi-mock"}:
         synth = _validate_synth(event)
         if phases != list(PHASES):
-            raise BadRequest("cdk-synth runs both phases: execute needs what fetch installs")
+            raise BadRequest(f"{kind} runs both phases: execute needs what fetch installs")
+        if kind == "pulumi-mock":
+            config, calls = event.get("config", {}), event.get("mock_calls", {})
+            if not isinstance(config, dict) or any(not isinstance(v, str) for v in config.values()):
+                raise BadRequest("config must map Pulumi configuration keys to string values")
+            if not isinstance(calls, dict):
+                raise BadRequest("mock_calls must be an object")
+            for responses in calls.values():
+                if not isinstance(responses, list) or any(
+                    not isinstance(r, dict) or set(r) != {"inputs", "outputs"}
+                    or not isinstance(r["inputs"], dict) or not isinstance(r["outputs"], dict)
+                    for r in responses
+                ):
+                    raise BadRequest("each mock call token must map to a list of {inputs, outputs} objects")
+            if len(json.dumps({"config": config, "calls": calls}).encode()) > 64 * 1024:
+                raise BadRequest("Pulumi config and mock calls exceed 64KB")
+            synth.update(config=config, mock_calls=calls)
     if kind == "cdk-resynth":
         synth = {**_validate_synth(event), **_validate_resynth(event)}
         if phases != ["execute"]:
@@ -323,6 +342,9 @@ def prepare(event):
             manifest["SNAPSHOT_URL"] = _presign("GET", SANDBOX_BUCKET, run_key(run_id, "input", "project.tgz"), expires)
             manifest["STEP_TIMEOUT_SECONDS"] = max(MIN_TIMEOUT_SECONDS, timeout - STEP_TIMEOUT_MARGIN_SECONDS)
             if phase == "execute":
+                if kind == "pulumi-mock":
+                    manifest["PULUMI_CONFIG"] = synth["config"]
+                    manifest["PULUMI_MOCK_CALLS"] = synth["mock_calls"]
                 # What fetch installed -- this run's, or for a re-synth the
                 # detection run's, since a fix to source does not change the
                 # lockfile (spec §7). Read-only here: execute's own
@@ -435,7 +457,7 @@ def _shape(data, phase, kind):
         return {"status": "malformed", "why": "not an object"}
     if data.get("phase") != phase or data.get("kind") != kind:
         return {"status": "malformed", "why": "phase or kind does not match the run"}
-    if kind in SYNTH_KINDS:
+    if kind in EXECUTION_KINDS:
         return _shape_synth(data)
     probes = data.get("probes", [])
     if not isinstance(probes, list) or len(probes) > MAX_PROBES:
@@ -534,6 +556,8 @@ def collect(event):
         phases[phase] = record
 
     out = {"run_id": run_id, "kind": kind, "phases": phases, "reaped": (event.get("reap") or {}).get("stopped", [])}
+    if kind == "pulumi-mock":
+        out["pulumi"] = _collect_pulumi(event, run_id, phases)
     if kind in SYNTH_KINDS:
         out["synth"] = _collect_synth(event, run_id, phases)
         logger.info("%s %s (%s): %s %s", kind, run_id, out["synth"]["app_dir"],
@@ -549,6 +573,51 @@ def collect(event):
 
 
 # --- collect: cdk-synth --------------------------------------------------------
+
+def _collect_pulumi(event, run_id, phases):
+    pr_id, app_dir = event.get("pr_id"), event.get("app_dir")
+    if not (isinstance(pr_id, str) and PR_ID_RE.match(pr_id)) or not _app_dir_ok(app_dir):
+        raise BadRequest("a pulumi-mock collect needs the pr_id and app_dir prepare checked")
+    base = {"app_dir": app_dir, "run_id": run_id, "mode": "mock"}
+    if event.get("unavailable"):
+        return {**base, "status": "unavailable", "reason": "the sandbox is switched off"}
+    for phase, stage in (("fetch", "install"), ("execute", "mock")):
+        problem = _phase_problem(phases, phase, stage)
+        if problem:
+            return {**base, **problem}
+    key = run_key(run_id, "execute", "output.tgz")
+    try:
+        size = s3.head_object(Bucket=SANDBOX_BUCKET, Key=key)["ContentLength"]
+        if size > pulumi.MAX_ARCHIVE_BYTES:
+            return {**base, "status": "rejected", "reason": "Pulumi output archive exceeds size limit"}
+        body = s3.get_object(Bucket=SANDBOX_BUCKET, Key=key,
+                            Range=f"bytes=0-{pulumi.MAX_ARCHIVE_BYTES - 1}")["Body"]
+        try:
+            data = pulumi.read_resources(body, app_dir)
+        finally:
+            body.close()
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            return {**base, "status": "error", "reason": "the mock run reported success and uploaded nothing"}
+        raise
+    except pulumi.Hostile as e:
+        return {**base, "status": "rejected", "reason": _clip(str(e), MAX_REASON)}
+    # Keep raw inputs in the sandbox bucket; scan only the converted plan below.
+    output_key = f"runs/{run_id}/pulumi/resources.json"
+    s3.put_object(Bucket=SANDBOX_BUCKET, Key=output_key,
+                  Body=json.dumps(data, allow_nan=False).encode(), ContentType="application/json")
+    try:
+        plan = pulumi_plan.build(data)
+    except pulumi_plan.Unsupported as e:
+        return {**base, "status": "unsupported", "reason": _clip(str(e), MAX_REASON),
+                "resources_key": output_key}
+    plan_file = ("" if app_dir == "." else app_dir + "/") + "pulumi.out/resources.pulumi.plan.json"
+    scan_prefix = f"scans/{pr_id}/"
+    s3.put_object(Bucket=ARTIFACTS_BUCKET, Key=scan_prefix + plan_file,
+                  Body=json.dumps(plan, allow_nan=False, indent=2).encode(), ContentType="application/json")
+    return {**base, "status": "ok", "reason": None, "resources": len(data["resources"]),
+            "resources_key": output_key, "plan_key": scan_prefix + plan_file,
+            "plan_file": plan_file, "scan_prefix": scan_prefix}
 
 def _phase_problem(phases, phase, stage):
     """Why a phase gives synthesis nothing to use, or None if it does."""
