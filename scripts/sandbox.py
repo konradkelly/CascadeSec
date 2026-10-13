@@ -44,7 +44,7 @@ from pathlib import Path
 
 import boto3
 
-from scan import SKIP_DIRS
+from scan import SKIP_DIRS, tf_output, LAMBDA_CONFIG
 
 ROOT = Path(__file__).resolve().parent.parent
 TF_DIR = ROOT / "terraform" / "sandbox"
@@ -237,6 +237,70 @@ def cmd_status(_args):
     print(f"sandbox is {'UP (endpoints billed hourly)' if out.get('active') else 'down (nothing billed while idle)'}")
 
 
+def cmd_pulumi(args):
+    root = Path(args.dir).resolve()
+    app_dir = args.app_dir
+    if app_dir != "." and (Path(app_dir).is_absolute() or "\\" in app_dir
+                           or any(p in {"", ".", ".."} for p in app_dir.split("/"))):
+        sys.exit("--app-dir must be a repository-relative path")
+    if not (root / app_dir / "Pulumi.yaml").is_file():
+        sys.exit(f"no Pulumi.yaml in {root / app_dir}")
+    config = json.loads(Path(args.config).read_text(encoding="utf-8")) if args.config else {}
+    calls = json.loads(Path(args.mock_calls).read_text(encoding="utf-8")) if args.mock_calls else {}
+    out = outputs()
+    if not out.get("active"):
+        sys.exit("the sandbox is down: run `python scripts/sandbox.py up` first")
+    region = out["state_machine_arn"].split(":")[3]
+    s3 = boto3.client("s3", region_name=region)
+    sfn = boto3.client("stepfunctions", region_name=region)
+    pr_id = f"manual-pulumi-{int(time.time())}"
+    project_key = f"projects/{pr_id}/local.tgz"
+    s3.put_object(Bucket=out["artifacts_bucket"], Key=project_key, Body=pack_project(root))
+    desc = start_and_wait(sfn, out["state_machine_arn"], {
+        "kind": "pulumi-mock", "phases": ["fetch", "execute"], "timeout_seconds": SYNTH_TIMEOUT_SECONDS,
+        "pr_id": pr_id, "app_dir": app_dir, "project_key": project_key,
+        "config": config, "mock_calls": calls})
+    if desc["status"] != "SUCCEEDED":
+        sys.exit(f"sandbox execution {desc['status']}: {desc.get('error')}")
+    result = json.loads(desc["output"])
+    for phase, record in result["phases"].items():
+        detail = record.get("result") or {}
+        print(f"  {phase}: {record['status']} {detail.get('status', '')} {detail.get('reason') or ''}")
+        if args.log and detail.get("log_tail"):
+            print(detail["log_tail"])
+    pulumi = result["pulumi"]
+    print(f"Pulumi mocks: {pulumi['status']} {pulumi.get('reason') or ''}")
+    if pulumi["status"] != "ok":
+        sys.exit(1)
+    response = s3.get_object(Bucket=out["sandbox_bucket"], Key=pulumi["resources_key"])
+    try:
+        data = response["Body"].read()
+    finally:
+        response["Body"].close()
+    target = Path(args.output).resolve()
+    target.write_bytes(data)
+    print(f"Captured {pulumi['resources']} resource(s) in {target}")
+    plan_path = target.with_suffix(".pulumi.plan.json")
+    response = s3.get_object(Bucket=out["artifacts_bucket"], Key=pulumi["plan_key"])
+    try:
+        plan_path.write_bytes(response["Body"].read())
+    finally:
+        response["Body"].close()
+    print(f"Scanner plan: {plan_path}")
+    if args.scan:
+        client = boto3.client("lambda", region_name=region, config=LAMBDA_CONFIG)
+        scan = client.invoke(FunctionName=tf_output("iac_scanner_function_name"),
+            Payload=json.dumps({"pr_id": pr_id, "s3_prefix": pulumi["scan_prefix"], "persist": False}).encode())
+        result = json.loads(scan["Payload"].read())
+        if scan.get("FunctionError"):
+            sys.exit(f"scanner failed: {result}")
+        findings_path = target.with_suffix(".findings.json")
+        findings_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        print(f"Scan: {result['finding_count']} finding(s), {len(result['scan_errors'])} parse error(s) -> {findings_path}")
+        if result["scan_errors"]:
+            sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -248,6 +312,14 @@ def main():
     synth.add_argument("dir", help="the repository (or project) root to pack")
     synth.add_argument("--app-dir", default=".", help="the app's directory within it (holds cdk.json)")
     synth.add_argument("--log", action="store_true", help="print each phase's log tail")
+    pulumi = sub.add_parser("pulumi", help="execute a Node.js Pulumi project under mocks in the sandbox")
+    pulumi.add_argument("dir", help="the repository root to pack")
+    pulumi.add_argument("--app-dir", default=".", help="directory containing Pulumi.yaml")
+    pulumi.add_argument("--config", help="JSON object of fully qualified config keys and string values")
+    pulumi.add_argument("--mock-calls", help="JSON object of lookup tokens and explicit input/output fixtures")
+    pulumi.add_argument("--output", default="pulumi-resources.json", help="local destination for captured resources")
+    pulumi.add_argument("--log", action="store_true", help="print each phase's log tail")
+    pulumi.add_argument("--scan", action="store_true", help="scan the generated plan without persisting findings or drafting fixes")
     sub.add_parser("status")
     args = parser.parse_args()
 
@@ -259,6 +331,8 @@ def main():
         cmd_leak_test(args)
     elif args.command == "synth":
         cmd_synth(args)
+    elif args.command == "pulumi":
+        cmd_pulumi(args)
     else:
         cmd_status(args)
 

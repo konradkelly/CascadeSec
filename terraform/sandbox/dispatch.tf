@@ -10,6 +10,18 @@
 # never be able to publish to them.
 
 data "archive_file" "dispatch" {
+  source {
+    content  = file("${path.module}/../../lambda/sandbox-dispatch/pulumi_plan.py")
+    filename = "pulumi_plan.py"
+  }
+  source {
+    content  = file("${path.module}/../../lambda/sandbox-dispatch/aws-bridge.json")
+    filename = "aws-bridge.json"
+  }
+  source {
+    content  = file("${path.module}/../../lambda/sandbox-dispatch/pulumi.py")
+    filename = "pulumi.py"
+  }
   type        = "zip"
   output_path = "${path.module}/../../lambda/sandbox-dispatch/handler.zip"
 

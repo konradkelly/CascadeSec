@@ -59,7 +59,7 @@ function memberName(appDir, name) {
 // A command's exit code and the tail of what it wrote. The tail is the one
 // part of a failed run worth reading, and it is whatever the app chose to
 // print, so it goes back as data and is never interpreted here.
-function run(cmd, args, { cwd, env, timeoutMs }) {
+export function run(cmd, args, { cwd, env, timeoutMs }) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let tail = Buffer.alloc(0);
@@ -87,13 +87,13 @@ function run(cmd, args, { cwd, env, timeoutMs }) {
   });
 }
 
-async function download(url, dest) {
+export async function download(url, dest) {
   const res = await fetch(url, { signal: AbortSignal.timeout(300_000) });
   if (res.status !== 200) throw new Error(`download: http:${res.status}`);
   await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(dest));
 }
 
-async function upload(url, file) {
+export async function upload(url, file) {
   // A Blob from the file carries its size, so the PUT has a Content-Length:
   // S3 refuses a presigned PUT sent chunked.
   const res = await fetch(url, { method: "PUT", body: await fs.openAsBlob(file),
@@ -101,14 +101,14 @@ async function upload(url, file) {
   if (res.status !== 200) throw new Error(`upload: http:${res.status}`);
 }
 
-async function untar(archive, dest, members = []) {
+export async function untar(archive, dest, members = []) {
   fs.mkdirSync(dest, { recursive: true });
   const r = await run("tar", ["-xzf", archive, "-C", dest, "--no-same-owner", "--no-same-permissions",
                               "--", ...members], { timeoutMs: 300_000 });
   if (r.code !== 0) throw new Error(`untar ${path.basename(archive)}: ${r.tail.slice(-300)}`);
 }
 
-async function tarUp(archive, cwd, entries) {
+export async function tarUp(archive, cwd, entries) {
   const r = await run("tar", ["-czf", archive, "-C", cwd, "--", ...entries], { timeoutMs: 300_000 });
   if (r.code !== 0) throw new Error(`tar ${path.basename(archive)}: ${r.tail.slice(-300)}`);
 }

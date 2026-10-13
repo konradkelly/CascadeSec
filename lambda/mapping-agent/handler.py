@@ -81,7 +81,7 @@ secretsmanager = boto3.client("secretsmanager")
 # warm execution environment, so fetch each at most once per container.
 # Mapped, but never handed to remediation: detection only until a fix to
 # their source can be verified by synthesizing again (sandbox-spec §9).
-DETECTION_ONLY_TARGET_TYPES = {"cdk"}
+DETECTION_ONLY_TARGET_TYPES = {"cdk", "pulumi"}
 
 _anthropic_client = None
 _rule_mappings = None

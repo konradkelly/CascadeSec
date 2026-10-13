@@ -251,7 +251,7 @@ CFN_TYPE_RE = re.compile(r"""^[ \t]*Type:[ \t]*['"]?([A-Za-z0-9:_-]+)""")
 
 # Never drafted by the template's name: fixed through the app's source
 # instead (the CDK section below). mapping-agent keeps the same set.
-DETECTION_ONLY_TARGET_TYPES = {"cdk"}
+DETECTION_ONLY_TARGET_TYPES = {"cdk", "pulumi"}
 
 
 def handler(event, context):

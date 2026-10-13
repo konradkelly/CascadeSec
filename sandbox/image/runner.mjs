@@ -22,6 +22,7 @@ import fs from "node:fs";
 import net from "node:net";
 
 import { Unsupported, executePhase, fetchPhase } from "./cdk.mjs";
+import { executePulumi } from "./pulumi.mjs";
 
 const PHASE = process.env.SANDBOX_PHASE;
 const KIND = process.env.SANDBOX_KIND;
@@ -182,12 +183,13 @@ async function leakTest() {
 async function cdkSynth() {
   const started = Date.now();
   try {
-    const out = PHASE === "fetch" ? await fetchPhase(manifest) : await executePhase(manifest);
-    console.log(`${PHASE} cdk-synth: ${out.status}${out.reason ? ` (${out.reason})` : ""} in ${out.duration_ms}ms`);
+    const out = PHASE === "fetch" ? await fetchPhase(manifest)
+      : KIND === "pulumi-mock" ? await executePulumi(manifest) : await executePhase(manifest);
+    console.log(`${PHASE} ${KIND}: ${out.status}${out.reason ? ` (${out.reason})` : ""} in ${out.duration_ms}ms`);
     return out;
   } catch (e) {
     const status = e instanceof Unsupported ? "unsupported" : "error";
-    console.log(`${PHASE} cdk-synth: ${status}: ${e.message}`);
+    console.log(`${PHASE} ${KIND}: ${status}: ${e.message}`);
     return { status, reason: e.message.slice(0, 500), duration_ms: Date.now() - started };
   }
 }
@@ -213,7 +215,7 @@ async function main() {
     // what to read when result.json never arrives.
     for (const p of probes) console.log(`${PHASE} ${p.name}: ${p.observed}`);
     result = { probes };
-  } else if (KIND === "cdk-synth" || KIND === "cdk-resynth") {
+  } else if (["cdk-synth", "cdk-resynth", "pulumi-mock"].includes(KIND)) {
     result = await cdkSynth();
   } else {
     throw new Error(`unknown kind ${KIND}`);

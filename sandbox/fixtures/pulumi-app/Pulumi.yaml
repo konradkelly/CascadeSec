@@ -1,0 +1,3 @@
+name: sandbox-pulumi-fixture
+runtime: nodejs
+description: Credential-free Pulumi sandbox execution fixture

@@ -19,7 +19,7 @@
 # without them. Pinned like the other two: the version decides what fires.
 FROM checkmarx/kics:v2.1.20 AS kics
 
-FROM public.ecr.aws/lambda/python:3.12
+FROM public.ecr.aws/lambda/python:3.12@sha256:ad02451d19a4824bdf7fba33d40bb65d4058925e005dd85fbb78be2c03df92b1
 
 # Both pins are what the eval numbers were measured against (corpus/eval/
 # README.md). Bumping either changes what fires; re-run the eval.

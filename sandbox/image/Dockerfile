@@ -7,7 +7,7 @@
 # node:22-slim, 22.23.3 at the time of pinning (2026-10-09).
 FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
 
-COPY runner.mjs cdk.mjs /opt/sandbox/
+COPY runner.mjs cdk.mjs pulumi.mjs pulumi-mock.mjs /opt/sandbox/
 
 # The task's only writable places. Declared as volumes, owned by the
 # unprivileged user, so the task definition's empty volumes mounted here
