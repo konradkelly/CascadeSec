@@ -11,6 +11,10 @@
 
 data "archive_file" "dispatch" {
   source {
+    content  = file("${path.module}/../../lambda/sandbox-dispatch/helm.py")
+    filename = "helm.py"
+  }
+  source {
     content  = file("${path.module}/../../lambda/sandbox-dispatch/pulumi_plan.py")
     filename = "pulumi_plan.py"
   }

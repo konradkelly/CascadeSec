@@ -23,6 +23,7 @@ import net from "node:net";
 
 import { Unsupported, executePhase, fetchPhase } from "./cdk.mjs";
 import { executePulumi } from "./pulumi.mjs";
+import { executeHelm } from "./helm.mjs";
 
 const PHASE = process.env.SANDBOX_PHASE;
 const KIND = process.env.SANDBOX_KIND;
@@ -184,6 +185,7 @@ async function cdkSynth() {
   const started = Date.now();
   try {
     const out = PHASE === "fetch" ? await fetchPhase(manifest)
+      : KIND === "helm-template" ? await executeHelm(manifest)
       : KIND === "pulumi-mock" ? await executePulumi(manifest) : await executePhase(manifest);
     console.log(`${PHASE} ${KIND}: ${out.status}${out.reason ? ` (${out.reason})` : ""} in ${out.duration_ms}ms`);
     return out;
@@ -215,7 +217,7 @@ async function main() {
     // what to read when result.json never arrives.
     for (const p of probes) console.log(`${PHASE} ${p.name}: ${p.observed}`);
     result = { probes };
-  } else if (["cdk-synth", "cdk-resynth", "pulumi-mock"].includes(KIND)) {
+  } else if (["cdk-synth", "cdk-resynth", "pulumi-mock", "helm-template"].includes(KIND)) {
     result = await cdkSynth();
   } else {
     throw new Error(`unknown kind ${KIND}`);

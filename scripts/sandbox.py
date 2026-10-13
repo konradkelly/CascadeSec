@@ -4,6 +4,7 @@
     python scripts/sandbox.py down        # apply with active=false: nothing billed while idle
     python scripts/sandbox.py leak-test   # run the containment test; exit 1 unless it passes
     python scripts/sandbox.py synth DIR [--app-dir infra]   # synthesize a local CDK app
+    python scripts/sandbox.py helm DIR [--app-dir charts/app] [--scan]
     python scripts/sandbox.py status
 
 The sandbox is applied only while in use (docs/sandbox-spec.md §10, decided
@@ -301,6 +302,72 @@ def cmd_pulumi(args):
             sys.exit(1)
 
 
+def cmd_helm(args):
+    root = Path(args.dir).resolve()
+    app_dir = args.app_dir
+    paths = [app_dir, *args.values]
+    for value in paths:
+        if value == "." and value == app_dir:
+            continue
+        if (Path(value).is_absolute() or "\\" in value or ":" in value or "," in value
+                or any(p in {"", ".", ".."} for p in value.split("/"))):
+            sys.exit("--app-dir and --values must be repository-relative paths")
+    if not (root / app_dir / "Chart.yaml").is_file():
+        sys.exit(f"no Chart.yaml in {root / app_dir}")
+    for value in args.values:
+        if not (root / value).is_file():
+            sys.exit(f"no values file at {root / value}")
+    out = outputs()
+    if not out.get("active"):
+        sys.exit("the sandbox is down: run `python scripts/sandbox.py up` first")
+    region = out["state_machine_arn"].split(":")[3]
+    s3 = boto3.client("s3", region_name=region)
+    sfn = boto3.client("stepfunctions", region_name=region)
+    pr_id = f"manual-helm-{time.time_ns()}"
+    project_key = f"projects/{pr_id}/local.tgz"
+    s3.put_object(Bucket=out["artifacts_bucket"], Key=project_key, Body=pack_project(root))
+    desc = start_and_wait(sfn, out["state_machine_arn"], {
+        "kind": "helm-template", "phases": ["execute"], "timeout_seconds": SYNTH_TIMEOUT_SECONDS,
+        "pr_id": pr_id, "app_dir": app_dir, "project_key": project_key,
+        "release": args.release, "namespace": args.namespace, "values_files": args.values,
+        "kube_version": args.kube_version, "api_versions": args.api_versions})
+    if desc["status"] != "SUCCEEDED":
+        sys.exit(f"sandbox execution {desc['status']}: {desc.get('error')}")
+    result = json.loads(desc["output"])
+    for phase, record in result["phases"].items():
+        detail = record.get("result") or {}
+        print(f"  {phase}: {record['status']} {detail.get('status', '')} {detail.get('reason') or ''}")
+        if args.log and detail.get("log_tail"):
+            print(detail["log_tail"])
+    rendered = result["helm"]
+    print(f"Helm render: {rendered['status']} {rendered.get('reason') or ''}")
+    if rendered["status"] != "ok":
+        sys.exit(1)
+    response = s3.get_object(Bucket=out["artifacts_bucket"], Key=rendered["manifest_key"])
+    target = Path(args.output).resolve()
+    try:
+        target.write_bytes(response["Body"].read())
+    finally:
+        response["Body"].close()
+    print(f"Rendered manifests: {target}")
+    if args.scan:
+        client = boto3.client("lambda", region_name=region, config=LAMBDA_CONFIG)
+        response = client.invoke(FunctionName=tf_output("iac_scanner_function_name"),
+            Payload=json.dumps({"pr_id": pr_id, "s3_prefix": rendered["scan_prefix"],
+                                "persist": False}).encode())
+        try:
+            scan = json.loads(response["Payload"].read())
+        finally:
+            response["Payload"].close()
+        if response.get("FunctionError"):
+            sys.exit(f"scanner failed: {scan}")
+        findings = target.with_suffix(".findings.json")
+        findings.write_text(json.dumps(scan, indent=2), encoding="utf-8")
+        print(f"Scan: {scan['finding_count']} finding(s), {len(scan['scan_errors'])} parse error(s) -> {findings}")
+        if scan["scan_errors"]:
+            sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -320,6 +387,17 @@ def main():
     pulumi.add_argument("--output", default="pulumi-resources.json", help="local destination for captured resources")
     pulumi.add_argument("--log", action="store_true", help="print each phase's log tail")
     pulumi.add_argument("--scan", action="store_true", help="scan the generated plan without persisting findings or drafting fixes")
+    helm = sub.add_parser("helm", help="render a local Helm chart offline in the sandbox (vendor dependencies first)")
+    helm.add_argument("dir", help="the repository root to pack")
+    helm.add_argument("--app-dir", default=".", help="directory containing Chart.yaml")
+    helm.add_argument("--values", "-f", action="append", default=[], help="repository-relative values file; repeat to overlay in order")
+    helm.add_argument("--release", default="sandbox", help="Helm release name")
+    helm.add_argument("--namespace", default="default", help="Helm release namespace")
+    helm.add_argument("--kube-version", help="Kubernetes semantic version used by chart capabilities")
+    helm.add_argument("--api-versions", action="append", default=[], help="additional Kubernetes API version; repeat as needed")
+    helm.add_argument("--output", default="helm-manifests.yaml", help="local destination for rendered manifests")
+    helm.add_argument("--log", action="store_true", help="print the render log tail")
+    helm.add_argument("--scan", action="store_true", help="scan rendered manifests without persisting findings or drafting fixes")
     sub.add_parser("status")
     args = parser.parse_args()
 
@@ -333,6 +411,8 @@ def main():
         cmd_synth(args)
     elif args.command == "pulumi":
         cmd_pulumi(args)
+    elif args.command == "helm":
+        cmd_helm(args)
     else:
         cmd_status(args)
 

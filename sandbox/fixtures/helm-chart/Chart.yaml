@@ -1,0 +1,5 @@
+apiVersion: v2
+name: sandbox-probe
+description: Offline Helm sandbox fixture
+type: application
+version: 0.1.0

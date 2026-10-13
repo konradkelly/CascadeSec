@@ -17,17 +17,60 @@ measuring the containment the first thing built.
 |---|---|---|---|
 | CDK | the app as `cdk synth` runs it, without the CLI, bundling off (§9 step 2) | templates and `<Stack>.metadata.json` | none (lookups come from a committed `cdk.context.json`) |
 | Pulumi | the program under the SDK's mocks (multi-iac §7.2 b) | `resources.json`: inputs and creation sites | none |
+| Helm | `helm template` on a local chart with vendored dependencies | rendered `manifests.yaml`, including CRDs | none; execute only |
 | Dependency test gate | the suite, before and after the bump | pass/fail per test, and the logs | none; a suite that needs a database fails, and the gate reports that it could not be evaluated |
 
 **Not for:**
 - **Scanning.** The scanners stay in `iac-scanner`, where they read files.
   The sandbox produces files for them to read; it never scans and never
   decides (§7).
-- **Helm.** Rendering a chart runs no user code. Its blocker is the
-  single-file self-check, which needs no sandbox.
+- **Helm template remediation.** Offline chart rendering is supported below;
+  chart source mapping and a chart-wide remediation self-check are still needed
+  before enabling automatic fixes.
 - **Anything that needs cloud credentials.** A CDK lookup without a cached
   context, or `pulumi preview` against real state, is reported as needing
   what is missing. Supplying credentials is not an option this spec offers.
+
+### Helm rendering (built and verified on AWS 2026-10-13)
+
+`helm-template` runs **execute only**. The image carries Helm 4.3.0,
+downloaded at build time and verified against its pinned SHA-256. The task
+receives a project archive and fixed rendering options, with no CodeArtifact
+token or dependencies URL. It runs `helm template` with CRDs included,
+without cluster validation, DNS lookups, dependency updates or post-renderers.
+Chart dependencies must already be vendored under `charts/`; missing dependencies
+are a failed render. Cluster lookups have Helm's offline behavior, so this
+evaluates rendered configuration, not a deployment against live cluster state.
+
+```powershell
+python scripts/sandbox.py helm path/to/repo --app-dir charts/app --values env/prod.yaml --release app --namespace production --scan
+```
+
+Values files are repository-relative and applied in the order supplied. Repeat
+`--values` for overlays, or `--api-versions` for additional chart capabilities;
+`--kube-version` supplies the Kubernetes semantic version. The local output
+defaults to `helm-manifests.yaml`. `--log` prints the render's stderr tail.
+
+Rendering is capped at 10MB and the task timeout. Collect accepts exactly one
+regular UTF-8 `manifests.yaml` from a bounded archive, rejects empty output,
+and stores it under `scans/<manual id>/<app dir>/helm.out/`. YAML parsing
+and Kubernetes validation remain the scanner's responsibility. `--scan`
+invokes that scanner with `persist=false`, writes a local findings JSON file,
+and exits unsuccessfully on scan errors. Findings refer to rendered YAML
+lines. Helm's Source comments do not identify the source line to edit, so
+this command does not draft or persist fixes, and direct chart scanning
+in the PR pipeline remains disabled.
+
+Deploy with the existing image-build and sandbox-apply workflow, then rerun
+`scripts/sandbox.py leak-test` because the image has changed. The local
+fixture and values overlay live in `sandbox/fixtures/helm-chart/`.
+
+**Measured 2026-10-13:** the fixture with `hardened.yaml` rendered successfully
+on AWS, with `privileged: false`. Scanning produced 35 findings and zero parse
+errors. The overlay only disables privileged mode; root execution, capabilities,
+resource limits and other settings remain intentionally unhardened. The image's
+leak test reported PASSED, including the task-stop test, though its fetch phase
+also recorded a `States.Timeout` after returning all probe results.
 
 ## 2. Threat model
 
