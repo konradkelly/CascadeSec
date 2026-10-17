@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cascadesec"
+version = "0.1.0.dev0"
+description = "CascadeSec from the terminal: review findings and fixes, and scan IaC"
+readme = "README.md"
+requires-python = ">=3.11"  # tomllib
+# keyring is the one required dependency: the session lives in the OS
+# credential store, never in a dotfile (docs/cli-spec.md §8, §11.1). HTTP is
+# urllib, as in the gateway.
+dependencies = ["keyring>=25"]
+
+[project.optional-dependencies]
+mcp = ["mcp"]  # `cascadesec mcp` (docs/mcp-server-spec.md); not built yet
+
+[project.scripts]
+cascadesec = "cascadesec.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -45,13 +45,15 @@ resource "aws_apigatewayv2_authorizer" "cognito" {
   identity_sources = ["$request.header.Authorization"]
 
   jwt_configuration {
-    # Both clients: the dashboard's browser PKCE client and the CLI client used
-    # to mint tokens for smoke tests. ID tokens carry aud = client_id, which is
-    # why the dashboard sends the id_token rather than the access token -- and
-    # why the access token, whose aud is absent, would be rejected here.
+    # The dashboard's browser PKCE client, the CLI client used to mint tokens
+    # for smoke tests, and the `cascadesec` CLI's sign-in (cognito.tf). ID
+    # tokens carry aud = client_id, which is why the dashboard and the CLI
+    # send the id_token rather than the access token -- and why the access
+    # token, whose aud is absent, would be rejected here.
     audience = [
       aws_cognito_user_pool_client.dashboard.id,
       aws_cognito_user_pool_client.cli.id,
+      aws_cognito_user_pool_client.cli_interactive.id,
     ]
     issuer = "https://${aws_cognito_user_pool.dashboard.endpoint}"
   }

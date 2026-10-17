@@ -27,6 +27,9 @@ boto3==1.43.92
 # key for KMS import with it, locally. Nothing deployed uses it -- that is
 # the point of putting the key in KMS.
 cryptography==50.0.1
+# The cli/ suite: the CLI's one runtime dependency (cli/pyproject.toml). Its
+# tests use an in-memory backend, but import keyring for its error types.
+keyring==25.7.0
 pytest==9.1.1
 # PyYAML is NOT a runtime dependency added here -- the scanner reads it from
 # /opt/python, where checkov already ships it (the image's strip removes only
