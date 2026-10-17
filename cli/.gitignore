@@ -1,0 +1,4 @@
+# Build metadata from pip install -e / python -m build
+src/*.egg-info/
+build/
+dist/
