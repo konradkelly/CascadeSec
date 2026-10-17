@@ -1,0 +1,613 @@
+# `cascadesec` CLI — spec
+
+A command-line client that does two jobs. It **scans**, in two modes.
+**Local** runs the scanner image on your machine: detection only, with no
+account, no model, and no network. **Remote** sends a snapshot to the
+pipeline for mapping and, when asked, fixes. That half is what every CI
+platform, pre-commit, the MCP server and the VS Code extension run
+underneath. It also **reviews** (§10). A signed-in person can list a PR's
+findings, read a fix, approve, edit or reject it, and commit, all from the
+terminal. That makes it a third interface next to the dashboard and the
+GitHub App, and it works against the review API that already exists.
+
+Written before building, 2026-09-25. Part of integrations-spec (phase A for
+local mode and pre-commit, phase B for remote). Not started.
+
+Revised 2026-10-13. Added review from the terminal (§10), and changed the
+authentication order (§11). Humans sign in with the existing Cognito pool
+from day one. Machine auth comes only when CI needs the remote scan.
+Local mode now covers the apps the sandbox synthesizes (§3.5), and the
+NIST and raw-reason work (§3.3).
+
+## 1. Why not `scripts/scan.py`
+
+`scan.py` is an operator tool, and stays one. It needs AWS credentials for
+the dev account, reads resource names from `terraform output`, and writes
+S3 and Step Functions directly. It can also redraft one stage by invoking a
+Lambda (`--stages`). None of that can be handed to a user, and none of it
+should be. The CLI talks to the scanner image or to the scan API, and
+nothing else.
+
+## 2. Commands
+
+```
+cascadesec scan [PATH]                  local, detection only (default)
+cascadesec scan [PATH] --remote         upload, scan, map; wait; print
+cascadesec scan [PATH] --remote --fix   ...and draft self-checked fixes (costs model calls)
+cascadesec wait <scan-id>               wait for a remote scan, then print its findings
+cascadesec baseline [PATH]              write .cascadesec-baseline.json from a scan
+
+cascadesec login | logout | whoami      browser sign-in for a human (§11.1)
+cascadesec findings <pr-id>             a PR's findings, as the dashboard lists them (§10)
+cascadesec show <pr-id> <finding-id>    citation, rationale, fix diff, self-check, history
+cascadesec approve|reject <pr-id> <finding-id> [--notes TEXT]
+cascadesec edit <pr-id> <finding-id>    correct the fix in $EDITOR, then record it as edited
+cascadesec commit <pr-id>               show the commit plan, confirm, commit (committers only)
+
+cascadesec mcp                          stdio MCP server (mcp-server-spec)
+cascadesec version                      CLI version and scanner image digest
+```
+
+The review commands (the second block) need a signed-in person and nothing
+else. They never run the scanner, and they're the same with or without
+Docker.
+
+Common flags:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--format` | `table` on a TTY, else `json` | `table`, `json`, `sarif` |
+| `--output FILE` | stdout | where `--format` output goes; the table still prints |
+| `--fail-on` | `high` | `critical`, `high`, `medium`, `low`, `any`, `none` (§5) |
+| `--baseline FILE` | `.cascadesec-baseline.json` if present | findings to ignore (§6) |
+| `--project`, `--ref` | from config, then git | form `pr_id = cli-<project>-<ref>` (integrations §3.1) |
+| `--changed-only REV` | off | report only findings in files changed since `REV` |
+| `--yes` | off | skip the `--fix` cost prompt; required for `--fix` without a TTY |
+
+Configuration comes from `.cascadesec.toml` in the repository (project name,
+API URL, fail-on, excluded paths), then environment variables
+(`CASCADESEC_TOKEN`, `CASCADESEC_API`), then flags. A token is never read
+from the repository file.
+
+## 3. Local mode
+
+### 3.1 Scanner refactor
+
+`iac-scanner/handler.py`'s `handler()` does four things: it downloads a
+snapshot, runs three tools, normalises their output, and writes DynamoDB.
+Only the first and last are AWS. Split it:
+
+```
+scan_directory(work_dir, scan_id) -> {findings, scan_errors}
+    _read_admitted_yaml, _run_trivy, _run_checkov, _run_kics,
+    _normalize_*, _unparseable_admitted_files        (unchanged)
+
+handler(event, context)                              (Lambda; behaviour unchanged)
+    _download_snapshot → scan_directory → _write_findings → metrics
+
+local_main.py  (new, in the image)
+    copy admitted files from /src → scan_directory → JSON on stdout
+```
+
+`_download_snapshot` also classifies files and records unreadable ARM
+templates. That logic moves into a `_admit(path, data)` helper that both
+paths call, so "what is a snapshot file" stays one rule. It is already
+duplicated three times under an agreement test (ci-integration-spec §4.2);
+this does not add a fourth.
+
+The module-level `boto3.client("s3")` and `boto3.resource("dynamodb")`
+(handler.py:355) move behind a lazy accessor, so local mode imports the
+module without AWS configuration. boto3 itself stays in the image, because
+the base image ships it.
+
+**Since 2026-10-10 the scan itself reads S3.** `_cdk_origins` takes
+source maps that `_cdk_source_maps` fetches from the PR's scan prefix
+during the scan, and `_pulumi_origins` reads the plans' `cascade_pulumi`
+sources. So `scan_directory` takes the maps as an argument:
+`scan_directory(work_dir, scan_id, cdk_source_maps={})`. The Lambda fetches
+them from S3 and local mode builds them (§3.5), and the origin logic stays
+in one place. "Lazy clients" alone is no longer enough for this split.
+
+`local_main.py` copies admitted files into `/tmp/scan-<id>` rather than
+scanning `/src` in place. This keeps local and Lambda runs on the same
+inputs, because tools that walk a directory would otherwise see
+`node_modules`, `.terraform/` and whatever else the Lambda never received.
+
+### 3.2 Running it
+
+```
+docker run --rm --network none --read-only --tmpfs /tmp \
+  -v "<abs PATH>:/src:ro" \
+  --entrypoint python ghcr.io/konradkelly/cascadesec-scanner@sha256:<digest> \
+  /var/task/local_main.py /src
+```
+
+- **`--network none`** is the guarantee that code and results never leave
+  the machine. The tools already run offline (Trivy `--skip-check-update`,
+  KICS `--disable-full-descriptions`, verified under `--network none` in the
+  Dockerfile's KICS note). Local mode enforces this instead of trusting it.
+- **Pinned by digest.** The CLI release pins the image digest the Lambda
+  was deployed with. `cascadesec version` prints it. Local and pipeline
+  results for the same files are the same tools at the same versions, which
+  is the property the eval's numbers depend on (corpus/eval/README.md).
+- **Published** by `build-image.sh` to GHCR as well as ECR, copied by digest
+  (`crane copy`) so both registries hold one manifest **(verify: digest is
+  preserved across a registry copy)**. The image is public. It contains
+  nothing that the Dockerfile and `checks/` don't already publish.
+- **No Docker?** The CLI fails with a message that says so. There is no
+  fallback to locally installed Trivy or Checkov: a different version fires
+  different rules, and the result would silently disagree with the pipeline.
+
+### 3.3 Candidate controls, with no model
+
+Local output includes, per finding, the **candidate** controls from
+`corpus/rule_mappings.json`, which ships in the image. These are the
+curated candidates mapping-agent picks among, not its choice, and the CLI
+labels them `candidates`, never `control`. That gives a local user the
+OWASP/CIS context for free, and makes clear that the citation (which
+control, and why) needs a remote scan.
+
+The candidates include the NIST 800-53 tail, which is for rules CIS can't
+place (2026-10-11). A rule with no candidate at all is labelled the way
+the pipeline will label it: `raw`, with the `unmapped_reason` from
+`rule_mappings.json`'s `unmapped` section, or `unreviewed` when the rule
+isn't there. Local output then predicts which findings a remote scan
+leaves raw, and why, using the same function as mapping-agent's
+`_unmapped_reason`. That function moves into the shared module (§3.1) so
+there's one copy. `cdk` and `pulumi` findings are labelled
+**detection-only**, as mapping-agent treats them
+(`DETECTION_ONLY_TARGET_TYPES`): a remote scan maps them but never drafts
+fixes for them.
+
+### 3.4 Cost of a local scan
+
+Checkov's import is 50–100s cold in Lambda (handler.py's
+`SCAN_TIMEOUT_SECONDS` comment), and a local container is cold on every
+run. **Measure before promising pre-commit or on-save latency.** If it is
+over about 20s on a laptop, the handler's own TODO (import checkov's
+Terraform runner in-process) becomes a phase A prerequisite, not a nicety.
+The IDE extension's long-lived daemon (ide-extension-spec §3) exists for
+the same reason.
+
+### 3.5 Apps that must run before they can be scanned
+
+CDK, Pulumi and Helm reach the scanner only as **output**. In the pipeline,
+the sandbox makes that output (sandbox-spec): `cdk synth` for a cloud
+assembly, a mocked Pulumi run that `pulumi_plan.py` turns into Terraform
+plan JSON, and `helm template` for manifests. The scanner image can do none
+of that. It has no Node, no Helm, and no network. And `_admit` drops
+`cdk.out/`, as the gateway's `SKIP_DIRS` does, so a developer's own synth
+output is skipped too.
+
+**Locally, the threat model is different, and it matters.** The sandbox
+exists because a pull request's code is untrusted. On a laptop it's the
+developer's own code, and they run `cdk synth` on it all day. So local mode
+doesn't need the full Fargate isolation. What it needs is the **same
+output format**, so local and remote findings agree.
+
+#### Stage 1: report, don't scan
+
+`local_main.py` detects each app root and lists it as **not scanned
+locally**. An app root is a `cdk.json`, a `Pulumi.yaml`, or a `Chart.yaml`
+with `--helm` options in `.cascadesec.toml`. These count as `scan_errors`,
+so the run exits 3 (§5). The message names the app and the command that
+scans it (`--remote`, or a stage 2 flag once built). A CDK repository
+can't come back "clean" just because its only IaC was TypeScript.
+
+Exit 3 on every CDK repository would get the gate disabled. So
+`.cascadesec.toml` can list apps under `skip_apps`, with a required
+`reason`, and the run reports them as skipped by config. That's the same
+"visible decision in a diff" as the baseline (§6).
+
+#### Stage 2: Helm locally (`--helm`)
+
+Helm renders offline: dependencies must already be vendored under
+`charts/`, and lookups run in Helm's offline mode. That's the sandbox
+contract too (sandbox-spec, "Helm rendering"). So local mode can run the
+**sandbox image's** `helm template` under `--network none`, with the
+values, release, namespace and kube version from `.cascadesec.toml`. It
+writes the manifests into the scan copy under `<app>/helm.out/`, as
+collect does. Findings point at rendered lines, as remote findings do, and
+no fixes are drafted (also as remote). The sandbox image is pinned by
+digest next to the scanner's, and both are published to GHCR (§3.2).
+
+#### Stage 3: CDK and Pulumi locally (`--synth`)
+
+This is the bigger job, and its main obstacle isn't trust:
+
+- **The developer's `node_modules` won't run in the container.** Installed
+  on Windows or macOS, they carry that platform's native binaries (esbuild,
+  which CDK's `NodejsFunction` bundles with, is the common one). The
+  sandbox's Linux execute step can't run them. So local synth repeats the
+  sandbox's **two phases** as two `docker run`s:
+  1. **fetch**: `npm ci --ignore-scripts` from the lockfile, with network
+     access to the npm registry, into a Docker volume. No project code
+     runs, as in sandbox-spec §4. The lockfile's integrity hashes pin the
+     same packages the pipeline's CodeArtifact mirror serves.
+  2. **execute**: the synth or mock run under `--network none`, with the
+     source read-only.
+
+  This is the one place local mode uses the network, so it's behind an
+  explicit `--synth`, and the run prints that it fetched. The volume is
+  keyed on the lockfile's hash and reused.
+- **Context lookups.** `Vpc.fromLookup` and Pulumi `get*` calls need cloud
+  credentials, which neither side has. A lookup that isn't cached in
+  `cdk.context.json` fails the synth. A Pulumi lookup without a mock is
+  "missing lookup mocks", the sandbox's own error. Either way it's reported,
+  as in the pipeline, never guessed.
+- **Same output format.** `cdk.py` (the template rewrite and source map)
+  and `pulumi_plan.py` (the AWS bridge to plan JSON) are plain Python with
+  no AWS calls. They move to the shared module (§3.1), so local mode
+  produces byte-for-byte the files collect produces. That's what lets
+  `_cdk_origins` turn a finding on `NetSsh9740AB70` into
+  `lib/network.ts:8` locally too. Locally the hostile-input checks in
+  those modules don't protect anything, but they run anyway: one code
+  path, not two.
+
+Stage 3 doesn't add `cdk-resynth`, the fix self-check. Local mode drafts no
+fixes.
+
+## 4. Remote mode and the scan API
+
+### 4.1 Routes
+
+New routes on the existing HTTP API, under `/v1`, behind the machine-auth
+Lambda authorizer (machine-auth-spec §2). They are served by a new Lambda,
+**`scan-api`**, not by review-api. The two roles differ: review-api has no
+business presigning uploads or starting executions.
+
+| Route | Permission | Does |
+|---|---|---|
+| `POST /v1/scans` | `scan` | `{project, ref, remediate}` → `{scan_id, pr_id, upload_url, expires_at}`. Presigned PUT for `uploads/<scan_id>.tar.gz`, content-type and max length fixed in the signature |
+| `POST /v1/scans/{scan_id}/start` | `scan`, plus `remediate` when asked | starts the execution (§4.2) |
+| `GET /v1/scans/{scan_id}` | `read` | execution status, stage, counts, `scan_errors` |
+| `GET /v1/scans/{scan_id}/findings` | `read` | findings (§4.3) |
+| `GET /v1/projects/{project}/baseline` | `read` | server-side baseline (§6) |
+
+`scan_id` is a random id recorded as a `SCAN#<scan_id>` item under the
+project, holding `pr_id`, the uploader's identity, the execution ARN and
+`remediate`. The authorizer's project scope is checked against that item on
+every route, so a token for one project cannot read another's scan by
+guessing an id.
+
+**Before machine auth exists** (§11.2), these routes sit behind the
+existing Cognito JWT authorizer, and only signed-in people call them. There
+are no projects yet, so there is no project check. That's the same exposure
+the dashboard has today: every reviewer sees every PR. The routes still go
+under `/v1` from the start. When machine auth arrives, the server swaps each
+route's authorizer, and the paths and the client stay the same.
+
+### 4.2 Starting the execution
+
+The state machine's first `Choice` gains a third branch. `github` input
+goes to `fetch`, `upload` input goes to a new **`unpack`** state, and
+anything else goes straight to scan, as `scan.py` does today.
+
+`unpack` is `scan-api`'s second entry point, like the gateway's
+`fetch`/`report`. It reads the tarball and applies exactly the gateway's
+member rules: regular files only, no absolute paths, no `..`, and
+`is_snapshot_file`. It enforces the gateway's limits (3,000 files, 50MB
+kept), replaces `scans/<pr_id>/`, and deletes the upload. The tar-safety
+functions (`read_snapshot`, `repo_path`, `is_snapshot_file`) move from the
+gateway into a small shared module, vendored into both zips by the build.
+Duplicating path-traversal checks is how one copy gets fixed and the other
+doesn't.
+
+Over a limit, the scan fails with a reason. It never runs a partial scan
+(ci-integration-spec §4.2, same argument).
+
+Execution name: `cli-<scan_id>`. It's unique, so there's no redelivery to
+dedupe. A second start of the same `scan_id` returns 409.
+
+### 4.3 What remote findings contain
+
+The reviewer view the dashboard gets, minus review actions: scanner fields,
+`fingerprint`, `control_mappings` with citations, `status`, and for
+`fix-proposed` findings the diff and self-check result. Model prose
+(`rationale`, `assumptions`) is included **only for a human caller**
+(machine-auth-spec §4 identity type `user`). For a CI token it is omitted,
+because CI logs are often public (integrations §2.3).
+
+### 4.4 Waiting
+
+The CLI polls `GET /v1/scans/{id}` with backoff (2s, doubling, 15s cap) and
+prints each stage as it's reached, like `scan.py`. `--timeout` defaults to
+15 min without `--fix` and 60 min with it. On timeout it exits 4 and prints
+the `scan_id`, because the execution keeps running and
+`cascadesec wait <id>` picks it up. (`findings` takes a PR id, §10. A
+remote scan's PR id is `cli-<project>-<ref>`, so its findings can also be
+reviewed there.) Nothing on this path waits on a
+synchronous Lambda invoke. A remediation run can take many minutes, and a
+client-side synchronous invoke that long is the thing that fails, so the
+execution runs asynchronously and the CLI only polls.
+
+### 4.5 `--fix`
+
+This requires the token's `remediate` permission. In phase H (§11.1),
+there are no permissions yet, so any signed-in person may ask for fixes,
+as with `scan.py` today. The cost prompt is the only guard. Interactively, it prompts
+with an estimate: mapped findings × one to two model calls. That is the same
+cost prompt as `scan.py`. Non-interactively it requires `--yes`. The output
+lists verified fixes as diffs. `--apply` writes the **chain tip** of each
+file (ci-integration-spec §4.3 step 1) into the working tree, and only after
+confirming the root diff applies to the local file. It never commits.
+
+## 5. Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | scan complete; nothing at or above `--fail-on` after baseline and `--changed-only` |
+| 1 | scan complete; findings at or above `--fail-on` |
+| 2 | usage or configuration error |
+| 3 | **scan incomplete**: `scan_errors` non-empty (including an app local mode couldn't run, §3.5), or a limit was exceeded |
+| 4 | service error, auth failure, or timeout |
+
+Exit 3 takes precedence over 0 and 1. A clean result with an unparseable
+file is not clean (integrations §2.2). `--allow-scan-errors` downgrades 3 to
+the 0/1 result and prints the files. It's for repositories where a known
+file will never parse, and it's opt-in per run.
+
+**`--fail-on high` by default.** ci-integration-spec D1 keeps the GitHub
+check neutral until fix suggestions have earned the right to block. That
+argument is about suggestions. Detection is deterministic, and a gate on
+it is what every scanner CLI offers. The baseline (§6) is what makes the
+default usable on an existing repository.
+
+## 6. Baseline
+
+PugetScope carries 566 findings. A gate that fails on all of them will be
+disabled on day one. So:
+
+- `cascadesec baseline` scans and writes `.cascadesec-baseline.json`: the
+  fingerprints (integrations §3.2), each with rule, file and severity for
+  reading in review, and the scanner image digest.
+- `scan` subtracts baselined fingerprints before applying `--fail-on`, and
+  reports how many it suppressed. It never reports them silently.
+- A baselined finding that stops firing is listed as "fixed; remove from
+  baseline". `baseline --prune` removes those.
+- If the baseline's image digest differs from the scanner's, the CLI warns.
+  New rule versions can fire new findings that aren't regressions.
+
+The file is committed and reviewed like code. Adding to it is a visible
+decision in a diff, which suits a project where nothing is silently decided.
+The server-side baseline (§4.1) serves the same content per project for
+teams that don't want it in the repository. It's phase B, and optional.
+
+`--changed-only REV` is the cheap complement. It reports findings only in
+files `git diff --name-only REV` lists. It's the CLI's version of the
+check run's added-lines approximation, and has the same stated limit.
+
+## 7. Pre-commit hook
+
+`.pre-commit-hooks.yaml` at the repository root:
+
+```yaml
+- id: cascadesec
+  name: CascadeSec IaC scan
+  language: docker_image
+  entry: ghcr.io/konradkelly/cascadesec-scanner:<version> python /var/task/local_main.py --pre-commit
+  files: \.(tf|tf\.json|tfvars|tfvars\.json|tofu|tofu\.json|ya?ml|json|bicep)$
+  pass_filenames: true
+```
+
+- pre-commit passes the staged file names. The hook scans **each directory
+  containing a staged file**, not the files alone, because Terraform modules
+  and tfvars resolve across a directory. It **reports only findings in the
+  staged files**, after the baseline.
+- `--network none` cannot be set: pre-commit builds the `docker run` line
+  itself **(verify)**. Isolation here rests on the tools' own offline flags
+  (§3.2), and the hook's docs say so.
+- Tagged by version, not digest, because pre-commit's `rev` pins the hook
+  repository, and the tag inside it is fixed per release.
+- Latency is §3.4's measurement. If it's over budget, the hook ships as
+  `stages: [pre-push]` by default.
+
+A `language: python` variant (`entry: cascadesec scan --pre-commit`) is for
+users who already have the CLI. It runs the same image through Docker.
+
+## 8. Distribution
+
+`cli/` in this repository, with a `pyproject.toml` and the entry point
+`cascadesec`, published to PyPI and installed with `pipx`. It has one
+required runtime dependency, `keyring`, which keeps the refresh token in
+the OS credential store (Windows Credential Manager, macOS Keychain, Secret
+Service), never in a dotfile (§11.1). The `mcp` SDK is an optional extra
+for `cascadesec mcp`. HTTP uses urllib, like the gateway. Windows is
+supported and tested in CI: tarballs are built with forward-slash member
+names, and Docker volume paths are passed absolute.
+
+## 9. Risks
+
+- **Tarball as an attack surface.** Handled by sharing the gateway's code
+  (§4.2), not rewriting it. That shared module gets its own tests, including
+  zip-slip and symlink members.
+- **Presigned URL misuse.** The URL is scoped to one key, has a fixed
+  content-type and length cap, and expires in 10 minutes. `unpack` rejects
+  an upload over the limit even if a client got around the cap.
+- **Cost from a leaked token.** `remediate` is a separate permission, off by
+  default for new tokens (machine-auth-spec §4). A CI token that only needs
+  detection and mapping can't spend on fixes.
+
+## 10. Review from the terminal
+
+The dashboard's review work, without a browser tab. Every command calls a
+review-api route that already exists ([api_gateway.tf](../terraform/api_gateway.tf)),
+behind the Cognito JWT authorizer that already guards them. **No new server
+code**, except the `cli-interactive` client (§11.1). The CLI shows what the
+API returns and decides nothing itself. Prerequisites, statuses and the
+commit check stay in review-api, so the dashboard and the CLI can't
+disagree about a rule.
+
+| Command | Route(s) | Notes |
+|---|---|---|
+| `findings <pr>` | `GET /prs/{pr}/findings` | Table by default, `--format json`. Grouped like the dashboard: fixes to review, open, resolved. Raw findings are listed apart and grouped by `unmapped_reason`, as on the dashboard since `deada0b`. Filters: `--status`, `--severity`, `--file` |
+| `show <pr> <id>` | `GET .../{id}`, `.../events`, `.../content` | Rule, file and line. Each control with its citation. The fix's diff (`.../content` against the base, colored on a TTY). Self-check result, rationale and assumptions. Prerequisites, then the event history. The caller is always a person here, so model prose is shown (§4.3) |
+| `approve <pr> <id>` | `POST .../review` `{action: approved, notes}` | |
+| `reject <pr> <id>` | same, `rejected` | Never blocked, as in the API |
+| `edit <pr> <id>` | `GET .../content`, then `POST .../review` `{action: edited, edited_content, notes}` | Below |
+| `commit <pr>` | `GET /prs/{pr}/commit-plan`, then `POST /prs/{pr}/commits`, then poll `GET .../commits/{request_id}` | Below |
+
+**`edit`.** It fetches the fix's current corrected file and writes it to a
+temp file with the same extension, so the editor highlights it. It then
+opens `$VISUAL` or `$EDITOR` (Notepad on Windows if neither is set). If you
+save without changes, it stops. Otherwise it shows the diff against the
+agent's version and asks for confirmation before sending the **full file**.
+review-api accepts only `edited_content`, not a diff. `--file PATH` sends a
+prepared file without an editor, for scripting your own reviews.
+
+**Things the API reports, printed rather than swallowed:**
+
+- A 409 on approve or edit lists the unmet prerequisites. The CLI prints
+  them with the `show` command for each.
+- `reopened_dependents` on an edit or reject is printed as "this reopened:
+  …". The response names them so the reviewer who caused the cascade learns
+  about it immediately, and the CLI keeps that.
+- `commit` prints the plan the dashboard's commit panel shows: per file,
+  the head-to-tip diff, the files held back and why, and any unverified
+  links. It sends `confirm` built **from that printed plan**: file, tip,
+  `content_sha256`. If the plan moved in between, review-api refuses, and
+  the CLI says to look at the plan again. It never re-fetches and retries
+  on its own, because that would commit something nobody looked at.
+  `can_commit: false` is shown before any prompt, not after a 403. `--yes`
+  skips the confirmation. Without a TTY, `commit` needs `--yes` **and**
+  `--expect-sha FILE=SHA ...`, so a script can only confirm content it was
+  told about.
+
+**Exit codes** for these commands: 0 done, 1 refused by the API with a
+reason (prerequisites, a moved plan, not a committer), 2 usage, 4 service
+or auth error.
+
+**Finding a PR id.** There is no route that lists PRs. The dashboard gets
+the id from its URL. For `cli-` PRs, the CLI derives it like `scan` does
+(`--project`, `--ref`, §2). `gh-` ids use the **numeric** repository id
+(`gh-<repo_id>-<pr>`, webhook-receiver's `pr_id`), which nobody knows by
+heart. So the CLI also accepts `owner/repo#123`, and resolves the id with
+`GET /repos/{owner}/{repo}` on GitHub. That call is anonymous for a public
+repository, and for a private one it uses `GITHUB_TOKEN` or `gh auth token`
+when present. A
+`GET /prs` listing (`cascadesec prs`) would be review-api's first route
+that spans PRs, and it's D8.
+
+## 11. Authentication, in two phases
+
+Humans and machines authenticate differently (machine-auth-spec §3), and the
+CLI needs the human half first. Review must be a person: machines never
+review (machine-auth-spec §5). Phase H ships everything a person does,
+using only the Cognito pool that already exists. Phase M adds the machine
+callers when CI needs the remote scan.
+
+### 11.1 Phase H: people, through Cognito
+
+- **`cli-interactive` public client** in [cognito.tf](../terraform/cognito.tf):
+  code flow, no secret (so PKCE is required), and loopback callbacks
+  `http://localhost:<port>/callback` on three fixed ports. Cognito accepts
+  plain `http` only for `http://localhost`, and callback URLs must be
+  pre-registered absolute URIs. Measured against the deployed client on
+  2026-10-14: registered ports reach the login page. An unregistered port
+  (47899), `127.0.0.1` on a registered port, and a URL with no port each get
+  Cognito's error page. So the port is matched exactly, with no wildcard,
+  which RFC 8252 §7.3's "any port" rule would have avoided. The listener binds both `127.0.0.1` and `::1`, because
+  `localhost` can resolve to either. If all three ports are busy, `login`
+  falls back to `--no-browser`. Its id is added to the JWT authorizer's
+  `audience` next to the dashboard and test `cli` clients. That's the whole
+  server change.
+- **`login`** opens the Hosted UI, receives the code on the loopback
+  listener, and exchanges it with the PKCE verifier. On a machine with no
+  browser (SSH), `--no-browser` prints the URL. You open it elsewhere, and
+  then paste back the URL the browser was redirected to (it fails to load,
+  but the code is in its query string). The verifier never leaves the CLI.
+- **Tokens.** The refresh token goes in the keyring (§8), and so does the
+  current ID token. Each command is a new process, so a token kept only in
+  memory would mean one refresh per command. The ID token is refreshed
+  within two minutes of expiry. The session is stored in chunks, because
+  Windows Credential Manager refuses a secret over 1,280 characters and a
+  Cognito refresh token is longer (measured 2026-10-13). The pool's settings apply
+  unchanged: a 60-minute ID token and a **1-day refresh token**, so a
+  person signs in about once a day. That's fine for a person. It's also why
+  phase H doesn't serve CI.
+- **The ID token is the credential, not the access token**, as with the
+  dashboard. The JWT authorizer checks `aud`, and only the ID token carries
+  it.
+- **Committers.** `cognito:groups` is issued at sign-in. A person newly
+  added to `committers` runs `login` again. `whoami` prints the email,
+  groups and token expiry, so this is visible.
+
+What phase H **does not** have, and accepts on purpose:
+
+- **No tenancy.** Every signed-in person sees every PR, as on the dashboard
+  today. That's acceptable while accounts are admin-created and few.
+- **No CI.** Putting a person's password in a CI secret to drive
+  `admin-initiate-auth` is the pattern this design exists to avoid. The CLI
+  doesn't support it, and the test `cli` client stays test-only.
+- **Revocation is coarse.** Disabling a user stops refreshes. An ID token
+  already issued stays valid for up to 60 minutes.
+
+Remote scan by a person (§4) also works in phase H, with the `/v1` routes
+on the JWT authorizer (§4.1).
+
+### 11.2 Phase M: machines, through the Lambda authorizer
+
+machine-auth-spec, as written: projects and permissions, `csk_` tokens, CI
+OIDC federation, and the `api-authorizer` Lambda, which also accepts the
+same Cognito ID tokens. The CLI changes very little. It reads
+`CASCADESEC_TOKEN` when set, sends it as the bearer, and drops model prose
+for non-human callers (§4.3). `login` is untouched. On the server, the
+`/v1` routes move to the Lambda authorizer. The review routes never do
+(machine-auth-spec §5).
+
+**What triggers phase M:** the first time a credential has to live
+somewhere other than a person's keyring, meaning a CI job or a shared
+runner. Until then, the authorizer is security-critical code with nothing
+to protect yet.
+
+## 12. Decisions
+
+| # | Decision | Outcome |
+|---|---|---|
+| D1 | Local mode through the pinned image, no native-tool fallback (§3.2) | Proposed |
+| D2 | New `scan-api` Lambda rather than routes on review-api (§4.1) | Proposed |
+| D3 | Tarball upload and an `unpack` state, rather than per-file presigned URLs (§4.2) | Proposed: reuses the gateway's safety code, one request |
+| D4 | `--fail-on high` default (§5) | Proposed |
+| D5 | Baseline committed to the repository, with a server copy optional (§6) | Proposed |
+| D6 | Pre-commit on commit or on push | **Open** until §3.4 is measured |
+| D7 | Phase H (Cognito, people only) before phase M (machine auth) (§11) | Proposed 2026-10-13: no auth code to write until there's a credential to protect |
+| D8 | `GET /prs` listing route for `cascadesec prs` (§10) | **Open**: useful, but it's review-api's first cross-PR read, and with no tenancy it lists every PR to everyone |
+| D9 | Review commands in the CLI at all (§10) | Proposed 2026-10-13: thin over existing routes; the API keeps every rule |
+| D10 | CDK, Pulumi and Helm locally: report (stage 1), then Helm (stage 2), then synth (stage 3) (§3.5) | Proposed 2026-10-13: stage 1 ships with local mode. Stages 2 and 3 wait for demand |
+| D11 | Local synth fetches from public npm behind an explicit `--synth`, rather than reusing the host's `node_modules` (§3.5) | Proposed: a host's native binaries don't run in a Linux container |
+
+## 13. Build order
+
+Two tracks that don't depend on each other. **R** (review) needs no scanner
+work. **S** (scan) needs no auth until remote mode.
+
+**Track R: review, phase H**
+
+1. `cli/` skeleton: `pyproject.toml`, config, `--format`, exit codes.
+2. `cli-interactive` client and authorizer audience (Terraform), then
+   `login`, `logout` and `whoami` with the keyring.
+3. `findings` and `show`.
+4. `approve`, `reject` and `edit`.
+5. `commit`, against the testbed PR, with a committer and a non-committer
+   account.
+
+**Track S: scan**
+
+1. Scanner refactor (§3.1): `scan_directory` with source maps passed in,
+   `_admit`, lazy clients, and `_unmapped_reason` in the shared module.
+   Existing iac-scanner and mapping-agent tests pass unchanged, and the
+   eval's recall is identical.
+2. Fingerprint on `_build_finding` (integrations §3.2).
+3. `local_main.py` with app detection (§3.5 stage 1), then GHCR
+   publishing, then the §3.4 measurement.
+4. CLI local mode: table, json, and exit codes, with candidates and raw
+   reasons (§3.3). SARIF comes with sarif-spec.
+5. Baseline, `--changed-only` and `skip_apps`.
+6. Pre-commit hook.
+7. `scan-api` and `unpack` under `/v1` on the JWT authorizer (phase H).
+   Then remote mode, `--fix` and `--apply` for a signed-in person.
+8. Phase M (machine-auth-spec build order), when CI needs step 7.
+9. When asked for: `--helm` (§3.5 stage 2), once the sandbox image's Helm
+   rendering is deployed. Then `--synth` (stage 3), with `cdk.py` and
+   `pulumi_plan.py` moved to the shared module first, and sandbox-dispatch's
+   tests passing unchanged.

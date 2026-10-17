@@ -95,6 +95,52 @@ resource "aws_cognito_user_pool_client" "cli" {
   explicit_auth_flows = ["ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
 }
 
+# The `cascadesec` CLI's sign-in for a person (docs/cli-spec.md §11.1): the
+# dashboard's flow, code + PKCE through the Hosted UI, redirected to a
+# listener on the person's own machine. Separate from the test-only client
+# above, which mints tokens from a password and must stay out of anyone's
+# hands but an operator's.
+#
+# Cognito allows plain http only for http://localhost and matches the port
+# exactly -- no wildcard -- so the CLI tries these three in order. They must
+# match CALLBACK_PORTS in cli/src/cascadesec/auth.py
+# (cli/tests/test_terraform_agreement.py holds them together).
+locals {
+  cli_callback_ports = [47811, 47812, 47813]
+}
+
+resource "aws_cognito_user_pool_client" "cli_interactive" {
+  name         = "${var.project}-${var.environment}-cli-interactive"
+  user_pool_id = aws_cognito_user_pool.dashboard.id
+
+  # Public client, as the dashboard: a secret shipped in a pip package is no
+  # secret, and without one Cognito requires PKCE on the code flow.
+  generate_secret                      = false
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email", "profile"]
+  supported_identity_providers         = ["COGNITO"]
+
+  callback_urls = [for port in local.cli_callback_ports : "http://localhost:${port}/callback"]
+
+  explicit_auth_flows           = ["ALLOW_REFRESH_TOKEN_AUTH"]
+  prevent_user_existence_errors = "ENABLED"
+  # `cascadesec logout` revokes the refresh token at /oauth2/revoke.
+  enable_token_revocation = true
+
+  # The dashboard's lifetimes: a person signs in about once a day, which is
+  # also why this client is no use to CI (cli-spec §11.1).
+  id_token_validity      = 60
+  access_token_validity  = 60
+  refresh_token_validity = 1
+
+  token_validity_units {
+    id_token      = "minutes"
+    access_token  = "minutes"
+    refresh_token = "days"
+  }
+}
+
 # Who may commit approved fixes to a branch (write-back-spec §9, W6).
 # Approving stays open to every reviewer; a commit is a write to someone's
 # repository, so review-api refuses POST /prs/{pr_id}/commits unless the

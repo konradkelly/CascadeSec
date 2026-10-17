@@ -113,6 +113,18 @@ output "cognito_cli_client_id" {
   value = aws_cognito_user_pool_client.cli.id
 }
 
+# The `cascadesec` CLI's [server] table (cli/README.md). Paste into the
+# user's config.toml or a repository's .cascadesec.toml:
+#   terraform output -raw cli_config
+output "cli_config" {
+  value = <<-EOT
+    [server]
+    api_url     = "${trimsuffix(aws_apigatewayv2_stage.review.invoke_url, "/")}"
+    auth_domain = "${aws_cognito_user_pool_domain.dashboard.domain}.auth.${var.aws_region}.amazoncognito.com"
+    client_id   = "${aws_cognito_user_pool_client.cli_interactive.id}"
+  EOT
+}
+
 # Paste into the GitHub App's settings as the Webhook URL.
 output "github_webhook_url" {
   value = "${trimsuffix(aws_apigatewayv2_stage.review.invoke_url, "/")}/github/webhook"
