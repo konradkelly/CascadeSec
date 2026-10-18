@@ -1,9 +1,9 @@
 """`cascadesec`: the command line (docs/cli-spec.md §2).
 
-Built so far: track R's first four steps (§13) -- the skeleton, signing a
-person in, reading a PR's findings (`findings`, `show`), and deciding on a
-fix (`approve`, `reject`, `edit`). Commands that don't exist yet aren't
-registered, so `--help` lists only what works.
+Built so far: track R (§13) -- the skeleton, signing a person in, reading a
+PR's findings (`findings`, `show`), deciding on a fix (`approve`, `reject`,
+`edit`), and committing the approved ones (`commit`). Commands that don't
+exist yet aren't registered, so `--help` lists only what works.
 
 Results go to stdout in --format; progress, prompts and errors go to stderr,
 so `--format json` output can be piped whatever else is printed.
@@ -16,9 +16,11 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 
 from cascadesec import __version__, api, auth, config, editor, prs, render, review
+from cascadesec import commit as committing
 from cascadesec.errors import OK, REFUSED, USAGE, CliError
 from cascadesec.store import SessionStore
 
@@ -92,11 +94,27 @@ def build_parser():
                       help="send this prepared file instead of opening an editor")
     edit.add_argument("--yes", action="store_true",
                       help="record without asking; required when there is no terminal")
+
+    commit = commands.add_parser(
+        "commit", help="commit a PR's approved fixes to its branch (committers only)",
+        description="Show the commit plan -- per file, the diff from the branch to the approved "
+                    "fixes, and what is held and why -- then confirm and commit it as the "
+                    "CascadeSec Fixes app. What is confirmed is exactly what was printed: if the "
+                    "plan moves before the request lands, nothing is committed.")
+    commit.add_argument("pr", help=pr_help)
+    commit.add_argument("--yes", action="store_true", help="commit without asking")
+    commit.add_argument("--expect-sha", action="append", metavar="FILE=SHA",
+                        help="the content hash the plan prints for a file; without a terminal, "
+                             "--yes needs one for every file the plan commits")
+    commit.add_argument("--no-wait", action="store_true",
+                        help="return once the request is recorded, without waiting for the commit")
+    commit.add_argument("--timeout", type=int, default=committing.DEFAULT_TIMEOUT, metavar="SECONDS",
+                        help=f"how long to wait for the commit (default {committing.DEFAULT_TIMEOUT})")
     return parser
 
 
 def main(argv=None, *, stdout=None, env=None, cwd=None, backend=None,
-         prompt=None, interactive=None, run=None):
+         prompt=None, interactive=None, run=None, sleep=None, clock=None):
     if stdout is None:
         stdout = sys.stdout
         # A finding's title or a fix's rationale may hold characters the
@@ -105,7 +123,8 @@ def main(argv=None, *, stdout=None, env=None, cwd=None, backend=None,
             stdout.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
     fmt = args.format or ("table" if stdout.isatty() else "json")
-    ctx = _Context(env, cwd, backend, prompt=prompt, interactive=interactive, run=run)
+    ctx = _Context(env, cwd, backend, prompt=prompt, interactive=interactive, run=run,
+                   sleep=sleep, clock=clock)
     try:
         result = COMMANDS[args.command](args, ctx)
     except CliError as e:
@@ -119,14 +138,17 @@ def main(argv=None, *, stdout=None, env=None, cwd=None, backend=None,
         RENDERERS[args.command](result, render.Out(stdout, color=color))
     else:
         _emit(result, fmt, stdout)
-    return OK
+    # A command can finish with something to print and still not be done:
+    # a commit request the committer held is exit 1 with its reasons shown.
+    return result.get("_exit", OK)
 
 
 class _Context:
     """Settings and the session store, loaded on first use: `version` needs
     neither, and shouldn't fail on a broken config file."""
 
-    def __init__(self, env, cwd, backend, prompt=None, interactive=None, run=None):
+    def __init__(self, env, cwd, backend, prompt=None, interactive=None, run=None,
+                 sleep=None, clock=None):
         self._env, self._cwd, self._backend = env, cwd, backend
         self._settings = None
         # Questions go to stderr like every other prompt, so a confirmation
@@ -134,6 +156,11 @@ class _Context:
         self.prompt = prompt or _ask
         self.interactive = sys.stdin.isatty() if interactive is None else interactive
         self.run = run or subprocess.run
+        self.sleep = sleep or time.sleep
+        self.clock = clock or time.monotonic
+
+    def stderr(self):
+        return render.Out(sys.stderr, color=sys.stderr.isatty() and "NO_COLOR" not in self.env)
 
     @property
     def env(self):
@@ -351,6 +378,52 @@ def cmd_edit(args, ctx):
     return result
 
 
+def cmd_commit(args, ctx):
+    pr_id = prs.resolve(args.pr, ctx.env)
+    client = ctx.client()
+    expected = committing.parse_expect(args.expect_sha) if args.expect_sha else None
+    try:
+        plan = client.get("prs", pr_id, "commit-plan")
+    except api.ApiError as e:
+        if e.status == 404:
+            raise CliError(f"{pr_id}: {e}", USAGE) from None
+        raise
+    summary = {"pr_id": pr_id, "repository": plan.get("repository"),
+               "pr_number": plan.get("pr_number")}
+
+    # The plan is what is being confirmed, so it is printed before any
+    # question, and before any refusal it already implies (§10).
+    render.commit_plan(plan, ctx.stderr())
+    who = auth.claims(auth.current_session(ctx.settings, ctx.store())["id_token"]).get("email") or "you"
+    reason = committing.refusal_before_prompt(plan, who)
+    if reason:
+        raise CliError(reason, REFUSED)
+    if not committing.to_commit(plan):
+        return {**summary, "status": "nothing-to-commit", "recorded": False}
+
+    if not ctx.interactive and not (args.yes and expected is not None):
+        raise CliError("without a terminal, commit needs --yes and an --expect-sha FILE=SHA for "
+                       "each file it commits (the sha256 lines above), so a script can only "
+                       "confirm content it was told about", USAGE)
+    confirm = committing.confirmation(plan, expected)
+    if not args.yes:
+        n = len(confirm)
+        question = (f"Commit {n} file{'' if n == 1 else 's'} to "
+                    f"{plan['repository']}#{plan['pr_number']}, as shown? [y/N] ")
+        if ctx.prompt(question).strip().lower() not in ("y", "yes"):
+            print("cascadesec: nothing committed.", file=sys.stderr)
+            return {**summary, "status": None, "recorded": False}
+
+    request_id = committing.request(client, pr_id, confirm)
+    if args.no_wait:
+        return {**summary, "request_id": request_id, "status": "requested"}
+    record = committing.wait(client, pr_id, request_id, timeout=args.timeout,
+                             sleep=ctx.sleep, now=ctx.clock)
+    return {**summary, **{k: record.get(k) for k in
+                          ("request_id", "status", "reason", "commit_sha", "files", "requested_by")},
+            "_exit": committing.outcome_code(record)}
+
+
 def _ask(text):
     sys.stderr.write(text)
     sys.stderr.flush()
@@ -380,6 +453,7 @@ COMMANDS = {
     "approve": cmd_approve,
     "reject": cmd_reject,
     "edit": cmd_edit,
+    "commit": cmd_commit,
 }
 
 # Commands whose table format is more than key/value lines.
@@ -390,6 +464,7 @@ RENDERERS = {
     "approve": lambda result, out: render.decision(result, out),
     "reject": lambda result, out: render.decision(result, out),
     "edit": lambda result, out: render.decision(result, out),
+    "commit": lambda result, out: render.commit_result(result, out),
 }
 
 
