@@ -12,7 +12,7 @@ GitHub App, and it works against the review API that already exists.
 
 Written before building, 2026-09-25. Part of integrations-spec (phase A for
 local mode and pre-commit, phase B for remote). Track R built (2026-10-18);
-track S not started.
+track S step 1 built (2026-10-18).
 
 Revised 2026-10-13. Added review from the terminal (§10), and changed the
 authentication order (§11). Humans sign in with the existing Cognito pool
@@ -608,7 +608,13 @@ work. **S** (scan) needs no auth until remote mode.
 1. Scanner refactor (§3.1): `scan_directory` with source maps passed in,
    `_admit`, lazy clients, and `_unmapped_reason` in the shared module.
    Existing iac-scanner and mapping-agent tests pass unchanged, and the
-   eval's recall is identical.
+   eval's recall is identical. **Built 2026-10-18**, except `_unmapped_reason`,
+   which moves in step 4 with its first caller: mapping-agent deploys as a
+   single-file zip, so a shared module changes its packaging, and nothing
+   needs it before local output does. Verified beyond recall: the old and
+   new handler, run side by side in the scanner image under `--network
+   none`, gave identical responses on all 90 eval cases (517 findings,
+   compared field by field apart from wall-clock stamps).
 2. Fingerprint on `_build_finding` (integrations §3.2).
 3. `local_main.py` with app detection (§3.5 stage 1), then GHCR
    publishing, then the §3.4 measurement.
