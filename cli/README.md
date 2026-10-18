@@ -2,8 +2,9 @@
 
 CascadeSec from the terminal. Design: [docs/cli-spec.md](../docs/cli-spec.md).
 
-Built so far: signing in (`login`, `logout`, `whoami`) and `version`. The
-review commands come next (spec §10, §13 track R).
+Built so far: signing in (`login`, `logout`, `whoami`), reading a PR's
+findings (`findings`, `show`) and `version`. Approving, editing and
+committing come next (spec §10, §13 track R).
 
 ## Set up
 
@@ -40,8 +41,32 @@ long as the pool's refresh token, which is one day. A person newly added to
 `committers` runs `login` again, because groups are fixed when a token is
 issued.
 
-Exit codes: 0 done, 2 usage or configuration, 4 not signed in, auth or
-service error (spec §5).
+## Read a PR's findings
+
+```
+cascadesec findings konradkelly/cascadesec-testbed#4      # or the PR's URL, or gh-1388098412-4
+cascadesec findings gh-1352957770-50 --status fix-proposed --severity high
+cascadesec findings gh-1352957770-50 --file 'k8s/*.yaml' --format json
+cascadesec show gh-1388098412-4 3f2a                      # a finding id, or a unique start of one
+cascadesec show gh-1388098412-4 3f2a9c01d4e5b6a7 --agent-diff
+```
+
+`findings` groups as the dashboard does: fixes to review, then findings with
+no fix to review yet, then settled ones. Raw findings follow, one row per
+rule, grouped by why they have no control. `show` prints the controls and
+citations, the fix's rationale and diff, everything that holds it for review
+(assumptions, deleted resources, unmet prerequisites), and the audit trail.
+
+A GitHub PR's review-api id uses the repository's numeric id, so
+`owner/repo#123` is looked up on GitHub: anonymously for a public
+repository, and with `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token` for a
+private one.
+
+`--format json` prints the API's records (filtered, for `findings`), for
+scripts. The table is for reading and may change.
+
+Exit codes: 0 done, 2 usage or configuration (including an unknown finding
+id), 4 not signed in, auth or service error (spec §5, §10).
 
 ## Test
 
