@@ -12,7 +12,7 @@ GitHub App, and it works against the review API that already exists.
 
 Written before building, 2026-09-25. Part of integrations-spec (phase A for
 local mode and pre-commit, phase B for remote). Track R built (2026-10-18);
-track S step 1 built (2026-10-18).
+track S steps 1-2 built (2026-10-18).
 
 Revised 2026-10-13. Added review from the terminal (§10), and changed the
 authentication order (§11). Humans sign in with the existing Cognito pool
@@ -615,7 +615,18 @@ work. **S** (scan) needs no auth until remote mode.
    new handler, run side by side in the scanner image under `--network
    none`, gave identical responses on all 90 eval cases (517 findings,
    compared field by field apart from wall-clock stamps).
-2. Fingerprint on `_build_finding` (integrations §3.2).
+2. Fingerprint on `_build_finding` (integrations §3.2). **Built 2026-10-18**,
+   with two departures, both from measuring the tools' output. It is
+   computed once, at the end of `scan_directory` rather than in
+   `_build_finding`, because the CDK and Pulumi origins rewrite `resource`
+   after the build, and it is anchored on that rewritten value. And a
+   `resource` that is a position (Trivy names a CloudFormation resource
+   `template.yaml:5-8`, 30 of its 38 eval findings) or a placeholder (KICS's
+   `n/a`) falls back to the flagged line's text, since anchoring on either
+   would move with the lines. On the 90 eval cases, with a line inserted at
+   the top of every file: 514 of 517 `finding_id`s changed, and all 517
+   fingerprints held. Four pairs share one, each the documented limit (one
+   rule, one resource, two lines of it).
 3. `local_main.py` with app detection (§3.5 stage 1), then GHCR
    publishing, then the §3.4 measurement.
 4. CLI local mode: table, json, and exit codes, with candidates and raw
