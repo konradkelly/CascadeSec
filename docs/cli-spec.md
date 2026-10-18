@@ -11,8 +11,8 @@ terminal. That makes it a third interface next to the dashboard and the
 GitHub App, and it works against the review API that already exists.
 
 Written before building, 2026-09-25. Part of integrations-spec (phase A for
-local mode and pre-commit, phase B for remote). Track R steps 1-3 built
-(2026-10-17); track S not started.
+local mode and pre-commit, phase B for remote). Track R steps 1-4 built
+(2026-10-18); track S not started.
 
 Revised 2026-10-13. Added review from the terminal (§10), and changed the
 authentication order (§11). Humans sign in with the existing Cognito pool
@@ -590,7 +590,12 @@ work. **S** (scan) needs no auth until remote mode.
 3. `findings` and `show`. **Built 2026-10-17**, with `owner/repo#123` and PR
    URLs resolved to `gh-<repo_id>-<pr>`, and a finding id accepted by unique
    prefix.
-4. `approve`, `reject` and `edit`.
+4. `approve`, `reject` and `edit`. **Built 2026-10-18.** A 409 prints each
+   unmet prerequisite in the server's terms, which are finer than the
+   dashboard's (`undecided`, `rejected` and `reopened`, where the page can
+   only say "not accepted yet"), and a 400 such as "nothing to record" exits
+   1 like any refusal. `edit` sends bytes as saved, so line endings survive,
+   and keeps the file on disk when anything after the editor fails.
 5. `commit`, against the testbed PR, with a committer and a non-committer
    account.
 

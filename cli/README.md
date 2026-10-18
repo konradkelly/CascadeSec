@@ -3,8 +3,8 @@
 CascadeSec from the terminal. Design: [docs/cli-spec.md](../docs/cli-spec.md).
 
 Built so far: signing in (`login`, `logout`, `whoami`), reading a PR's
-findings (`findings`, `show`) and `version`. Approving, editing and
-committing come next (spec §10, §13 track R).
+findings (`findings`, `show`), deciding on a fix (`approve`, `reject`,
+`edit`) and `version`. Committing comes next (spec §10, §13 track R).
 
 ## Set up
 
@@ -65,8 +65,34 @@ private one.
 `--format json` prints the API's records (filtered, for `findings`), for
 scripts. The table is for reading and may change.
 
-Exit codes: 0 done, 2 usage or configuration (including an unknown finding
-id), 4 not signed in, auth or service error (spec §5, §10).
+## Decide on a fix
+
+```
+cascadesec approve gh-1388098412-5 e069 --notes "checked the CIDR"
+cascadesec reject  gh-1388098412-5 4f97 --notes "SSH must stay open to the VPN range"
+cascadesec edit    gh-1388098412-5 a367                       # opens $VISUAL / $EDITOR
+cascadesec edit    gh-1388098412-5 a367 --file fixed.ts --yes  # a prepared file, for scripts
+```
+
+review-api decides what may be approved, as it does for the dashboard. When
+it refuses because a fix this one was drafted on is not settled, the CLI
+lists each one and why (rejected, reopened, edited since, not decided) with
+the `show` command for it. `reject` is never blocked. Any fixes a reject or
+an edit reopens are listed.
+
+`edit` opens the fix's corrected file, under its own name so the editor
+highlights it. The editor is `$VISUAL`, then `$EDITOR`, then Notepad on
+Windows or `vi` elsewhere. A GUI editor needs its wait flag
+(`EDITOR="code --wait"`), or the CLI reads the file back before you have
+changed it. Save, review the diff it prints, and confirm. The whole file is
+sent and review-api computes the diff. Line endings are kept as saved. If
+the request fails, the file stays on disk and the error says how to send it
+again with `--file`. An edited fix has not been through the scanner, so its
+self-check reads as not passed until the next scan.
+
+Exit codes: 0 done, 1 refused by review-api with a reason, 2 usage or
+configuration (including an unknown finding id), 4 not signed in, auth or
+service error (spec §5, §10).
 
 ## Test
 

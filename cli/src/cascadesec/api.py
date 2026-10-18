@@ -8,11 +8,16 @@ before it is sent rather than failing in flight.
 An HTTP status becomes an exit code here, once, so no command has to decide
 what a 404 means:
 
+  400, 409   the API refused, and said why      REFUSED (1); the body is kept
   401        the API refused the session        SERVICE (4); sign in again
   403        signed in, but not allowed         SERVICE (4)
   404        no such PR, finding or content     USAGE (2): the argument was wrong
-  409        the API refused, and said why      REFUSED (1); the body is kept
   other      the service failed                 SERVICE (4)
+
+400 is a refusal rather than a fault because of what review-api sends it
+for: an edit identical to the fix's base ("nothing to record"), or an edit
+with no content. Both are about what was submitted, and both carry a
+reason the person can act on.
 
 A refusal keeps the response body on the error, because review-api puts the
 reason there -- unmet prerequisites, a moved commit plan -- and the CLI's
@@ -93,7 +98,7 @@ def _error_for(status, body, method, path):
         return ApiError(f"not allowed: {reason}", SERVICE, status, body)
     if status == 404:
         return ApiError(reason, USAGE, status, body)
-    if status == 409:
+    if status in (400, 409):
         return ApiError(reason, REFUSED, status, body)
     return ApiError(f"review-api failed on {method} /{path}: {reason}", SERVICE, status, body)
 

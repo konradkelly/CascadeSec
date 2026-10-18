@@ -27,6 +27,7 @@ def test_sends_the_id_token_and_quotes_path_segments(client, monkeypatch):
     (401, {"message": "Unauthorized"}, 4, "cascadesec login"),
     (403, {"error": "not a committer"}, 4, "not a committer"),
     (404, {"error": "finding not found"}, 2, "finding not found"),
+    (400, {"error": "nothing to record"}, 1, "nothing to record"),
     (409, {"error": "prerequisites unmet", "unmet": ["x"]}, 1, "prerequisites unmet"),
     (500, {"error": "internal error"}, 4, "internal error"),
     (502, None, 4, "HTTP 502"),
