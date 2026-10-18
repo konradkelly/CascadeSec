@@ -37,11 +37,17 @@ class Out:
             return text
         return "".join(f"\033[{_STYLES[n]}m" for n in names) + text + _RESET
 
-    def wrap(self, text, indent=2):
+    def wrap(self, text, indent=2, hang=0, *styles):
+        """Fill to the terminal's width. `hang` indents continuation lines
+        further, so a wrapped `- item` lines up under its text."""
         prefix = " " * indent
         for paragraph in str(text).splitlines() or [""]:
-            self.line(textwrap.fill(paragraph, self.width, initial_indent=prefix,
-                                    subsequent_indent=prefix) if paragraph.strip() else "")
+            if not paragraph.strip():
+                self.line()
+                continue
+            filled = textwrap.fill(paragraph, self.width, initial_indent=prefix,
+                                   subsequent_indent=prefix + " " * hang)
+            self.line("\n".join(self.style(l, *styles) for l in filled.split("\n")))
 
     def heading(self, text):
         self.line()
@@ -135,8 +141,10 @@ def show(result, out):
     fix = f.get("proposed_fix") or {}
     verdict, detail = review.self_check(fix) if fix else ("No fix", None)
 
+    # Some scanners put a paragraph in the title (Trivy's AWS-0178 is three
+    # sentences), so it is wrapped like prose rather than printed as one line.
     title = f"{f['rule_id']}" + (f" - {f['title']}" if f.get("title") else "")
-    out.line(out.style(title, "bold"))
+    out.wrap(title, 0, 2, "bold")
     facts = [
         ("Finding", f["finding_id"]),
         ("PR", result["pr_id"]),
@@ -299,4 +307,4 @@ def _alert(out, headline, body, items=(), colour="yellow"):
     out.line("  " + out.style("! " + headline, "bold", colour))
     out.wrap(body, indent=4)
     for item in items:
-        out.wrap(f"- {item}", indent=4)
+        out.wrap(f"- {item}", indent=4, hang=2)
