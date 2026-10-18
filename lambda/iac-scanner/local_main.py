@@ -23,6 +23,14 @@ running them, and this image runs nothing. A Helm chart's templates are Go
 templates the scanner deliberately skips, so without the list a chart-only
 repository would come back clean when it was never looked at.
 
+Each finding also says what a remote scan would make of it (§3.3), read
+from the control corpus the image ships at /opt/corpus:
+  candidates        the controls mapping-agent would choose among -- not its
+                    choice, which takes the model and a remote scan
+  raw_reason        when there is no candidate: why the pipeline leaves it
+                    raw (no-control, hygiene, not-fixable, unreviewed)
+  detection_only    true for CDK and Pulumi: mapped remotely, never fixed
+
 Output, one JSON object:
   findings          what the scan found, without the pipeline's record fields
   scan_errors       admitted files a tool could not parse
@@ -34,6 +42,7 @@ findings, incomplete -- is the CLI's to decide (§5). 2 is a usage error.
 
 import argparse
 import contextlib
+import glob
 import json
 import os
 import shutil
@@ -41,6 +50,8 @@ import sys
 import uuid
 
 import handler
+
+CORPUS_DIR = os.environ.get("CASCADESEC_CORPUS_DIR", "/opt/corpus")
 
 # Must match scripts/scan.py's, run_external.py's and github-gateway's;
 # corpus/test_corpus.py asserts every copy agrees. cdk.out is in it because
@@ -63,6 +74,69 @@ APP_REASONS = {
 FINDING_FIELDS = ("finding_id", "fingerprint", "source", "rule_id", "title", "description",
                   "severity", "file", "line_range", "resource", "target_type", "finding_class",
                   "origin")
+
+
+# ---------- what a remote scan would make of each finding ----------
+#
+# Copies of mapping-agent's, held to it by corpus/test_corpus.py until the
+# core is one shared package (portable-runtime-spec §8). Local output
+# predicts what the pipeline will do, so it must decide it the same way.
+
+UNREVIEWED = "unreviewed"
+DETECTION_ONLY_TARGET_TYPES = {"cdk", "pulumi"}
+
+
+def _candidates_for(rule_mappings, finding):
+    """The candidate controls that apply to this finding: mapping-agent's
+    rule, including a candidate's optional target_type scope."""
+    refs = rule_mappings.get(f"{finding['source']}:{finding['rule_id']}") or []
+    target_type = finding.get("target_type")
+    # A synthesized CDK template is CloudFormation, and a control scoped to
+    # CloudFormation fits it as well as it fits a hand-written template.
+    matches = {target_type} | ({"cloudformation"} if target_type == "cdk" else set())
+    return [r for r in refs
+            if "target_type" not in r or r["target_type"] in matches]
+
+
+def _unmapped_reason(unmapped_rules, finding):
+    """Why this finding has no candidate, as mapping-agent records it."""
+    entry = unmapped_rules.get(f"{finding['source']}:{finding['rule_id']}")
+    return entry["reason"] if entry else UNREVIEWED
+
+
+def load_corpus(corpus_dir=None):
+    """(mappings, unmapped, {(framework, control_id): title}). The image
+    always carries the corpus; one without it was built wrong, and a run
+    that silently reported no candidates would look like a corpus with no
+    mappings."""
+    corpus_dir = corpus_dir or CORPUS_DIR
+    path = os.path.join(corpus_dir, "rule_mappings.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            corpus = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"local_main: no control corpus at {path} ({e}); the image was built "
+                         "without `--build-context corpus=...`")
+    titles = {}
+    for framework_file in sorted(glob.glob(os.path.join(corpus_dir, "frameworks", "*.json"))):
+        with open(framework_file, encoding="utf-8") as fh:
+            framework = json.load(fh)
+        for control in framework.get("controls", []):
+            titles[(framework["framework"], control["control_id"])] = control.get("title")
+    return corpus["mappings"], corpus.get("unmapped", {}), titles
+
+
+def annotate(finding, corpus):
+    mappings, unmapped, titles = corpus
+    candidates = _candidates_for(mappings, finding)
+    finding["candidates"] = [
+        {"framework": c["framework"], "control_id": c["control_id"],
+         "title": titles.get((c["framework"], c["control_id"]))} for c in candidates]
+    if not candidates:
+        finding["raw_reason"] = _unmapped_reason(unmapped, finding)
+    if finding.get("target_type") in DETECTION_ONLY_TARGET_TYPES:
+        finding["detection_only"] = True
+    return finding
 
 
 def walk(src):
@@ -99,7 +173,7 @@ def copy_snapshot(src, work_dir):
     return snapshot, apps
 
 
-def scan(src, pr_id="local"):
+def scan(src, pr_id="local", corpus=None):
     work_dir = os.path.join("/tmp" if os.path.isdir("/tmp") else os.getcwd(), f"scan-{uuid.uuid4().hex}")
     os.makedirs(work_dir)
     try:
@@ -111,9 +185,11 @@ def scan(src, pr_id="local"):
             findings, scan_errors = handler.scan_directory(
                 work_dir, pr_id, snapshot.downloaded, snapshot.unreadable_templates,
                 snapshot.classifications, cdk_source_maps={})
+        corpus = corpus or load_corpus()
         return {
             "scanned_files": len(snapshot.downloaded),
-            "findings": [{k: f[k] for k in FINDING_FIELDS if k in f} for f in findings],
+            "findings": [annotate({k: f[k] for k in FINDING_FIELDS if k in f}, corpus)
+                         for f in findings],
             "scan_errors": scan_errors,
             "unscanned_apps": apps,
         }
@@ -131,8 +207,9 @@ def main(argv=None, stdout=None):
         return 2
     # stdout carries exactly one JSON document. Anything the scan prints --
     # a tool's chatter, a stray print -- goes to stderr with the logs.
+    corpus = load_corpus()          # before scanning: a misbuilt image fails fast
     with contextlib.redirect_stdout(sys.stderr):
-        result = scan(args.src)
+        result = scan(args.src, corpus=corpus)
     stdout.write(json.dumps(result, sort_keys=True) + "\n")
     return 0
 

@@ -52,6 +52,7 @@ docker build \
   --provenance=false \
   -t "${REPOSITORY}:latest" \
   -t "${REPOSITORY}:${COMMIT}" \
+  --build-context corpus="${REPO_DIR}/corpus" \
   "$SCRIPT_DIR"
 
 docker push "${REPOSITORY}:latest"
