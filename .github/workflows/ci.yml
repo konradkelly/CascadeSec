@@ -114,6 +114,21 @@ jobs:
         # region -- and because a broken mapping is not one Lambda's fault.
         run: python -m pytest corpus/ -q
 
+  deploy-guard:
+    name: deploy-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest
+      - name: pytest
+        # scripts/deploy.py, the only way a deploy is meant to run. No
+        # terraform and no AWS: the plans are canned JSON. Its own job because
+        # the guard has to keep working even when nothing else here changes.
+        run: python -m pytest scripts/test_deploy.py -q
+
   cli:
     name: cli (${{ matrix.os }})
     # Windows too, because the CLI promises it (docs/cli-spec.md §8) and the
