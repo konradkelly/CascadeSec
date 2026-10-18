@@ -12,7 +12,7 @@ GitHub App, and it works against the review API that already exists.
 
 Written before building, 2026-09-25. Part of integrations-spec (phase A for
 local mode and pre-commit, phase B for remote). Track R built (2026-10-18);
-track S steps 1-3 built (2026-10-18).
+track S steps 1-4 built (2026-10-18).
 
 Revised 2026-10-13. Added review from the terminal (§10), and changed the
 authentication order (§11). Humans sign in with the existing Cognito pool
@@ -662,7 +662,15 @@ work. **S** (scan) needs no auth until remote mode.
    rather than mixed into `scan_errors`, which lists files; the CLI exits 3
    for either.
 4. CLI local mode: table, json, and exit codes, with candidates and raw
-   reasons (§3.3). SARIF comes with sarif-spec.
+   reasons (§3.3). SARIF comes with sarif-spec. **Built 2026-10-18.** The
+   corpus ships in the image through a named build context, so candidates
+   come from the corpus version the image was built from. §3.3's "one copy"
+   of `_unmapped_reason` became an agreement-tested copy instead: mapping-
+   agent's is now a pure function, and `corpus/test_corpus.py` holds it,
+   `_candidates_for` and the two constants identical to `local_main.py`'s
+   until the core is shared (portable-runtime-spec §8). On terragoat: 251 of
+   333 findings with candidates, 55 raw no-control and 27 hygiene, which
+   matches the pipeline's own counts after the 2026-10-11 triage.
 5. Baseline, `--changed-only` and `skip_apps`.
 6. Pre-commit hook.
 7. `scan-api` and `unpack` under `/v1` on the JWT authorizer (phase H).
