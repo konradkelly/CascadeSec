@@ -177,6 +177,12 @@ UNMET_EXPLANATION = {
     "unresolved": "has not been accepted yet",
     "stale": "was edited after this fix was drafted on it",
     "unverifiable": "was recorded without a hash, so it cannot be checked",
+    # review-api's 409 can say more than the local check, because it reads
+    # the prerequisite's event log (_unmet_prerequisites): where this side
+    # can only say `unresolved`, the server says which.
+    "undecided": "has no decision yet",
+    "rejected": "was rejected, so the content this fix was drafted on is never landing",
+    "reopened": "was reopened by the system and is waiting to be redrafted",
 }
 
 

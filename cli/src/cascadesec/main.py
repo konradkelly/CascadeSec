@@ -1,22 +1,25 @@
 """`cascadesec`: the command line (docs/cli-spec.md §2).
 
-Built so far: track R's first three steps (§13) -- the skeleton, signing a
-person in, and reading a PR's findings (`findings`, `show`). Commands that
-don't exist yet aren't registered, so `--help` lists only what works.
+Built so far: track R's first four steps (§13) -- the skeleton, signing a
+person in, reading a PR's findings (`findings`, `show`), and deciding on a
+fix (`approve`, `reject`, `edit`). Commands that don't exist yet aren't
+registered, so `--help` lists only what works.
 
 Results go to stdout in --format; progress, prompts and errors go to stderr,
 so `--format json` output can be piped whatever else is printed.
 """
 
 import argparse
+import difflib
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 
-from cascadesec import __version__, api, auth, config, prs, render, review
-from cascadesec.errors import OK, USAGE, CliError
+from cascadesec import __version__, api, auth, config, editor, prs, render, review
+from cascadesec.errors import OK, REFUSED, USAGE, CliError
 from cascadesec.store import SessionStore
 
 FULL_FINDING_ID = re.compile(r"^[0-9a-f]{16}$")
@@ -60,10 +63,40 @@ def build_parser():
     show.add_argument("finding_id", help="the finding's id, or enough of its start to be unique")
     show.add_argument("--agent-diff", action="store_true",
                       help="show the agent's original diff where a reviewer has edited the fix")
+
+    id_help = "the finding's id, or enough of its start to be unique"
+    notes_help = "why, recorded in the audit trail"
+    approve = commands.add_parser(
+        "approve", help="accept a fix as drafted",
+        description="Accept a fix as drafted. review-api refuses it while a fix it was drafted on "
+                    "is not accepted, and says which.")
+    reject = commands.add_parser(
+        "reject", help="refuse a fix; never blocked",
+        description="Refuse a fix. Never blocked, so it is always the way out of a chain gone "
+                    "wrong. Fixes drafted on this one are reopened, and listed.")
+    for p in (approve, reject):
+        p.add_argument("pr", help=pr_help)
+        p.add_argument("finding_id", help=id_help)
+        p.add_argument("--notes", default="", help=notes_help)
+
+    edit = commands.add_parser(
+        "edit", help="correct a fix's file in your editor, then record it as edited",
+        description="Open the fix's corrected file in $VISUAL or $EDITOR (Notepad on Windows if "
+                    "neither is set; a GUI editor needs its wait flag, e.g. `code --wait`). On "
+                    "save, show what changed and confirm, then send the whole file. The edit "
+                    "has not been through the scanner, so its self-check reads as not passed.")
+    edit.add_argument("pr", help=pr_help)
+    edit.add_argument("finding_id", help=id_help)
+    edit.add_argument("--notes", default="", help=notes_help)
+    edit.add_argument("--file", metavar="PATH",
+                      help="send this prepared file instead of opening an editor")
+    edit.add_argument("--yes", action="store_true",
+                      help="record without asking; required when there is no terminal")
     return parser
 
 
-def main(argv=None, *, stdout=None, env=None, cwd=None, backend=None):
+def main(argv=None, *, stdout=None, env=None, cwd=None, backend=None,
+         prompt=None, interactive=None, run=None):
     if stdout is None:
         stdout = sys.stdout
         # A finding's title or a fix's rationale may hold characters the
@@ -72,7 +105,7 @@ def main(argv=None, *, stdout=None, env=None, cwd=None, backend=None):
             stdout.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
     fmt = args.format or ("table" if stdout.isatty() else "json")
-    ctx = _Context(env, cwd, backend)
+    ctx = _Context(env, cwd, backend, prompt=prompt, interactive=interactive, run=run)
     try:
         result = COMMANDS[args.command](args, ctx)
     except CliError as e:
@@ -93,9 +126,14 @@ class _Context:
     """Settings and the session store, loaded on first use: `version` needs
     neither, and shouldn't fail on a broken config file."""
 
-    def __init__(self, env, cwd, backend):
+    def __init__(self, env, cwd, backend, prompt=None, interactive=None, run=None):
         self._env, self._cwd, self._backend = env, cwd, backend
         self._settings = None
+        # Questions go to stderr like every other prompt, so a confirmation
+        # never lands in --format json output.
+        self.prompt = prompt or _ask
+        self.interactive = sys.stdin.isatty() if interactive is None else interactive
+        self.run = run or subprocess.run
 
     @property
     def env(self):
@@ -175,18 +213,7 @@ def cmd_findings(args, ctx):
 def cmd_show(args, ctx):
     pr_id = prs.resolve(args.pr, ctx.env)
     client = ctx.client()
-    wanted = args.finding_id.strip().lower()
-    listing = None
-    if FULL_FINDING_ID.match(wanted):
-        try:
-            finding = client.get("prs", pr_id, "findings", wanted)
-        except api.ApiError as e:
-            if e.status == 404:
-                raise CliError(f"{pr_id} has no finding {wanted}", USAGE) from None
-            raise
-    else:
-        listing = client.get("prs", pr_id, "findings").get("findings") or []
-        finding = _by_prefix(listing, wanted, pr_id)
+    finding, listing = _find(client, pr_id, args.finding_id)
 
     fix = finding.get("proposed_fix") or {}
     unmet = []
@@ -202,6 +229,132 @@ def cmd_show(args, ctx):
         "events": sorted(events, key=lambda e: e.get("created_at", "")),
         "_agent_diff": args.agent_diff,
     }
+
+
+def _find(client, pr_id, wanted):
+    """(finding, the PR's listing or None). A full id is fetched alone; a
+    prefix needs the listing to be resolved, and the caller may reuse it."""
+    wanted = wanted.strip().lower()
+    if FULL_FINDING_ID.match(wanted):
+        try:
+            return client.get("prs", pr_id, "findings", wanted), None
+        except api.ApiError as e:
+            if e.status == 404:
+                raise CliError(f"{pr_id} has no finding {wanted}", USAGE) from None
+            raise
+    listing = client.get("prs", pr_id, "findings").get("findings") or []
+    return _by_prefix(listing, wanted, pr_id), listing
+
+
+def cmd_approve(args, ctx):
+    return _decide(args, ctx, "approved")
+
+
+def cmd_reject(args, ctx):
+    return _decide(args, ctx, "rejected")
+
+
+def _decide(args, ctx, action, finding=None, client=None, pr_id=None, edited_content=None):
+    """POST the decision; review-api checks prerequisites, statuses and who
+    may decide. Nothing here pre-empts it (§10): the API is the rule."""
+    if finding is None:
+        pr_id = prs.resolve(args.pr, ctx.env)
+        client = ctx.client()
+        finding, _ = _find(client, pr_id, args.finding_id)
+    body = {"action": action, "notes": args.notes}
+    if edited_content is not None:
+        body["edited_content"] = edited_content
+    try:
+        reply = client.request("POST", "prs", pr_id, "findings", finding["finding_id"], "review",
+                               body=body)
+    except api.ApiError as e:
+        unmet = e.body.get("unmet") if isinstance(e.body, dict) else None
+        if e.status == 409 and unmet:
+            raise CliError(_unmet_message(action, pr_id, finding, unmet), REFUSED) from None
+        raise
+    return {
+        "pr_id": pr_id,
+        "finding_id": finding["finding_id"],
+        "rule": f"{finding['source']} {finding['rule_id']}",
+        "location": review.location(finding),
+        "action": reply.get("action", action),
+        "status": reply.get("status"),
+        "recorded_at": reply.get("recorded_at"),
+        # Named by the API so the reviewer who caused the cascade hears of it
+        # now, not later in someone else's queue (§10).
+        "reopened_dependents": reply.get("reopened_dependents") or [],
+        "recorded": True,
+    }
+
+
+def _unmet_message(action, pr_id, finding, unmet):
+    verb = {"approved": "approve", "edited": "edit"}.get(action, action)
+    lines = [f"cannot {verb} {finding['finding_id']}: it is drafted on fixes that are not settled"]
+    for u in unmet:
+        why = review.UNMET_EXPLANATION.get(u.get("reason"), u.get("reason") or "is not settled")
+        lines.append(f"  - {u.get('finding_id')} {why}")
+        lines.append(f"      cascadesec show {pr_id} {u.get('finding_id')}")
+    lines.append(f"Settle those first, or refuse this one: `cascadesec reject {pr_id} "
+                 f"{finding['finding_id']}` is never blocked.")
+    return "\n".join(lines)
+
+
+def cmd_edit(args, ctx):
+    pr_id = prs.resolve(args.pr, ctx.env)
+    client = ctx.client()
+    finding, _ = _find(client, pr_id, args.finding_id)
+    fid = finding["finding_id"]
+    if not finding.get("proposed_fix"):
+        raise CliError(f"{fid} has no proposed fix to edit (status {finding.get('status')})", REFUSED)
+    if not args.file and not ctx.interactive:
+        raise CliError("edit opens an editor, which needs a terminal; pass --file PATH to send "
+                       "a prepared file", USAGE)
+
+    current = client.get("prs", pr_id, "findings", fid, "content")
+    draft = None
+    if args.file:
+        edited = editor.read_prepared(args.file)
+    else:
+        draft = editor.Draft(current["file"], current["content"])
+        edited = draft.open(ctx.env, run=ctx.run)
+
+    if edited == current["content"]:
+        if draft:
+            draft.discard()
+        hint = "" if args.file else " (a GUI editor needs its wait flag, e.g. EDITOR='code --wait')"
+        print(f"cascadesec: no changes, so nothing was recorded{hint}", file=sys.stderr)
+        return {"pr_id": pr_id, "finding_id": fid, "recorded": False}
+
+    kept = f" Your edit is at {draft.path}." if draft else ""
+    err = render.Out(sys.stderr, color=sys.stderr.isatty() and "NO_COLOR" not in ctx.env)
+    err.line(f"Your change to the fix for {fid} ({current['file']}):")
+    render.diff_lines(err, "".join(difflib.unified_diff(
+        current["content"].splitlines(keepends=True), edited.splitlines(keepends=True),
+        fromfile=f"fix/{current['file']}", tofile=f"edited/{current['file']}")))
+    if not args.yes:
+        if not ctx.interactive:
+            raise CliError("--yes is needed to record an edit without a terminal." + kept, USAGE)
+        if ctx.prompt("Record this as your edit of the fix? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("cascadesec: nothing recorded." + kept, file=sys.stderr)
+            return {"pr_id": pr_id, "finding_id": fid, "recorded": False}
+
+    try:
+        result = _decide(args, ctx, "edited", finding=finding, client=client, pr_id=pr_id,
+                         edited_content=edited)
+    except CliError as e:
+        if draft:
+            raise CliError(f"{e}\n{kept.strip()} Send it again with "
+                           f"`cascadesec edit {pr_id} {fid} --file {draft.path}`.", e.code) from None
+        raise
+    if draft:
+        draft.discard()
+    return result
+
+
+def _ask(text):
+    sys.stderr.write(text)
+    sys.stderr.flush()
+    return input()
 
 
 def _by_prefix(findings, prefix, pr_id):
@@ -224,6 +377,9 @@ COMMANDS = {
     "version": cmd_version,
     "findings": cmd_findings,
     "show": cmd_show,
+    "approve": cmd_approve,
+    "reject": cmd_reject,
+    "edit": cmd_edit,
 }
 
 # Commands whose table format is more than key/value lines.
@@ -231,6 +387,9 @@ RENDERERS = {
     "findings": lambda result, out: render.findings(
         {**result, "all_findings": result["_all"], "filtered": result["_filtered"]}, out),
     "show": lambda result, out: render.show({**result, "agent_diff": result["_agent_diff"]}, out),
+    "approve": lambda result, out: render.decision(result, out),
+    "reject": lambda result, out: render.decision(result, out),
+    "edit": lambda result, out: render.decision(result, out),
 }
 
 

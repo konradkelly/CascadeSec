@@ -289,17 +289,52 @@ def _fix_sections(result, fix, out):
         out.heading("Proposed diff" + (f" ({which})" if which else ""))
         if fix.get("agent_diff") and not result.get("agent_diff"):
             out.line(out.style("  Edited by a reviewer; --agent-diff shows the agent's original.", "dim"))
-        for line in diff.splitlines():
-            if line.startswith(("+++", "---")):
-                out.line(out.style(line, "bold"))
-            elif line.startswith("+"):
-                out.line(out.style(line, "green"))
-            elif line.startswith("-"):
-                out.line(out.style(line, "red"))
-            elif line.startswith("@@"):
-                out.line(out.style(line, "cyan"))
-            else:
-                out.line(line)
+        diff_lines(out, diff)
+
+
+def diff_lines(out, text):
+    """A unified diff, coloured on a terminal. The +/- markers carry the
+    meaning; colour only makes them quicker to see."""
+    for line in text.splitlines():
+        if line.startswith(("+++", "---")):
+            out.line(out.style(line, "bold"))
+        elif line.startswith("+"):
+            out.line(out.style(line, "green"))
+        elif line.startswith("-"):
+            out.line(out.style(line, "red"))
+        elif line.startswith("@@"):
+            out.line(out.style(line, "cyan"))
+        else:
+            out.line(line)
+
+
+
+# ---------- approve, reject, edit ----------
+
+DONE = {"approved": "Approved", "rejected": "Rejected", "edited": "Recorded your edit of"}
+
+
+def decision(result, out):
+    if not result.get("recorded"):
+        out.line("Nothing recorded.")
+        return
+    action = result["action"]
+    out.line(f"{DONE.get(action, action)} the fix for {result['rule']} at {result['location']}"
+             f" ({result['finding_id']}).")
+    if result.get("status"):
+        out.line(f"  Status  {review.STATUS_LABELS.get(result['status'], result['status'])}")
+    if action == "edited":
+        out.wrap("The edit has not been through the scanner, so its self-check reads as not "
+                 "passed until the next scan.")
+    reopened = result.get("reopened_dependents") or []
+    if reopened:
+        out.line()
+        out.line(out.style(f"! This reopened {len(reopened)} finding{'' if len(reopened) == 1 else 's'}:",
+                           "bold", "yellow"))
+        out.wrap("They depended on the fix you just changed: fixes drafted on it go back to "
+                 "be redrafted, and findings it superseded go back to mapped.", indent=4)
+        for fid in reopened:
+            out.line(f"    - {fid}    cascadesec show {result['pr_id']} {fid}")
 
 
 def _alert(out, headline, body, items=(), colour="yellow"):
