@@ -395,6 +395,31 @@ def test_the_agent_and_the_gateway_agree_on_what_is_stale():
     assert len(set(bodies.values())) == 1, bodies
 
 
+@pytest.mark.parametrize("name", ["_candidates_for", "_unmapped_reason"])
+def test_local_mode_predicts_mapping_as_mapping_agent_decides_it(name):
+    """iac-scanner's local_main.py labels each local finding with its
+    candidate controls, or why it will stay raw, so a developer sees what a
+    remote scan will make of it (cli-spec §3.3). Its copies drifting from
+    mapping-agent's would show candidates the pipeline never offers. Copies
+    rather than one module until the core is shared (portable-runtime-spec
+    §8)."""
+    bodies = _function_bodies(name, "lambda/mapping-agent/handler.py",
+                              "lambda/iac-scanner/local_main.py")
+    assert len(set(bodies.values())) == 1, bodies
+
+
+def test_local_mode_and_mapping_agent_agree_on_constants():
+    def constants(rel):
+        tree = ast.parse((CORPUS.parent / rel).read_text(encoding="utf-8"))
+        return {t.id: ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                for t in n.targets if isinstance(t, ast.Name)
+                and t.id in ("UNREVIEWED", "DETECTION_ONLY_TARGET_TYPES")}
+
+    agent = constants("lambda/mapping-agent/handler.py")
+    assert agent == constants("lambda/iac-scanner/local_main.py")
+    assert set(agent) == {"UNREVIEWED", "DETECTION_ONLY_TARGET_TYPES"}
+
+
 @pytest.mark.parametrize("name", ["plan_commit", "approved_tip", "_commit_diff",
                                   "_content_sha256", "_diff_sha256"])
 def test_the_preview_and_the_committer_plan_alike(name):

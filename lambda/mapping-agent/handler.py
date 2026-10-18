@@ -150,7 +150,7 @@ def handler(event, context):
         if not candidate_refs:
             # Written only when it changes: a yielded pass looks at every
             # still-raw finding again, and the reason is the same each time.
-            reason = _unmapped_reason(finding)
+            reason = _unmapped_reason(_load_unmapped_rules(), finding)
             if finding.get("unmapped_reason") != reason:
                 try:
                     _write_unmapped_reason(finding, reason)
@@ -314,10 +314,13 @@ def _candidates_for(rule_mappings, finding):
             if "target_type" not in r or r["target_type"] in matches]
 
 
-def _unmapped_reason(finding):
+def _unmapped_reason(unmapped_rules, finding):
     """Why this finding has no candidate. Keyed on (source, rule_id) like
-    the mappings: a rule is triaged once, not per finding or per target."""
-    entry = _load_unmapped_rules().get(f"{finding['source']}:{finding['rule_id']}")
+    the mappings: a rule is triaged once, not per finding or per target.
+    The table is passed in rather than loaded here, so this body is the one
+    iac-scanner's local_main.py copies (corpus/test_corpus.py holds them
+    together until the core is shared, portable-runtime-spec §8)."""
+    entry = unmapped_rules.get(f"{finding['source']}:{finding['rule_id']}")
     return entry["reason"] if entry else UNREVIEWED
 
 

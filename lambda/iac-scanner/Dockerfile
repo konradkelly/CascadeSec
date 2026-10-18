@@ -80,5 +80,13 @@ COPY handler.py ${LAMBDA_TASK_ROOT}/
 # Local mode's entry point (docs/cli-spec.md §3.1): the same scan, run by
 # `docker run --entrypoint python ... /var/task/local_main.py /src`.
 COPY local_main.py ${LAMBDA_TASK_ROOT}/
+# The control corpus, for local mode's candidate controls (docs/cli-spec.md
+# §3.3): the same rule_mappings.json and framework files mapping-agent
+# reads from S3, at the version this image was built from. It sits outside
+# this directory, so it arrives as a named build context; build-image.sh
+# passes it, and a plain `docker build` needs it too:
+#   docker build --build-context corpus=../../corpus .
+COPY --from=corpus rule_mappings.json /opt/corpus/
+COPY --from=corpus frameworks/ /opt/corpus/frameworks/
 
 CMD ["handler.handler"]
