@@ -12,13 +12,27 @@
 #   terraform -chdir=terraform apply
 # Every deploy after that: build-image.sh, then apply.
 #
-# Usage: ./build-image.sh [repository-url]
+# Usage: ./build-image.sh [--ghcr] [repository-url]
 # If repository-url is omitted, reads it from `terraform output`.
+#
+# --ghcr also publishes the image for local mode (docs/cli-spec.md §3.2) to
+# ghcr.io/konradkelly/cascadesec-scanner, copied from ECR by digest rather
+# than pushed from the local build, so both registries hold one manifest and
+# a CLI pinned to the digest gets exactly what the Lambda runs. The copy is
+# checked: the script fails if GHCR reports a different digest. Needs a
+# GitHub token with write:packages (`gh auth refresh -s write:packages`).
+# A new package is private; make it public once, in its package settings.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+GHCR=""
+if [ "${1:-}" = "--ghcr" ]; then
+  GHCR="ghcr.io/konradkelly/cascadesec-scanner"
+  shift
+fi
 
 REPOSITORY="${1:-}"
 if [ -z "$REPOSITORY" ]; then
@@ -44,3 +58,21 @@ docker push "${REPOSITORY}:latest"
 docker push "${REPOSITORY}:${COMMIT}"
 
 echo "Pushed ${REPOSITORY}:latest (${COMMIT})"
+
+if [ -n "$GHCR" ]; then
+  digest() {
+    docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' \
+      | python -c 'import json,sys; print(json.load(sys.stdin)["digest"])'
+  }
+  ECR_DIGEST="$(digest "${REPOSITORY}:${COMMIT}")"
+  gh auth token | docker login ghcr.io --username "$(gh api user --jq .login)" --password-stdin
+  docker buildx imagetools create \
+    --tag "${GHCR}:${COMMIT}" --tag "${GHCR}:latest" \
+    "${REPOSITORY}@${ECR_DIGEST}"
+  GHCR_DIGEST="$(digest "${GHCR}:${COMMIT}")"
+  if [ "$GHCR_DIGEST" != "$ECR_DIGEST" ]; then
+    echo "GHCR holds ${GHCR_DIGEST}, not ECR's ${ECR_DIGEST}: the copy changed the manifest" >&2
+    exit 1
+  fi
+  echo "Published ${GHCR}@${ECR_DIGEST} (${COMMIT}), the digest ECR and the Lambda use"
+fi

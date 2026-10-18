@@ -77,5 +77,8 @@ COPY --from=kics /app/bin/assets /opt/kics-assets
 # The project's own Trivy checks (handler.py: TRIVY_CHECKS_DIR).
 COPY checks/ /opt/checks/
 COPY handler.py ${LAMBDA_TASK_ROOT}/
+# Local mode's entry point (docs/cli-spec.md §3.1): the same scan, run by
+# `docker run --entrypoint python ... /var/task/local_main.py /src`.
+COPY local_main.py ${LAMBDA_TASK_ROOT}/
 
 CMD ["handler.handler"]
