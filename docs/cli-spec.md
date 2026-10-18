@@ -11,7 +11,8 @@ terminal. That makes it a third interface next to the dashboard and the
 GitHub App, and it works against the review API that already exists.
 
 Written before building, 2026-09-25. Part of integrations-spec (phase A for
-local mode and pre-commit, phase B for remote). Not started.
+local mode and pre-commit, phase B for remote). Track R steps 1-3 built
+(2026-10-17); track S not started.
 
 Revised 2026-10-13. Added review from the terminal (§10), and changed the
 authentication order (§11). Humans sign in with the existing Cognito pool
@@ -440,8 +441,8 @@ disagree about a rule.
 
 | Command | Route(s) | Notes |
 |---|---|---|
-| `findings <pr>` | `GET /prs/{pr}/findings` | Table by default, `--format json`. Grouped like the dashboard: fixes to review, open, resolved. Raw findings are listed apart and grouped by `unmapped_reason`, as on the dashboard since `deada0b`. Filters: `--status`, `--severity`, `--file` |
-| `show <pr> <id>` | `GET .../{id}`, `.../events`, `.../content` | Rule, file and line. Each control with its citation. The fix's diff (`.../content` against the base, colored on a TTY). Self-check result, rationale and assumptions. Prerequisites, then the event history. The caller is always a person here, so model prose is shown (§4.3) |
+| `findings <pr>` | `GET /prs/{pr}/findings` | Table by default, `--format json`. Grouped like the dashboard: fixes to review, open, settled (resolved and superseded). Raw findings are listed apart and grouped by `unmapped_reason`, as on the dashboard since `deada0b`. Filters: `--status`, `--severity`, `--file` |
+| `show <pr> <id>` | `GET .../{id}`, `.../events`; the PR's findings when the fix has prerequisites or the id is a prefix | Rule, file and line. Each control with its citation. The fix's diff, `proposed_fix.diff` as the dashboard shows it (colored on a TTY; `--agent-diff` for the agent's original after an edit). Not `.../content`: that route returns the corrected file but not the base it was drafted on, so it cannot make a diff. Self-check result, rationale and assumptions. Prerequisites, then the event history. The caller is always a person here, so model prose is shown (§4.3) |
 | `approve <pr> <id>` | `POST .../review` `{action: approved, notes}` | |
 | `reject <pr> <id>` | same, `rejected` | Never blocked, as in the API |
 | `edit <pr> <id>` | `GET .../content`, then `POST .../review` `{action: edited, edited_content, notes}` | Below |
@@ -586,7 +587,9 @@ work. **S** (scan) needs no auth until remote mode.
 1. `cli/` skeleton: `pyproject.toml`, config, `--format`, exit codes.
 2. `cli-interactive` client and authorizer audience (Terraform), then
    `login`, `logout` and `whoami` with the keyring.
-3. `findings` and `show`.
+3. `findings` and `show`. **Built 2026-10-17**, with `owner/repo#123` and PR
+   URLs resolved to `gh-<repo_id>-<pr>`, and a finding id accepted by unique
+   prefix.
 4. `approve`, `reject` and `edit`.
 5. `commit`, against the testbed PR, with a committer and a non-committer
    account.
