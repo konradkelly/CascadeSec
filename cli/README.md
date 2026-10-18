@@ -5,7 +5,7 @@ CascadeSec from the terminal. Design: [docs/cli-spec.md](../docs/cli-spec.md).
 Built so far: track R of the spec (§10, §13) -- signing in (`login`,
 `logout`, `whoami`), reading a PR's findings (`findings`, `show`), deciding
 on a fix (`approve`, `reject`, `edit`), committing the approved ones
-(`commit`) -- and `version`. Scanning (track S) comes next.
+(`commit`) -- `scan` in local mode, and `version`.
 
 ## Set up
 
@@ -118,6 +118,43 @@ is made by the CascadeSec Fixes app and recorded as your request. The CLI
 waits for it (`--timeout`, default 300s; `--no-wait` to return once
 recorded) and prints the commit and each file's outcome. A request the
 committer held exits 1 with its reasons.
+
+## Scan locally
+
+```
+cascadesec scan                         # this directory
+cascadesec scan ./infra --fail-on medium
+cascadesec scan ./infra --format json --output scan.json
+```
+
+Runs the pipeline's own scanner image in Docker with no network: the same
+Trivy, Checkov and KICS at the same versions, through the same code, so the
+findings are the ones a remote scan gets. Nothing leaves the machine, and
+no account or model is involved. Each finding lists its **candidates**, the
+controls a remote scan would choose among, or why it would stay raw
+(`no-control`, `hygiene`, `not-fixable`, `unreviewed`). The citation, and
+any fix, need the pipeline.
+
+CDK apps, Pulumi programs and Helm charts are listed as not scanned
+locally, because their IaC exists only once they run. That makes the scan
+incomplete rather than clean.
+
+Exit codes: 0 nothing at or above `--fail-on` (default `high`), 1 findings
+at or above it, 3 incomplete (a file did not parse, or an app was not run;
+`--allow-scan-errors` reports the findings' result instead), 2 usage or no
+Docker, 4 the scanner image failed. Checkov rates no severity, so its
+findings count only with `--fail-on any`.
+
+Until the image is published, build it and point the CLI at it:
+
+```
+docker build --build-context corpus=corpus -t cascadesec-scanner:local lambda/iac-scanner
+$env:CASCADESEC_SCANNER_IMAGE = "cascadesec-scanner:local"     # or pass --image
+```
+
+A cold scan takes 10 to 20 seconds on a typical repository, and longer on
+module-heavy Terraform (81s on terraform-aws-vpc), most of it container
+start and Checkov's import (cli-spec §3.4).
 
 ## Test
 

@@ -431,3 +431,64 @@ def _alert(out, headline, body, items=(), colour="yellow"):
     out.wrap(body, indent=4)
     for item in items:
         out.wrap(f"- {item}", indent=4, hang=2)
+
+
+# ---------- scan (local mode, docs/cli-spec.md §3, §5) ----------
+
+def _candidates_cell(f):
+    candidates = f.get("candidates") or []
+    if not candidates:
+        return f"raw ({f.get('raw_reason') or 'unreviewed'})"
+    first = f"{candidates[0]['framework']} {candidates[0]['control_id']}"
+    return first + (f", +{len(candidates) - 1}" if len(candidates) > 1 else "")
+
+
+def scan_result(result, out):
+    findings = sorted(result.get("findings") or [],
+                      key=lambda f: (review.severity_rank(f.get("severity")), f.get("file", ""),
+                                     (f.get("line_range") or [0])[0] or 0, f.get("rule_id", "")))
+    with_candidates = sum(1 for f in findings if f.get("candidates"))
+    out.line(out.style(f"Scanned {result.get('scanned_files', 0)} file"
+                       f"{'' if result.get('scanned_files') == 1 else 's'} in {result['path']} "
+                       f"with {result['scanner_image']}", "bold"))
+    if findings:
+        out.line(f"{len(findings)} finding{'' if len(findings) == 1 else 's'}: "
+                 f"{with_candidates} with candidate controls, {len(findings) - with_candidates} raw")
+        out.line()
+        rows = [[_severity(f), _rule(f), review.location(f), _candidates_cell(f)
+                 + ("  (detection only)" if f.get("detection_only") else "")] for f in findings]
+        out.table(["SEVERITY", "RULE", "LOCATION", "CANDIDATES"], rows, indent=0)
+        out.line()
+        out.wrap("Candidates are the controls a remote scan chooses among, not its choice: the "
+                 "citation, and any fix, need the pipeline.", indent=0)
+    else:
+        out.line("No findings.")
+
+    errors = result.get("scan_errors") or []
+    if errors:
+        out.line()
+        out.line(out.style(f"! {len(errors)} file{'' if len(errors) == 1 else 's'} could not be parsed, "
+                           "so the scan is incomplete:", "bold", "yellow"))
+        for e in errors:
+            out.line(f"    {e}")
+    apps = result.get("unscanned_apps") or []
+    if apps:
+        out.line()
+        out.line(out.style(f"! Not scanned locally ({len(apps)}):", "bold", "yellow"))
+        for a in apps:
+            out.wrap(f"- {a['path']}: {a['reason']}", indent=4, hang=2)
+
+    code = result["exit_code"]
+    out.line()
+    if code == 3:
+        verdict = "incomplete (see above; --allow-scan-errors reports the findings' result instead)"
+    elif code == 1:
+        verdict = f"{result['failing_count']} finding{'' if result['failing_count'] == 1 else 's'} " \
+                  f"at or above --fail-on {result['fail_on']}"
+    else:
+        verdict = f"nothing at or above --fail-on {result['fail_on']}"
+    if result["fail_on"] in ("critical", "high", "medium", "low"):
+        unrated = sum(1 for f in findings if (f.get("severity") or "UNKNOWN").upper() == "UNKNOWN")
+        if unrated:
+            verdict += f"; {unrated} with no severity (checkov rates none) count only with --fail-on any"
+    out.wrap(out.style(f"Exit {code}: {verdict}.", "bold"), indent=0)

@@ -2,8 +2,9 @@
 
 Built so far: track R (§13) -- the skeleton, signing a person in, reading a
 PR's findings (`findings`, `show`), deciding on a fix (`approve`, `reject`,
-`edit`), and committing the approved ones (`commit`). Commands that don't
-exist yet aren't registered, so `--help` lists only what works.
+`edit`), and committing the approved ones (`commit`) -- and from track S,
+`scan` in local mode. Commands that don't exist yet aren't registered, so
+`--help` lists only what works.
 
 Results go to stdout in --format; progress, prompts and errors go to stderr,
 so `--format json` output can be piped whatever else is printed.
@@ -21,6 +22,7 @@ from datetime import datetime
 
 from cascadesec import __version__, api, auth, config, editor, prs, render, review
 from cascadesec import commit as committing
+from cascadesec import scan as scanning
 from cascadesec.errors import OK, REFUSED, USAGE, CliError
 from cascadesec.store import SessionStore
 
@@ -45,7 +47,26 @@ def build_parser():
     )
     commands.add_parser("logout", help="revoke the session and remove it from the keyring")
     commands.add_parser("whoami", help="who is signed in, their groups, and when the token expires")
-    commands.add_parser("version", help="the CLI's version")
+    commands.add_parser("version", help="the CLI's version and the scanner image it runs")
+
+    scan = commands.add_parser(
+        "scan", help="scan a directory locally: findings and candidate controls, offline",
+        description="Scan a directory with the pipeline's scanner, run on this machine in Docker "
+                    "with no network: the same tools and versions, so the same findings a remote "
+                    "scan gets. Each finding lists the controls a remote scan would choose among, "
+                    "or why it would stay raw. No account and no model are involved, so there is "
+                    "no citation and no fix. Exit 0 clean, 1 findings at or above --fail-on, "
+                    "3 incomplete (a file did not parse, or an app was not run).")
+    scan.add_argument("path", nargs="?", default=".", help="the directory to scan (default: here)")
+    scan.add_argument("--fail-on", choices=scanning.FAIL_ON, default="high",
+                      help="exit 1 when a finding is at or above this severity (default high); "
+                           "`any` includes findings with no severity, which is all of checkov's")
+    scan.add_argument("--allow-scan-errors", action="store_true",
+                      help="report the findings' result even when the scan was incomplete")
+    scan.add_argument("--image", help="the scanner image (default: $CASCADESEC_SCANNER_IMAGE, "
+                                      "then the image this CLI pins)")
+    scan.add_argument("--output", metavar="FILE",
+                      help="also write the result to FILE in --format (json if not given)")
 
     pr_help = "the PR: owner/repo#123, its GitHub URL, or a review-api id such as gh-1352957770-50"
     findings = commands.add_parser(
@@ -213,7 +234,24 @@ def cmd_whoami(args, ctx):
 
 
 def cmd_version(args, ctx):
-    return {"cli": __version__}
+    return {"cli": __version__, "scanner_image": scanning.image(None, ctx.env)}
+
+
+def cmd_scan(args, ctx):
+    image_ref = scanning.image(args.image, ctx.env)
+    if not os.path.isdir(args.path):
+        raise CliError(f"{args.path} is not a directory", USAGE)
+    print(f"cascadesec: scanning {os.path.abspath(args.path)} in {image_ref} (no network)",
+          file=sys.stderr)
+    result = scanning.run_scanner(args.path, image_ref, run=ctx.run)
+    summary = scanning.summarise(result, args.path, image_ref, args.fail_on, args.allow_scan_errors)
+    if args.output:
+        with open(args.output, "w", encoding="utf-8", newline="\n") as fh:
+            if (args.format or "json") == "json":
+                fh.write(json.dumps(summary, indent=2) + "\n")
+            else:
+                render.scan_result(summary, render.Out(fh))
+    return {**summary, "_exit": summary["exit_code"]}
 
 
 def cmd_findings(args, ctx):
@@ -454,6 +492,7 @@ COMMANDS = {
     "reject": cmd_reject,
     "edit": cmd_edit,
     "commit": cmd_commit,
+    "scan": cmd_scan,
 }
 
 # Commands whose table format is more than key/value lines.
@@ -465,6 +504,7 @@ RENDERERS = {
     "reject": lambda result, out: render.decision(result, out),
     "edit": lambda result, out: render.decision(result, out),
     "commit": lambda result, out: render.commit_result(result, out),
+    "scan": lambda result, out: render.scan_result(result, out),
 }
 
 
@@ -481,6 +521,7 @@ TABLE_LABELS = {
     "signed_in_at": "Signed in",
     "deployment": "Deployment",
     "cli": "cascadesec",
+    "scanner_image": "Scanner image",
 }
 
 
