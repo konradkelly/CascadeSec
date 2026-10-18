@@ -566,6 +566,9 @@ def scan_directory(work_dir, pr_id, downloaded, unreadable_templates, classifica
     )
     _cdk_origins(findings, cdk_source_maps or {})
     _pulumi_origins(findings, downloaded, work_dir)
+    # Last, because the origins rewrite `resource` (a CDK finding's becomes
+    # its construct path), and the fingerprint is anchored on it.
+    _add_fingerprints(findings, work_dir)
 
     kics_unparsed = _kics_unparsed_count(kics_report)
     if kics_unparsed:
@@ -586,6 +589,65 @@ def scan_directory(work_dir, pr_id, downloaded, unreadable_templates, classifica
         | set(unreadable_templates)
     )
     return findings, scan_errors
+
+
+# A tool's `resource` that is really a position, not a name: Trivy names a
+# CloudFormation resource "template.yaml:5-8" (30 of its 38 findings on the
+# eval cases, 2026-10-18), and KICS says "n/a" when it has none. Anchoring on
+# either would move the fingerprint with the lines, which is what it exists
+# not to do, so both fall back to the text of the flagged line.
+POSITIONAL_RESOURCE_RE = re.compile(r"(^|:)\d+(\s*-\s*\d+)?$")
+PLACEHOLDER_RESOURCES = {"n/a", "unknown", "none"}
+
+
+def _anchor_resource(resource):
+    resource = (resource or "").strip()
+    if not resource or resource.lower() in PLACEHOLDER_RESOURCES or POSITIONAL_RESOURCE_RE.search(resource):
+        return None
+    return resource
+
+
+def _fingerprint(finding, line_text):
+    """The line-independent key (integrations-spec §3.2): the same rule on the
+    same resource in the same file, wherever the lines move. Beside
+    finding_id, never instead of it: review state stays keyed on finding_id,
+    where a moved finding really is a different place to review. This is for
+    what tracks a finding across time outside the pipeline -- a baseline
+    file, SARIF's partialFingerprints, an issue tracker -- where one line
+    inserted above a resource must not close every issue below it.
+
+    `line_text` is the first flagged line's text, used only when the tool
+    named no usable resource. Two findings of one rule on one resource share
+    a fingerprint; that is the same problem twice, which is what dedup
+    wants."""
+    anchor = _anchor_resource(finding.get("resource"))
+    if anchor is None:
+        anchor = hashlib.sha256((line_text or "").strip().encode("utf-8")).hexdigest()
+    key = f"{finding['source']}:{finding['rule_id']}:{finding['file']}:{anchor}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _add_fingerprints(findings, work_dir):
+    """Set `fingerprint` on each finding, in place. The one place it is
+    computed, so no two surfaces can compute it differently."""
+    lines = {}
+    for finding in findings:
+        text = ""
+        if _anchor_resource(finding.get("resource")) is None:
+            path = finding["file"]
+            if path not in lines:
+                try:
+                    with open(os.path.join(work_dir, path), encoding="utf-8", errors="replace") as fh:
+                        lines[path] = fh.read().splitlines()
+                except OSError:
+                    lines[path] = []
+            try:
+                first = int((finding.get("line_range") or [None])[0])
+            except (TypeError, ValueError):
+                first = None
+            if first and 0 < first <= len(lines[path]):
+                text = lines[path][first - 1]
+        finding["fingerprint"] = _fingerprint(finding, text)
 
 
 def _emit_metrics(metrics, dimensions, **context):
@@ -1518,11 +1580,13 @@ def _write_findings(pr_id, findings, scanned_cdk_dirs=None):
         # Scanner-owned like the rest, and only a synthesized template's
         # findings have one.
         origin = "origin = :origin, " if "origin" in finding else ""
+        # The tool's, like title: refreshed by every scan, never a person's.
+        fingerprint = "fingerprint = :fingerprint, " if finding.get("fingerprint") else ""
         table.update_item(
             Key={"pk": finding["pk"], "sk": finding["sk"]},
             UpdateExpression=(
                 "SET finding_id = :finding_id, target_type = :target_type, "
-                + origin +
+                + origin + fingerprint +
                 "finding_class = :finding_class, "
                 "#source = :source, rule_id = :rule_id, #file = :file, "
                 "line_range = :line_range, severity = :severity, "
@@ -1559,6 +1623,7 @@ def _write_findings(pr_id, findings, scanned_cdk_dirs=None):
                 ":empty": [],
                 ":null": None,
                 **({":origin": finding["origin"]} if "origin" in finding else {}),
+                **({":fingerprint": finding["fingerprint"]} if finding.get("fingerprint") else {}),
             },
         )
 
