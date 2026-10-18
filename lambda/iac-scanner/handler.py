@@ -371,8 +371,27 @@ def _target_type_for(file_path, reported, classifications=None):
     return REPORTED_TARGET_TYPES.get(reported, reported) or "unknown"
 
 
-s3 = boto3.client("s3")
-dynamodb = boto3.resource("dynamodb")
+class _Lazy:
+    """A boto3 client made on first use rather than at import.
+
+    The scan itself (scan_directory) touches no AWS service, and local mode
+    (docs/cli-spec.md §3.1) imports this module on a laptop with no AWS
+    configuration -- where boto3.resource("dynamodb") at import time raises
+    NoRegionError before a single file is scanned. The module-level names
+    stay, so everything that patches `handler.s3` or `handler.dynamodb`
+    replaces them exactly as before."""
+
+    def __init__(self, make):
+        self._make, self._made = make, None
+
+    def __getattr__(self, name):
+        if self._made is None:
+            self._made = self._make()
+        return getattr(self._made, name)
+
+
+s3 = _Lazy(lambda: boto3.client("s3"))
+dynamodb = _Lazy(lambda: boto3.resource("dynamodb"))
 
 
 # Trivy reports an HCL parse failure as a log line on stderr, skips that file
@@ -470,41 +489,12 @@ def handler(event, context):
                     del response["findings"]
                 return response
             raise ValueError(f"no IaC files found under s3://{ARTIFACTS_BUCKET}/{s3_prefix}")
-        # Before normalizing, because what a .yaml is has to be known by the
-        # time its findings are given a target_type.
-        unparseable_yaml, yaml_classifications = _read_admitted_yaml(downloaded, work_dir)
-        classifications = {**classifications, **yaml_classifications}
-
-        trivy_results, trivy_parse_errors = _run_trivy(work_dir)
-        checkov_report = _run_checkov(work_dir)
-        kics_report = _run_kics(work_dir)
-
-        findings = (
-            _normalize_trivy(trivy_results, pr_id, classifications)
-            + _normalize_checkov(checkov_report, pr_id, classifications)
-            + _normalize_kics(kics_report, work_dir, pr_id, classifications)
-        )
-        _cdk_origins(findings, _cdk_source_maps(ARTIFACTS_BUCKET, s3_prefix, downloaded, work_dir))
-        _pulumi_origins(findings, downloaded, work_dir)
-
-        kics_unparsed = _kics_unparsed_count(kics_report)
-        if kics_unparsed:
-            # A count without names, so it cannot join scan_errors. ARM and
-            # Bicep are covered there by _json_template_verdict and checkov anyway; this
-            # is here so the gap is visible in the log.
-            logger.warning("kics opened %d file(s) it could not parse", kics_unparsed)
-
-        scan_errors = sorted(
-            set(trivy_parse_errors)
-            | set(_checkov_parse_errors(checkov_report, work_dir))
-            # The languages neither tool reports on. Not redundant with the
-            # two above: see _unparseable_admitted_files.
-            | set(unparseable_yaml)
-            # An admitted .json that claims the ARM schema and will not parse.
-            # This one is ours, produced by json.loads, and does not depend on
-            # either tool choosing to report -- which for ARM neither does.
-            | set(unreadable_templates)
-        )
+        # The source maps are the one thing the scan needs from S3 beyond the
+        # snapshot, so they are fetched here and passed in: scan_directory
+        # itself touches no AWS service (docs/cli-spec.md §3.1).
+        findings, scan_errors = scan_directory(
+            work_dir, pr_id, downloaded, unreadable_templates, classifications,
+            cdk_source_maps=_cdk_source_maps(ARTIFACTS_BUCKET, s3_prefix, downloaded, work_dir))
         if scan_errors:
             # Reported, not raised: the other files in the snapshot scanned
             # fine and their findings are real. Raising would throw those away
@@ -546,6 +536,56 @@ def handler(event, context):
         return response
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def scan_directory(work_dir, pr_id, downloaded, unreadable_templates, classifications,
+                   cdk_source_maps=None):
+    """Scan the admitted files under `work_dir`: (findings, scan_errors).
+
+    The scan itself, with nothing either side of it -- no S3, no DynamoDB, no
+    metrics -- so the Lambda and local mode (docs/cli-spec.md §3.1) run the
+    same tools over the same inputs through one code path, and their results
+    can only differ if their inputs do. `downloaded`, `unreadable_templates`
+    and `classifications` are what _admit decided about each file;
+    `cdk_source_maps` is {template path: source map}, fetched from S3 by the
+    Lambda and built from the synth output by local mode.
+    """
+    # Before normalizing, because what a .yaml is has to be known by the
+    # time its findings are given a target_type.
+    unparseable_yaml, yaml_classifications = _read_admitted_yaml(downloaded, work_dir)
+    classifications = {**classifications, **yaml_classifications}
+
+    trivy_results, trivy_parse_errors = _run_trivy(work_dir)
+    checkov_report = _run_checkov(work_dir)
+    kics_report = _run_kics(work_dir)
+
+    findings = (
+        _normalize_trivy(trivy_results, pr_id, classifications)
+        + _normalize_checkov(checkov_report, pr_id, classifications)
+        + _normalize_kics(kics_report, work_dir, pr_id, classifications)
+    )
+    _cdk_origins(findings, cdk_source_maps or {})
+    _pulumi_origins(findings, downloaded, work_dir)
+
+    kics_unparsed = _kics_unparsed_count(kics_report)
+    if kics_unparsed:
+        # A count without names, so it cannot join scan_errors. ARM and
+        # Bicep are covered there by _json_template_verdict and checkov anyway; this
+        # is here so the gap is visible in the log.
+        logger.warning("kics opened %d file(s) it could not parse", kics_unparsed)
+
+    scan_errors = sorted(
+        set(trivy_parse_errors)
+        | set(_checkov_parse_errors(checkov_report, work_dir))
+        # The languages neither tool reports on. Not redundant with the
+        # two above: see _unparseable_admitted_files.
+        | set(unparseable_yaml)
+        # An admitted .json that claims the ARM schema and will not parse.
+        # This one is ours, produced by json.loads, and does not depend on
+        # either tool choosing to report -- which for ARM neither does.
+        | set(unreadable_templates)
+    )
+    return findings, scan_errors
 
 
 def _emit_metrics(metrics, dimensions, **context):
@@ -766,55 +806,81 @@ def _download_snapshot(bucket, prefix, dest_dir):
     without naming a target.
     """
     paginator = s3.get_paginator("list_objects_v2")
-    downloaded, unreadable_templates, classifications = [], [], {}
+    snapshot = Snapshot()
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]
-            admitted = key.endswith(SNAPSHOT_SUFFIXES)
-            # .template is checkov's own extension for a CloudFormation
-            # template and says nothing on its own, so it is sniffed like a
-            # .json rather than admitted on the name.
-            sniff_candidate = key.endswith((".json", ".template"))
-            if not admitted and not sniff_candidate:
+            if not _is_candidate(key):
                 continue
             rel_path = key[len(prefix):]
             local_path = os.path.join(dest_dir, rel_path)
             os.makedirs(os.path.dirname(local_path) or dest_dir, exist_ok=True)
             s3.download_file(bucket, key, local_path)
-            if key.endswith(".pulumi.plan.json"):
-                try:
-                    with open(local_path, encoding="utf-8") as fh:
-                        plan = json.load(fh)
-                    if (not isinstance(plan, dict) or plan.get("cascade_pulumi", {}).get("mode") != "mock"
-                            or not isinstance(plan.get("planned_values", {}).get("root_module", {}).get("resources"), list)
-                            or not isinstance(plan.get("configuration", {}).get("root_module", {}).get("resources"), list)):
-                        raise ValueError("invalid Pulumi plan")
-                except (ValueError, AttributeError, TypeError, OSError):
-                    os.remove(local_path)
-                    unreadable_templates.append(rel_path.replace(os.sep, "/"))
-                    continue
-                downloaded.append(local_path)
-                classifications[rel_path.replace(os.sep, "/")] = "pulumi"
-                continue
-            # An admitted suffix that is also sniffable (.tf.json, .tofu.json,
-            # .tfvars.json) is Terraform's and already named by its suffix;
-            # SUFFIX_TARGET_TYPES claims those before the sniff is consulted.
-            if admitted:
-                downloaded.append(local_path)
-                continue
-            try:
-                with open(local_path, encoding="utf-8") as fh:
-                    verdict = _json_template_verdict(fh.read())
-            except (OSError, UnicodeDecodeError):
-                verdict = "other"
-            if verdict in ("arm", "cloudformation"):
-                downloaded.append(local_path)
-                classifications[rel_path.replace(os.sep, "/")] = verdict
-                continue
+            snapshot.add(rel_path, local_path)
+    return snapshot.downloaded, snapshot.unreadable_templates, snapshot.classifications
+
+
+def _is_candidate(path):
+    """Worth fetching or copying at all: an admitted suffix, or one that is
+    sniffed after the read. .template is checkov's own extension for a
+    CloudFormation template and says nothing on its own, so it is sniffed
+    like a .json rather than admitted on the name."""
+    return path.endswith(SNAPSHOT_SUFFIXES) or path.endswith((".json", ".template"))
+
+
+def _admit(rel_path, local_path):
+    """What a candidate file on disk is: ("keep", classification or None),
+    ("unreadable", None), or ("drop", None).
+
+    The one rule for "what is a snapshot file", shared by the Lambda's
+    download and local mode's copy (docs/cli-spec.md §3.1), so the two scan
+    the same files. A file that is not kept is removed from disk here, not
+    merely left off the list, because checkov's secrets runner reads the
+    directory rather than our list."""
+    if rel_path.endswith(".pulumi.plan.json"):
+        try:
+            with open(local_path, encoding="utf-8") as fh:
+                plan = json.load(fh)
+            if (not isinstance(plan, dict) or plan.get("cascade_pulumi", {}).get("mode") != "mock"
+                    or not isinstance(plan.get("planned_values", {}).get("root_module", {}).get("resources"), list)
+                    or not isinstance(plan.get("configuration", {}).get("root_module", {}).get("resources"), list)):
+                raise ValueError("invalid Pulumi plan")
+        except (ValueError, AttributeError, TypeError, OSError):
             os.remove(local_path)
-            if verdict == "unreadable":
-                unreadable_templates.append(rel_path.replace(os.sep, "/"))
-    return downloaded, unreadable_templates, classifications
+            return "unreadable", None
+        return "keep", "pulumi"
+    # An admitted suffix that is also sniffable (.tf.json, .tofu.json,
+    # .tfvars.json) is Terraform's and already named by its suffix;
+    # SUFFIX_TARGET_TYPES claims those before the sniff is consulted.
+    if rel_path.endswith(SNAPSHOT_SUFFIXES):
+        return "keep", None
+    try:
+        with open(local_path, encoding="utf-8") as fh:
+            verdict = _json_template_verdict(fh.read())
+    except (OSError, UnicodeDecodeError):
+        verdict = "other"
+    if verdict in ("arm", "cloudformation"):
+        return "keep", verdict
+    os.remove(local_path)
+    return ("unreadable", None) if verdict == "unreadable" else ("drop", None)
+
+
+class Snapshot:
+    """The files a scan admitted, accumulated one at a time through _admit:
+    the three things scan_directory needs about them."""
+
+    def __init__(self):
+        self.downloaded, self.unreadable_templates, self.classifications = [], [], {}
+
+    def add(self, rel_path, local_path):
+        outcome, classification = _admit(rel_path, local_path)
+        rel = rel_path.replace(os.sep, "/")
+        if outcome == "keep":
+            self.downloaded.append(local_path)
+            if classification:
+                self.classifications[rel] = classification
+        elif outcome == "unreadable":
+            self.unreadable_templates.append(rel)
 
 
 def _pulumi_origins(findings, downloaded, work_dir):
