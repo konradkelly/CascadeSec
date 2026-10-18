@@ -11,8 +11,8 @@ terminal. That makes it a third interface next to the dashboard and the
 GitHub App, and it works against the review API that already exists.
 
 Written before building, 2026-09-25. Part of integrations-spec (phase A for
-local mode and pre-commit, phase B for remote). Track R steps 1-4 built
-(2026-10-18); track S not started.
+local mode and pre-commit, phase B for remote). Track R built (2026-10-18);
+track S not started.
 
 Revised 2026-10-13. Added review from the terminal (§10), and changed the
 authentication order (§11). Humans sign in with the existing Cognito pool
@@ -597,7 +597,11 @@ work. **S** (scan) needs no auth until remote mode.
    1 like any refusal. `edit` sends bytes as saved, so line endings survive,
    and keeps the file on disk when anything after the editor fails.
 5. `commit`, against the testbed PR, with a committer and a non-committer
-   account.
+   account. **Built 2026-10-18.** Every refusal the plan already implies --
+   write-back not deployed, not a committer, a request in flight -- is
+   reported after the plan is printed and before any prompt. A held request
+   exits 1 with each file's reason, a failed one 4, and a wait that times out
+   4 with the request id, since the request keeps running.
 
 **Track S: scan**
 

@@ -2,9 +2,10 @@
 
 CascadeSec from the terminal. Design: [docs/cli-spec.md](../docs/cli-spec.md).
 
-Built so far: signing in (`login`, `logout`, `whoami`), reading a PR's
-findings (`findings`, `show`), deciding on a fix (`approve`, `reject`,
-`edit`) and `version`. Committing comes next (spec §10, §13 track R).
+Built so far: track R of the spec (§10, §13) -- signing in (`login`,
+`logout`, `whoami`), reading a PR's findings (`findings`, `show`), deciding
+on a fix (`approve`, `reject`, `edit`), committing the approved ones
+(`commit`) -- and `version`. Scanning (track S) comes next.
 
 ## Set up
 
@@ -93,6 +94,30 @@ self-check reads as not passed until the next scan.
 Exit codes: 0 done, 1 refused by review-api with a reason, 2 usage or
 configuration (including an unknown finding id), 4 not signed in, auth or
 service error (spec §5, §10).
+
+## Commit the approved fixes
+
+```
+cascadesec commit konradkelly/cascadesec-testbed#5
+cascadesec commit gh-1388098412-5 --yes --expect-sha infra/lib/network.ts=09a2fbe6...
+```
+
+`commit` prints the plan first. For each file it shows the diff from the
+branch to the approved fixes, the fix chain with any link that never passed
+its self-check marked UNVERIFIED, the content's sha256, and what is held and
+why. Only then does it ask. What it confirms to review-api is exactly what
+it printed. If the plan moves before the request lands (another approval,
+an edit, a push), nothing is committed and the CLI says to look again; it
+never retries on its own. Without a terminal, `--yes` also needs an
+`--expect-sha` for every file the plan commits, so a script can only
+confirm content it was told about.
+
+Committing needs the `committers` group. That is checked before the prompt,
+not after, and someone just added to the group signs in again. The commit
+is made by the CascadeSec Fixes app and recorded as your request. The CLI
+waits for it (`--timeout`, default 300s; `--no-wait` to return once
+recorded) and prints the commit and each file's outcome. A request the
+committer held exits 1 with its reasons.
 
 ## Test
 

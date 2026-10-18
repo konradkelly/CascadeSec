@@ -337,6 +337,94 @@ def decision(result, out):
             out.line(f"    - {fid}    cascadesec show {result['pr_id']} {fid}")
 
 
+# ---------- commit (wording from dashboard/src/components/CommitPanel.tsx) ----------
+
+OUTCOME_LABELS = {"commit": "commit", "already": "already on the branch", "held": "held"}
+
+
+def commit_plan(plan, out):
+    """What a commit would do, per file -- printed before any question, so
+    what the person confirms is what they read."""
+    out.line(out.style(f"Commit plan for {plan['repository']}#{plan['pr_number']} ({plan['pr_id']})",
+                       "bold"))
+    out.wrap("A preview from the latest scan: each file is checked against the branch again "
+             "before anything is written, and one that has changed is held.")
+    files = plan.get("files") or []
+    if not files:
+        out.line()
+        out.line("  No approved fixes to commit.")
+    for f in files:
+        out.line()
+        colour = {"commit": "green", "held": "yellow"}.get(f["outcome"])
+        out.line(out.style(f"{f['file']}: {OUTCOME_LABELS.get(f['outcome'], f['outcome'])}",
+                           "bold", *([colour] if colour else [])))
+        if f.get("tip"):
+            out.line(f"  tip     {f['tip']}")
+        if f.get("content_sha256"):
+            out.line(f"  sha256  {f['content_sha256']}")
+        chain = f.get("chain") or []
+        if chain:
+            links = [f"{c['rule_id']} ({c['finding_id']})" + (", edited" if c.get("edited") else "")
+                     + ("" if c.get("verified") else ", UNVERIFIED") for c in chain]
+            out.wrap("chain   " + " -> ".join(links), indent=2, hang=8)
+        if f.get("reason"):
+            out.wrap(f"Held: {f['reason']}", indent=2, hang=6)
+        if f.get("left_out"):
+            out.wrap(f"Approved but not included: {', '.join(f['left_out'])} -- drafted on a fix "
+                     "that is not approved.", indent=2)
+        if f.get("diff"):
+            diff_lines(out, f["diff"])
+
+    committing = [f for f in files if f["outcome"] == "commit"]
+    unverified = [c["rule_id"] for f in committing for c in f.get("chain") or [] if not c.get("verified")]
+    out.line()
+    if unverified:
+        n = len(unverified)
+        out.wrap(out.style(
+            f"! {n} fix{' was' if n == 1 else 'es were'} approved without passing the self-check "
+            f"({', '.join(unverified)}): edited, or held for review. They are committed and labelled "
+            "unverified in the commit message; the scan of the commit's push is their check.",
+            "yellow"), indent=0)
+    if committing:
+        out.wrap(f"This commits {len(committing)} file{'' if len(committing) == 1 else 's'} to the "
+                 f"branch of {plan['repository']}#{plan['pr_number']}, exactly as the diffs above "
+                 "show, as the CascadeSec Fixes app. The request is recorded as yours; the commit "
+                 "itself does not name you.", indent=0)
+    latest = plan.get("latest_request")
+    if latest:
+        out.line(out.style(f"Latest request: {latest.get('request_id')} by "
+                           f"{latest.get('requested_by')}: {latest.get('status')}", "dim"))
+
+
+def commit_result(result, out):
+    status = result.get("status")
+    if status == "nothing-to-commit":
+        out.line("Nothing to commit.")
+        return
+    if not result.get("recorded", True):
+        out.line("Nothing committed.")
+        return
+    line = f"Commit request {result.get('request_id')}: {status}"
+    if result.get("commit_sha"):
+        line += f" in {result['commit_sha'][:7]}"
+    out.line(out.style(line, "bold"))
+    if result.get("commit_sha"):
+        out.line(f"  https://github.com/{result['repository']}/commit/{result['commit_sha']}")
+    if status in ("requested", "committing"):
+        out.line(f"  Still running; `cascadesec commit {result['pr_id']}` shows it as the latest request.")
+    if result.get("reason"):
+        out.wrap(result["reason"])
+    for f in result.get("files") or []:
+        text = f"{f['file']}: {OUTCOME_LABELS.get(f['outcome'], f['outcome'])}"
+        if f.get("outcome") == "committed":
+            text = f"{f['file']}: committed"
+        if f.get("reason"):
+            text += f" ({f['reason']})"
+        if f.get("unverified"):
+            text += f"; unverified: {', '.join(f['unverified'])}"
+        out.wrap(f"- {text}", indent=2, hang=2)
+
+
 def _alert(out, headline, body, items=(), colour="yellow"):
     out.line()
     out.line("  " + out.style("! " + headline, "bold", colour))
