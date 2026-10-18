@@ -1,3 +1,5 @@
+![CascadeSec: a pixel-art terminal running cascadesec scan, the wordmark shaded cyan to green, and a cascade of steps ending in a check](docs/images/cascadesec-banner.svg)
+
 # CascadeSec
 
 **Infrastructure-as-code security scanning with AI-drafted fixes that prove themselves before a human sees them. Runs on serverless AWS and inside the GitHub pull request.**
