@@ -12,7 +12,7 @@ GitHub App, and it works against the review API that already exists.
 
 Written before building, 2026-09-25. Part of integrations-spec (phase A for
 local mode and pre-commit, phase B for remote). Track R built (2026-10-18);
-track S steps 1-2 built (2026-10-18).
+track S steps 1-3 built (2026-10-18).
 
 Revised 2026-10-13. Added review from the terminal (§10), and changed the
 authentication order (§11). Humans sign in with the existing Cognito pool
@@ -133,7 +133,10 @@ docker run --rm --network none --read-only --tmpfs /tmp \
   is the property the eval's numbers depend on (corpus/eval/README.md).
 - **Published** by `build-image.sh` to GHCR as well as ECR, copied by digest
   (`crane copy`) so both registries hold one manifest **(verify: digest is
-  preserved across a registry copy)**. The image is public. It contains
+  preserved across a registry copy)**. `build-image.sh --ghcr` copies with
+  `docker buildx imagetools create` from ECR by digest and fails unless GHCR
+  then reports the same one; ECR's digest is already what the Lambda
+  resolves (`ResolvedImageUri`). The image is public. It contains
   nothing that the Dockerfile and `checks/` don't already publish.
 - **No Docker?** The CLI fails with a message that says so. There is no
   fallback to locally installed Trivy or Checkov: a different version fires
@@ -169,6 +172,31 @@ over about 20s on a laptop, the handler's own TODO (import checkov's
 Terraform runner in-process) becomes a phase A prerequisite, not a nicety.
 The IDE extension's long-lived daemon (ide-extension-spec §3) exists for
 the same reason.
+
+**Measured 2026-10-18**, the image run as §3.2 says (`--network none
+--read-only --tmpfs /tmp`), cold each time, on Docker Desktop for Windows
+with 16 CPUs and 9 GB for the VM:
+
+| Target | Files | Findings | Wall time |
+|---|---|---|---|
+| one eval case (`s3-no-encryption`) | 1 | 15 | 10.9s |
+| argocd-example-apps | 71 | 832 | 9.8s |
+| kubernetes-goat | 29 | 591 | 10.6s |
+| terragoat `terraform/aws` | 14 | 333 | 17.7s |
+| microservices-demo | 112 | 618 | 20.0s |
+| terraform-aws-vpc | 83 | 58 | 81.3s |
+
+The 11-second floor is about half container start and mount, half
+Checkov (4.5s on one file, mostly its own import; Trivy 0.7s; KICS does
+not run without ARM or CloudFormation). terraform-aws-vpc is Checkov's
+module expansion, as in Lambda (139-265s there). Importing Checkov's
+runner in-process would not lower the floor: a fresh container imports it
+on every run either way. So **pre-commit ships as `stages: [pre-push]`**
+(D6), with pre-commit opt-in, and the daemon is the latency fix.
+
+Every finding count matches the deployed pipeline's on the same pinned
+commits (`corpus/external`, 2026-10-11), and argocd's one scan error is
+the same file, so local and remote results agree as §3.2 requires.
 
 ### 3.5 Apps that must run before they can be scanned
 
@@ -570,7 +598,7 @@ to protect yet.
 | D3 | Tarball upload and an `unpack` state, rather than per-file presigned URLs (§4.2) | Proposed: reuses the gateway's safety code, one request |
 | D4 | `--fail-on high` default (§5) | Proposed |
 | D5 | Baseline committed to the repository, with a server copy optional (§6) | Proposed |
-| D6 | Pre-commit on commit or on push | **Open** until §3.4 is measured |
+| D6 | Pre-commit on commit or on push | Proposed 2026-10-18: on push by default, commit opt-in; §3.4 measured 10-20s typical, 81s worst |
 | D7 | Phase H (Cognito, people only) before phase M (machine auth) (§11) | Proposed 2026-10-13: no auth code to write until there's a credential to protect |
 | D8 | `GET /prs` listing route for `cascadesec prs` (§10) | **Open**: useful, but it's review-api's first cross-PR read, and with no tenancy it lists every PR to everyone |
 | D9 | Review commands in the CLI at all (§10) | Proposed 2026-10-13: thin over existing routes; the API keeps every rule |
@@ -628,7 +656,11 @@ work. **S** (scan) needs no auth until remote mode.
    fingerprints held. Four pairs share one, each the documented limit (one
    rule, one resource, two lines of it).
 3. `local_main.py` with app detection (§3.5 stage 1), then GHCR
-   publishing, then the §3.4 measurement.
+   publishing, then the §3.4 measurement. **Built 2026-10-18**, except the
+   first GHCR publish, which needs `write:packages` and makes a public
+   package. App roots are reported in their own `unscanned_apps` field
+   rather than mixed into `scan_errors`, which lists files; the CLI exits 3
+   for either.
 4. CLI local mode: table, json, and exit codes, with candidates and raw
    reasons (§3.3). SARIF comes with sarif-spec.
 5. Baseline, `--changed-only` and `skip_apps`.

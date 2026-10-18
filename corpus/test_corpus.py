@@ -348,7 +348,7 @@ def test_both_uploaders_skip_the_same_directories_including_cdk_out():
     wrote them."""
     copies = {}
     for rel in ("scripts/scan.py", "corpus/external/run_external.py",
-                "lambda/github-gateway/handler.py"):
+                "lambda/github-gateway/handler.py", "lambda/iac-scanner/local_main.py"):
         source = (CORPUS.parent / rel).read_text(encoding="utf-8")
         found = re.search(r"^SKIP_DIRS = (\{.*?\})$", source, re.S | re.M)
         assert found, f"{rel}: no SKIP_DIRS"
