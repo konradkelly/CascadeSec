@@ -103,6 +103,22 @@ def test_a_callback_with_the_wrong_state_is_refused(settings, backend, monkeypat
     assert hits["status"] == 400
 
 
+def test_signing_in_again_straight_away_keeps_the_first_port(settings, backend, monkeypatch):
+    """A served callback leaves the port in TIME_WAIT on Linux and macOS.
+    Without SO_REUSEADDR there, a second login within a minute moved to the
+    next port and a third found none (CI caught it: this file runs logins
+    back to back, and only the Linux job failed)."""
+    monkeypatch.setattr(auth, "_post_form", TokenEndpoint([tokens(), tokens()]))
+    store = SessionStore(settings.auth_domain, settings.client_id, backend=backend)
+    seen = []
+    for _ in range(2):
+        open_url, _ = browser_that_follows_redirect()
+        auth.login(settings, store, open_url=lambda url: (seen.append(url), open_url(url)),
+                   out=lambda _: None)
+
+    assert [f"localhost%3A{auth.CALLBACK_PORTS[0]}" in url for url in seen] == [True, True]
+
+
 def test_a_busy_port_moves_to_the_next(settings, backend, monkeypatch):
     blocker = auth._bind_both(auth.CALLBACK_PORTS[0])
     assert blocker, "first callback port already in use on this machine"

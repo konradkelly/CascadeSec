@@ -32,6 +32,7 @@ import errno
 import hashlib
 import http.server
 import json
+import os
 import secrets
 import socket
 import sys
@@ -261,10 +262,18 @@ class _Listener:
 
 
 class _Server(http.server.HTTPServer):
-    # Off, so a port another process holds is seen as taken. On Windows,
-    # SO_REUSEADDR would let this bind on top of it; SO_EXCLUSIVEADDRUSE also
-    # stops anything binding on top of us.
-    allow_reuse_address = False
+    # A port another process holds must read as taken, and the two systems
+    # need opposite settings to get that:
+    #
+    #   - Windows: SO_REUSEADDR would let this bind on top of a live
+    #     listener, so it stays off, and SO_EXCLUSIVEADDRUSE also stops
+    #     anything binding on top of us.
+    #   - Linux and macOS: SO_REUSEADDR never permits a second listener on
+    #     the same address, but without it a port this process just served a
+    #     callback on sits in TIME_WAIT for about a minute and cannot be
+    #     bound. Off, a second `login` within a minute skipped 47811, and a
+    #     third ran out of ports (seen in CI, which runs logins back to back).
+    allow_reuse_address = os.name != "nt"
 
     def server_bind(self):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
