@@ -3,7 +3,7 @@
 Built so far: track R (§13) -- the skeleton, signing a person in, reading a
 PR's findings (`findings`, `show`), deciding on a fix (`approve`, `reject`,
 `edit`), and committing the approved ones (`commit`) -- and from track S,
-`scan` in local mode. Commands that don't exist yet aren't registered, so
+`scan` in local mode with its baseline (`baseline`). Commands that don't exist yet aren't registered, so
 `--help` lists only what works.
 
 Results go to stdout in --format; progress, prompts and errors go to stderr,
@@ -20,7 +20,7 @@ import sys
 import time
 from datetime import datetime
 
-from cascadesec import __version__, api, auth, config, editor, prs, render, review
+from cascadesec import __version__, api, auth, baseline, config, editor, prs, render, review
 from cascadesec import commit as committing
 from cascadesec import scan as scanning
 from cascadesec.errors import OK, REFUSED, USAGE, CliError
@@ -67,6 +67,23 @@ def build_parser():
                                       "then the image this CLI pins)")
     scan.add_argument("--output", metavar="FILE",
                       help="also write the result to FILE in --format (json if not given)")
+    scan.add_argument("--baseline", metavar="FILE",
+                      help=f"findings to leave out of the verdict (default: PATH/{baseline.FILE} if present)")
+    scan.add_argument("--no-baseline", action="store_true", help="ignore the baseline file")
+    scan.add_argument("--changed-only", metavar="REV",
+                      help="report only what is in files changed since REV (git diff --name-only REV, "
+                           "plus new untracked files)")
+
+    base = commands.add_parser(
+        "baseline", help=f"write {baseline.FILE}: the findings to accept for now",
+        description=f"Scan PATH and write {baseline.FILE}, which `scan` then leaves out of its "
+                    "verdict. Commit it: adding to it is a decision reviewed in a diff. --prune "
+                    "removes entries that no longer fire, and adds nothing.")
+    base.add_argument("path", nargs="?", default=".", help="the directory to scan (default: here)")
+    base.add_argument("--prune", action="store_true",
+                      help="only remove entries that no longer fire; add nothing new")
+    base.add_argument("--file", metavar="FILE", help=f"where to write it (default: PATH/{baseline.FILE})")
+    base.add_argument("--image", help="the scanner image (as for scan)")
 
     pr_help = "the PR: owner/repo#123, its GitHub URL, or a review-api id such as gh-1352957770-50"
     findings = commands.add_parser(
@@ -243,8 +260,17 @@ def cmd_scan(args, ctx):
         raise CliError(f"{args.path} is not a directory", USAGE)
     print(f"cascadesec: scanning {os.path.abspath(args.path)} in {image_ref} (no network)",
           file=sys.stderr)
+    # Before the scan, so a mistake in .cascadesec.toml or the baseline
+    # costs a moment rather than a whole scan.
+    settings = config.load(cwd=args.path, env=ctx.env)
+    path = None if args.no_baseline else (args.baseline or baseline.default_path(args.path))
+    document = baseline.load(path) if path else None
+    if args.baseline and document is None:
+        raise CliError(f"--baseline {args.baseline}: no such file", USAGE)
     result = scanning.run_scanner(args.path, image_ref, run=ctx.run)
-    summary = scanning.summarise(result, args.path, image_ref, args.fail_on, args.allow_scan_errors)
+    result, held_back = _hold_back(args, ctx, result, image_ref, settings, path, document)
+    summary = {**scanning.summarise(result, args.path, image_ref, args.fail_on, args.allow_scan_errors),
+               **held_back}
     if args.output:
         with open(args.output, "w", encoding="utf-8", newline="\n") as fh:
             if (args.format or "json") == "json":
@@ -462,6 +488,61 @@ def cmd_commit(args, ctx):
             "_exit": committing.outcome_code(record)}
 
 
+def _hold_back(args, ctx, result, image_ref, settings, path, document):
+    """What leaves the verdict, in order: apps skip_apps names, everything
+    outside --changed-only, then baselined findings. Each is counted, so
+    nothing leaves silently (cli-spec §6). The baseline's fixed list is
+    taken from the full scan, before --changed-only: a finding in a file
+    nobody touched has not been fixed for having been left out."""
+    full = result.get("findings") or []
+    result, skipped = baseline.skip_apps(result, args.path, settings.skip_apps)
+
+    outside = 0
+    if args.changed_only:
+        changed = baseline.changed_files(args.path, args.changed_only, run=ctx.run)
+        result, outside = baseline.scope_to_changes(result, changed)
+
+    kept, suppressed, _ = baseline.apply(result.get("findings") or [], document)
+    _, _, fixed = baseline.apply(full, document)
+    if document is not None and not baseline.same_image(document, image_ref):
+        print(f"cascadesec: the baseline was written with {document.get('scanner_image')}, and this "
+              f"scan ran {image_ref}; a newer rule version can fire findings that are not "
+              "regressions", file=sys.stderr)
+    return {**result, "findings": kept}, {
+        "baseline": str(path) if document is not None else None,
+        "baselined_count": len(suppressed),
+        "baseline_fixed": fixed,
+        "changed_only": args.changed_only,
+        "outside_changes_count": outside,
+        "skipped_apps": [{k: a[k] for k in ("path", "kind", "reason", "source")} for a in skipped],
+    }
+
+
+def cmd_baseline(args, ctx):
+    image_ref = scanning.image(args.image, ctx.env)
+    if not os.path.isdir(args.path):
+        raise CliError(f"{args.path} is not a directory", USAGE)
+    target = args.file or baseline.default_path(args.path)
+    existing = baseline.load(target)
+    if args.prune and existing is None:
+        raise CliError(f"{target}: no baseline to prune; write one with `cascadesec baseline`", USAGE)
+    print(f"cascadesec: scanning {os.path.abspath(args.path)} in {image_ref} (no network)",
+          file=sys.stderr)
+    result = scanning.run_scanner(args.path, image_ref, run=ctx.run)
+    findings = result.get("findings") or []
+    entries = baseline.prune(existing, findings) if args.prune else baseline.entries_for(findings)
+    before = {e["fingerprint"] for e in (existing or {}).get("findings", [])}
+    after = {e["fingerprint"] for e in entries}
+    baseline.write(target, entries, image_ref)
+    incomplete = bool(result.get("scan_errors") or result.get("unscanned_apps"))
+    if incomplete:
+        print("cascadesec: the scan was incomplete, so the baseline holds nothing for the files "
+              "that did not parse or the apps that were not run; their findings will appear as new "
+              "once they are scanned", file=sys.stderr)
+    return {"baseline": str(target), "entries": len(entries), "added": len(after - before),
+            "removed": len(before - after), "scanner_image": image_ref, "scan_incomplete": incomplete}
+
+
 def _ask(text):
     sys.stderr.write(text)
     sys.stderr.flush()
@@ -493,6 +574,7 @@ COMMANDS = {
     "edit": cmd_edit,
     "commit": cmd_commit,
     "scan": cmd_scan,
+    "baseline": cmd_baseline,
 }
 
 # Commands whose table format is more than key/value lines.
@@ -505,6 +587,7 @@ RENDERERS = {
     "edit": lambda result, out: render.decision(result, out),
     "commit": lambda result, out: render.commit_result(result, out),
     "scan": lambda result, out: render.scan_result(result, out),
+    "baseline": lambda result, out: render.baseline_result(result, out),
 }
 
 
@@ -522,6 +605,11 @@ TABLE_LABELS = {
     "deployment": "Deployment",
     "cli": "cascadesec",
     "scanner_image": "Scanner image",
+    "baseline": "Baseline",
+    "entries": "Entries",
+    "added": "Added",
+    "removed": "Removed",
+    "scan_incomplete": "Scan incomplete",
 }
 
 

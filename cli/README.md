@@ -5,7 +5,7 @@ CascadeSec from the terminal. Design: [docs/cli-spec.md](../docs/cli-spec.md).
 Built so far: track R of the spec (§10, §13) -- signing in (`login`,
 `logout`, `whoami`), reading a PR's findings (`findings`, `show`), deciding
 on a fix (`approve`, `reject`, `edit`), committing the approved ones
-(`commit`) -- `scan` in local mode, and `version`.
+(`commit`) -- `scan` in local mode with its `baseline`, and `version`.
 
 ## Set up
 
@@ -144,6 +144,32 @@ at or above it, 3 incomplete (a file did not parse, or an app was not run;
 `--allow-scan-errors` reports the findings' result instead), 2 usage or no
 Docker, 4 the scanner image failed. Checkov rates no severity, so its
 findings count only with `--fail-on any`.
+
+### On a repository that already has findings
+
+```
+cascadesec baseline                       # write .cascadesec-baseline.json; commit it
+cascadesec scan                           # leaves the baselined findings out, and counts them
+cascadesec scan --changed-only main       # only files changed since main (and new ones)
+cascadesec baseline --prune               # drop entries that no longer fire; adds nothing
+```
+
+The baseline holds each finding's fingerprint, which does not change when
+lines move, so a baselined finding stays baselined when code is added above
+it. Adding to the baseline is a decision reviewed in its diff: `scan` never
+adds to it, and `--prune` only removes. A baselined finding that stops
+firing is listed as fixed, and a baseline written with another scanner image
+gets a warning, because a newer rule version can fire findings that are not
+regressions.
+
+An app local mode cannot run can be skipped in the repository's
+`.cascadesec.toml`, with a reason:
+
+```toml
+[[skip_apps]]
+path = "platforms/lab-cdk"
+reason = "Throwaway lab environment; never deployed"
+```
 
 Until the image is published, build it and point the CLI at it:
 

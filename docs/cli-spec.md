@@ -12,7 +12,7 @@ GitHub App, and it works against the review API that already exists.
 
 Written before building, 2026-09-25. Part of integrations-spec (phase A for
 local mode and pre-commit, phase B for remote). Track R built (2026-10-18);
-track S steps 1-4 built (2026-10-18).
+track S steps 1-5 built (2026-10-22).
 
 Revised 2026-10-13. Added review from the terminal (§10), and changed the
 authentication order (§11). Humans sign in with the existing Cognito pool
@@ -671,7 +671,16 @@ work. **S** (scan) needs no auth until remote mode.
    until the core is shared (portable-runtime-spec §8). On terragoat: 251 of
    333 findings with candidates, 55 raw no-control and 27 hygiene, which
    matches the pipeline's own counts after the 2026-10-11 triage.
-5. Baseline, `--changed-only` and `skip_apps`.
+5. Baseline, `--changed-only` and `skip_apps`. **Built 2026-10-22.** Live on
+   a copy of terragoat: with every line shifted down by one and a new public
+   bucket added, all 333 baselined findings stayed suppressed and only the
+   bucket's 17 were reported. Three choices the spec left open:
+   `--changed-only` scopes parse errors and unscanned apps as well as
+   findings, so a file nobody touched cannot make a change incomplete; the
+   baseline's "fixed" list is taken from the full scan, because a finding
+   left out by `--changed-only` has not been fixed; and `skip_apps` is read
+   only from the repository's file, resolved against that file's directory,
+   with a reason required.
 6. Pre-commit hook.
 7. `scan-api` and `unpack` under `/v1` on the JWT authorizer (phase H).
    Then remote mode, `--fix` and `--apply` for a signed-in person.
