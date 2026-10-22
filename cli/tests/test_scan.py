@@ -85,6 +85,11 @@ def test_no_docker_says_so_and_never_falls_back(tmp_path, monkeypatch, capsys):
 @pytest.mark.parametrize("docker,code,words", [
     (FakeDocker(returncode=1, stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock"),
      2, "not running"),
+    # Docker Desktop on Windows, stopped: the real message, 2026-10-22.
+    (FakeDocker(returncode=1, stderr="failed to connect to the docker API at "
+                "npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the "
+                "daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot find "
+                "the file specified."), 2, "not running"),
     (FakeDocker(returncode=125, stderr="Unable to find image 'x:1' locally\npull access denied"), 4, "exited 125"),
     (FakeDocker(stdout="not json"), 4, "other than its JSON"),
 ])

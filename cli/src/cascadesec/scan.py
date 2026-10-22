@@ -30,6 +30,13 @@ from cascadesec.errors import INCOMPLETE, OK, REFUSED, SERVICE, USAGE, CliError
 SCANNER_IMAGE = "ghcr.io/konradkelly/cascadesec-scanner:latest"
 
 FAIL_ON = ("critical", "high", "medium", "low", "any", "none")
+
+# How the Docker client says the engine is not there. Linux and macOS name
+# the daemon; Docker Desktop on Windows names its named pipe instead
+# (measured 2026-10-22: "failed to connect to the docker API at
+# npipe:////./pipe/dockerDesktopLinuxEngine"). Matched lower-case.
+DAEMON_DOWN = ("cannot connect to the docker daemon", "docker daemon is not running",
+               "failed to connect to the docker api", "error during connect")
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 
@@ -57,7 +64,7 @@ def run_scanner(path, image_ref, run=None, which=None):
                  encoding="utf-8", errors="replace")
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
-        if "Cannot connect to the Docker daemon" in stderr or "docker daemon is not running" in stderr.lower():
+        if any(sign in stderr.lower() for sign in DAEMON_DOWN):
             raise CliError("Docker is installed but not running; start it and scan again", USAGE)
         tail = "\n".join(stderr.splitlines()[-5:])
         raise CliError(f"the scanner image exited {result.returncode}:\n{tail}", SERVICE)

@@ -48,6 +48,10 @@ class Settings:
     auth_domain: str | None = None
     client_id: str | None = None
     project: str | None = None
+    # [[skip_apps]] from the repository's file: apps local mode is told not
+    # to report as unscanned (cli-spec §3.5), each with the reason someone
+    # wrote down. {"path": absolute Path, "reason": str, "source": file}.
+    skip_apps: list = field(default_factory=list)
     # key -> where its value came from, so an error can name the file to fix.
     sources: dict = field(default_factory=dict)
 
@@ -88,16 +92,17 @@ def find_repo_file(start):
 def load(cwd=None, env=None):
     env = os.environ if env is None else env
     settings = Settings()
-    for path in (user_config_path(env), find_repo_file(cwd or os.getcwd())):
+    repo_file = find_repo_file(cwd or os.getcwd())
+    for path in (user_config_path(env), repo_file):
         if path is not None and path.is_file():
-            _apply_file(settings, path)
+            _apply_file(settings, path, repository=path == repo_file)
     for key, var in SERVER_KEYS.items():
         if env.get(var):
             _set(settings, key, env[var], f"${var}")
     return settings
 
 
-def _apply_file(settings, path):
+def _apply_file(settings, path, repository=False):
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
@@ -118,6 +123,31 @@ def _apply_file(settings, path):
     if "project" in data:
         settings.project = data["project"]
         settings.sources["project"] = str(path)
+    if "skip_apps" in data:
+        if not repository:
+            raise CliError(f"{path}: skip_apps belongs in a repository's {REPO_FILE}, where skipping "
+                           "an app is reviewed with the code, not in your own settings", USAGE)
+        settings.skip_apps = _skip_apps(data["skip_apps"], path)
+
+
+def _skip_apps(entries, path):
+    """[[skip_apps]] path = "...", reason = "...". The reason is required: an
+    app skipped with no reason is a gate quietly disabled, which is what the
+    baseline's visible-in-a-diff rule exists to prevent (§6)."""
+    if not isinstance(entries, list):
+        raise CliError(f"{path}: skip_apps must be an array of tables ([[skip_apps]])", USAGE)
+    apps = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise CliError(f"{path}: each [[skip_apps]] entry is a table", USAGE)
+        app, reason = entry.get("path"), entry.get("reason")
+        if not isinstance(app, str) or not app.strip():
+            raise CliError(f"{path}: a [[skip_apps]] entry needs a path", USAGE)
+        if not isinstance(reason, str) or not reason.strip():
+            raise CliError(f"{path}: skip_apps entry {app!r} needs a reason", USAGE)
+        apps.append({"path": (path.parent / app.strip()).resolve(), "reason": reason.strip(),
+                     "source": str(path)})
+    return apps
 
 
 def _credential_key(data, prefix=""):

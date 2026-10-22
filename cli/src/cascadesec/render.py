@@ -464,6 +464,8 @@ def scan_result(result, out):
     else:
         out.line("No findings.")
 
+    _held_back(result, out)
+
     errors = result.get("scan_errors") or []
     if errors:
         out.line()
@@ -492,3 +494,40 @@ def scan_result(result, out):
         if unrated:
             verdict += f"; {unrated} with no severity (checkov rates none) count only with --fail-on any"
     out.wrap(out.style(f"Exit {code}: {verdict}.", "bold"), indent=0)
+
+
+def _held_back(result, out):
+    """Everything the verdict left out, counted (cli-spec §6: never silently)."""
+    if result.get("changed_only"):
+        n = result.get("outside_changes_count", 0)
+        out.line()
+        out.wrap(f"Only files changed since {result['changed_only']}: {n} finding{'' if n == 1 else 's'} "
+                 "in other files left out. A change can still make an untouched file newly "
+                 "vulnerable; a full scan is the check for that.", indent=0)
+    if result.get("baseline"):
+        n = result.get("baselined_count", 0)
+        out.line()
+        out.line(f"Baseline {result['baseline']}: {n} known finding{'' if n == 1 else 's'} left out.")
+        fixed = result.get("baseline_fixed") or []
+        if fixed:
+            out.line(out.style(f"  {len(fixed)} baselined finding{'' if len(fixed) == 1 else 's'} no "
+                               "longer fire; `cascadesec baseline --prune` removes them:", "green"))
+            for e in fixed[:10]:
+                out.line(f"    {e.get('source')} {e.get('rule_id')}  {e.get('file')}")
+            if len(fixed) > 10:
+                out.line(f"    ... and {len(fixed) - 10} more")
+    skipped = result.get("skipped_apps") or []
+    if skipped:
+        out.line()
+        out.line(f"Skipped by .cascadesec.toml ({len(skipped)}):")
+        for a in skipped:
+            out.wrap(f"- {a['path']} ({a['kind']}): {a['reason']}", indent=4, hang=2)
+
+
+def baseline_result(result, out):
+    verb = "Wrote"
+    out.line(out.style(f"{verb} {result['baseline']}: {result['entries']} "
+                       f"entr{'y' if result['entries'] == 1 else 'ies'} "
+                       f"(+{result['added']} -{result['removed']})", "bold"))
+    out.wrap("Commit it: `cascadesec scan` leaves these out of its verdict, and adding to it is a "
+             "decision reviewed in the diff.", indent=0)
