@@ -12,12 +12,21 @@ The scoping is S5's: scope_to_changes and the baseline are the same calls
 decide differently about one file. It runs the same pinned image, under
 --network none, through scan.run_scanner.
 
+Two hooks run it (.pre-commit-hooks.yaml). `cascadesec` is the installed
+CLI, which starts the image. `cascadesec-docker` is pre-commit starting the
+image itself, with this same command inside it: there it cannot start a
+container, so it calls local_main's scan in-process instead
+(CASCADESEC_IN_IMAGE, set by the Dockerfile). Everything after the scan --
+scoping, baseline, verdict -- is one code path for both.
+
 It ships as `stages: [pre-push]` by default (decision D6): a cold local
 scan takes 10-20 seconds, and 81 on module-heavy Terraform (§3.4), which a
 commit-time hook would make every commit pay.
 """
 
+import contextlib
 import os
+import sys
 from pathlib import PurePosixPath
 
 from cascadesec import baseline
@@ -51,17 +60,34 @@ def docker_command(root, image_ref, dirs):
     return command
 
 
+def scan_in_image(root, dirs):
+    """The scan, in this process, when this process is already the scanner
+    image. local_main lives in the Lambda task root, beside handler.py."""
+    task_root = os.environ.get("LAMBDA_TASK_ROOT", "/var/task")
+    if task_root not in sys.path:
+        sys.path.insert(0, task_root)
+    import local_main  # noqa: PLC0415 -- only importable inside the image
+
+    corpus = local_main.load_corpus()
+    # stdout carries the hook's table; the tools' chatter goes to stderr.
+    with contextlib.redirect_stdout(sys.stderr):
+        return local_main.scan(root, corpus=corpus, only_dirs=set(dirs))
+
+
 def run(files, root, image_ref, fail_on, allow_scan_errors, baseline_path, skips=(), run=None,
-        which=None):
+        which=None, in_image=False):
     """The summary `scan` would print for these files, with its exit code."""
     staged = staged_paths(files, root)
     if not staged:
         return None
     dirs = directories(staged)
     document = baseline.load(baseline_path) if baseline_path else None
-    result = scanning.run_scanner(
-        root, image_ref, run=run, which=which,
-        command=docker_command(os.path.abspath(root), image_ref, dirs))
+    if in_image:
+        result = scan_in_image(root, dirs)
+    else:
+        result = scanning.run_scanner(
+            root, image_ref, run=run, which=which,
+            command=docker_command(os.path.abspath(root), image_ref, dirs))
     full = result.get("findings") or []
     result, skipped = baseline.skip_apps(result, root, list(skips))
     scoped, outside = baseline.scope_to_changes(result, staged)

@@ -133,3 +133,29 @@ def test_the_hook_prints_the_table_even_without_a_terminal(repo):
     assert out.startswith("CascadeSec checked")
     _, out = run(["--format", "json", "hook", "s3.tf"], repo, FakeDocker([finding("a", "s3.tf")]))
     assert json.loads(out)["exit_code"] == 1
+
+
+def test_inside_the_image_it_scans_in_process_with_the_same_verdict(repo, monkeypatch):
+    """The docker_image hook runs this command in the scanner image, where
+    it cannot start a container: it calls local_main directly, and judges
+    the result exactly as the installed CLI's hook would."""
+    import sys
+    import types
+
+    seen = {}
+    fake_local_main = types.SimpleNamespace(
+        load_corpus=lambda: "corpus",
+        scan=lambda root, corpus, only_dirs: seen.update(root=root, dirs=only_dirs) or {
+            "scanned_files": 2, "scan_errors": [], "unscanned_apps": [],
+            "findings": [finding("a", "s3.tf"), finding("b", "other.tf")]})
+    monkeypatch.setitem(sys.modules, "local_main", fake_local_main)
+    docker = FakeDocker()
+    out = io.StringIO()
+    code = cli.main(["--format", "json", "hook", "s3.tf"], stdout=out,
+                    env={"CASCADESEC_IN_IMAGE": "1"}, cwd=repo, run=docker)
+
+    result = json.loads(out.getvalue())
+    assert docker.calls == []                              # no container from inside one
+    assert seen["dirs"] == {"."}
+    assert code == 1 and [f["fingerprint"] for f in result["findings"]] == ["a"]
+    assert result["scanner_image"] == "this container"
