@@ -498,7 +498,12 @@ def scan_result(result, out):
 
 def _held_back(result, out):
     """Everything the verdict left out, counted (cli-spec §6: never silently)."""
-    if result.get("changed_only"):
+    if result.get("hook_files"):
+        n = result.get("outside_changes_count", 0)
+        out.line()
+        out.wrap(f"Judged only the changed files: {n} finding{'' if n == 1 else 's'} elsewhere in "
+                 "their directories left out, since they were there before this change.", indent=0)
+    elif result.get("changed_only"):
         n = result.get("outside_changes_count", 0)
         out.line()
         out.wrap(f"Only files changed since {result['changed_only']}: {n} finding{'' if n == 1 else 's'} "
@@ -531,3 +536,19 @@ def baseline_result(result, out):
                        f"(+{result['added']} -{result['removed']})", "bold"))
     out.wrap("Commit it: `cascadesec scan` leaves these out of its verdict, and adding to it is a "
              "decision reviewed in the diff.", indent=0)
+
+
+def hook_result(result, out):
+    """The hook's output is read when pre-commit fails, so it leads with the
+    files it judged and ends with what to do."""
+    if result.get("_nothing"):
+        return
+    files = result.get("hook_files") or []
+    out.line(out.style(f"CascadeSec checked {len(files)} changed file{'' if len(files) == 1 else 's'} "
+                       f"({result.get('_scanned_findings', 0)} findings in their directories, "
+                       f"{len(result.get('findings') or [])} in the files themselves)", "bold"))
+    scan_result({**result, "path": "the changed files' directories"}, out)
+    if result["exit_code"]:
+        out.line()
+        out.wrap("Fix them, or accept them for now with `cascadesec baseline` and commit the "
+                 "baseline. Skipping the hook once: `git push --no-verify`.", indent=0)

@@ -12,7 +12,7 @@ GitHub App, and it works against the review API that already exists.
 
 Written before building, 2026-09-25. Part of integrations-spec (phase A for
 local mode and pre-commit, phase B for remote). Track R built (2026-10-18);
-track S steps 1-5 built (2026-10-22).
+track S steps 1-6 built (2026-10-23).
 
 Revised 2026-10-13. Added review from the terminal (§10), and changed the
 authentication order (§11). Humans sign in with the existing Cognito pool
@@ -687,7 +687,17 @@ work. **S** (scan) needs no auth until remote mode.
    left out by `--changed-only` has not been fixed; and `skip_apps` is read
    only from the repository's file, resolved against that file's directory,
    with a reason required.
-6. Pre-commit hook.
+6. Pre-commit hook. **Built 2026-10-23**, the `language: system` variant
+   first: `cascadesec hook`, which runs the installed CLI and so the pinned
+   image under `--network none`, on push by default (D6), `require_serial`
+   so one scan covers every changed file. The `docker_image` variant waits
+   for the next image publish, which must carry the CLI's baseline and exit
+   logic so the two hooks cannot judge a file differently. Live through a
+   real `git push` (pre-commit 4.7.0) to a scratch remote: a commit adding a
+   public bucket to baselined terragoat was blocked in 14 seconds, judged
+   on `s3.tf` alone (17 findings, 65 baselined, 268 elsewhere left out),
+   and a push touching only a Markdown file went through with the hook
+   skipped.
 7. `scan-api` and `unpack` under `/v1` on the JWT authorizer (phase H).
    Then remote mode, `--fix` and `--apply` for a signed-in person.
 8. Phase M (machine-auth-spec build order), when CI needs step 7.

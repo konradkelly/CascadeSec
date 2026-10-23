@@ -1,0 +1,31 @@
+# CascadeSec's pre-commit hook (docs/cli-spec.md §7). In a repository's
+# .pre-commit-config.yaml:
+#
+#   - repo: https://github.com/konradkelly/CascadeSec
+#     rev: <a release tag or commit>
+#     hooks:
+#       - id: cascadesec
+#
+# then `pre-commit install --hook-type pre-push`. It runs the CascadeSec CLI,
+# which must be installed (pipx install ...; see cli/README.md) along with
+# Docker: the CLI runs the pipeline's own scanner image, pinned by digest,
+# under --network none.
+#
+# On push by default (decision D6): a cold scan is 10-20 seconds, which a
+# hook on every commit would make every commit pay. To run it on commit
+# instead, set `stages: [pre-commit]` on the hook in your config.
+
+- id: cascadesec
+  name: CascadeSec IaC scan
+  description: Scan changed IaC with the CascadeSec pipeline's own scanner, offline, and block on findings at or above --fail-on (default high), after the baseline.
+  entry: cascadesec hook
+  language: system
+  # What the scanner admits: its SNAPSHOT_SUFFIXES, plus the .json and
+  # .template files it sniffs for ARM and CloudFormation. cli/tests/
+  # test_hook.py holds this to iac-scanner's own list.
+  files: \.(tf|tf\.json|tfvars|tfvars\.json|tofu|tofu\.json|ya?ml|bicep|json|template)$
+  pass_filenames: true
+  # One scan for all the changed files. pre-commit would otherwise split them
+  # across parallel invocations, each a cold container.
+  require_serial: true
+  stages: [pre-push]

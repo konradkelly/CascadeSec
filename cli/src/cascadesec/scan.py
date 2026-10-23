@@ -53,8 +53,9 @@ def docker_command(path, image_ref):
             "/var/task/local_main.py", "/src"]
 
 
-def run_scanner(path, image_ref, run=None, which=None):
-    """The image's JSON result for the directory at `path`."""
+def run_scanner(path, image_ref, run=None, which=None, command=None):
+    """The image's JSON result for the directory at `path`. `command` is the
+    full docker line, when a caller adds to it (the hook's --only-dir)."""
     run, which = run or subprocess.run, which or shutil.which
     if not os.path.isdir(path):
         raise CliError(f"{path} is not a directory", USAGE)
@@ -63,7 +64,7 @@ def run_scanner(path, image_ref, run=None, which=None):
                        "Install Docker, or scan remotely once that is available (`--remote`).",
                        USAGE)
     # Absolute, so Docker mounts the directory rather than a named volume.
-    result = run(docker_command(os.path.abspath(path), image_ref), capture_output=True, text=True,
+    result = run(command or docker_command(os.path.abspath(path), image_ref), capture_output=True, text=True,
                  encoding="utf-8", errors="replace")
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
