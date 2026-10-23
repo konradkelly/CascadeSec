@@ -23,11 +23,14 @@ import subprocess
 
 from cascadesec.errors import INCOMPLETE, OK, REFUSED, SERVICE, USAGE, CliError
 
-# The image a release pins. Overridden by CASCADESEC_SCANNER_IMAGE or
-# --image, as for a locally built `cascadesec-scanner:local`. A release
-# replaces the tag with the digest the Lambda was deployed with (§3.2), so
-# local and pipeline results come from the same tools at the same versions.
-SCANNER_IMAGE = "ghcr.io/konradkelly/cascadesec-scanner:latest"
+# The image this CLI runs, pinned by manifest digest, never a tag (§3.2):
+# local and pipeline results then come from the same tools at the same
+# versions. It is the manifest ECR holds for commit 58e0eff, published to
+# GHCR by `build-image.sh --ghcr` on 2026-10-23, which checked GHCR serves
+# it byte for byte. Bump it with each publish. Overridden by
+# CASCADESEC_SCANNER_IMAGE or --image, as for a local `cascadesec-scanner:local`.
+SCANNER_IMAGE = ("ghcr.io/konradkelly/cascadesec-scanner"
+                 "@sha256:6d0901b06d7a16b6888b8289e480cf6479b9669a7ccb6ae5d2d7eb76c2986d73")
 
 FAIL_ON = ("critical", "high", "medium", "low", "any", "none")
 
