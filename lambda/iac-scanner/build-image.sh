@@ -56,6 +56,7 @@ docker build \
   -t "${REPOSITORY}:latest" \
   -t "${REPOSITORY}:${COMMIT}" \
   --build-context corpus="${REPO_DIR}/corpus" \
+  --build-context cli="${REPO_DIR}/cli" \
   "$SCRIPT_DIR"
 
 docker push "${REPOSITORY}:latest"

@@ -429,9 +429,14 @@ check run's added-lines approximation, and has the same stated limit.
   containing a staged file**, not the files alone, because Terraform modules
   and tfvars resolve across a directory. It **reports only findings in the
   staged files**, after the baseline.
-- `--network none` cannot be set: pre-commit builds the `docker run` line
-  itself **(verify)**. Isolation here rests on the tools' own offline flags
-  (§3.2), and the hook's docs say so.
+- ~~`--network none` cannot be set~~ **It can, measured 2026-10-23.**
+  pre-commit appends a `docker_image` hook's `entry` tokens straight after
+  its own `docker run --rm -v ...:/src --workdir /src`, so an entry of
+  `--network none --entrypoint python <image> -m cascadesec hook` isolates
+  the container. A probe hook trying to open a connection got `Network is
+  unreachable` with it and connected without it. The docker hook therefore
+  has the same guarantee as `cascadesec scan`, not just the tools' offline
+  flags.
 - Tagged by version, not digest, because pre-commit's `rev` pins the hook
   repository, and the tag inside it is fixed per release.
 - Latency is §3.4's measurement. If it's over budget, the hook ships as
