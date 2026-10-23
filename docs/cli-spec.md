@@ -136,7 +136,13 @@ docker run --rm --network none --read-only --tmpfs /tmp \
   preserved across a registry copy)**. `build-image.sh --ghcr` copies with
   `docker buildx imagetools create` from ECR by digest and fails unless GHCR
   then reports the same one; ECR's digest is already what the Lambda
-  resolves (`ResolvedImageUri`). The image is public. It contains
+  resolves (`ResolvedImageUri`).
+  **Measured on the first publish, 2026-10-23:** the manifest digest is
+  preserved, but `imagetools create` wraps it in a one-entry OCI index, so a
+  GHCR *tag* resolves to a different digest than ECR's. The check is
+  therefore that GHCR serves ECR's digest byte for byte, and the CLI pins
+  that digest (`ghcr.io/konradkelly/cascadesec-scanner@sha256:6d0901b0...`,
+  commit 58e0eff), never a tag. The image is public. It contains
   nothing that the Dockerfile and `checks/` don't already publish.
 - **No Docker?** The CLI fails with a message that says so. There is no
   fallback to locally installed Trivy or Checkov: a different version fires

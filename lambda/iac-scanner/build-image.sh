@@ -19,7 +19,10 @@
 # ghcr.io/konradkelly/cascadesec-scanner, copied from ECR by digest rather
 # than pushed from the local build, so both registries hold one manifest and
 # a CLI pinned to the digest gets exactly what the Lambda runs. The copy is
-# checked: the script fails if GHCR reports a different digest. Needs a
+# checked: GHCR must serve ECR's digest, byte for byte. Its tags point at a
+# one-entry index wrapping that manifest -- imagetools create always makes
+# one, so a tag's digest differs from ECR's (measured 2026-10-23) -- which is
+# why the CLI pins the manifest digest, never a tag. Needs a
 # GitHub token with write:packages (`gh auth refresh -s write:packages`).
 # A new package is private; make it public once, in its package settings.
 
@@ -70,9 +73,11 @@ if [ -n "$GHCR" ]; then
   docker buildx imagetools create \
     --tag "${GHCR}:${COMMIT}" --tag "${GHCR}:latest" \
     "${REPOSITORY}@${ECR_DIGEST}"
-  GHCR_DIGEST="$(digest "${GHCR}:${COMMIT}")"
-  if [ "$GHCR_DIGEST" != "$ECR_DIGEST" ]; then
-    echo "GHCR holds ${GHCR_DIGEST}, not ECR's ${ECR_DIGEST}: the copy changed the manifest" >&2
+  # What a pinned CLI pulls: the manifest at ECR's digest, hashed as served.
+  SERVED="$(docker buildx imagetools inspect "${GHCR}@${ECR_DIGEST}" --raw \
+    | python -c 'import hashlib,sys; print("sha256:" + hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+  if [ "$SERVED" != "$ECR_DIGEST" ]; then
+    echo "GHCR serves ${SERVED} at ${ECR_DIGEST}: the copy changed the manifest" >&2
     exit 1
   fi
   echo "Published ${GHCR}@${ECR_DIGEST} (${COMMIT}), the digest ECR and the Lambda use"
