@@ -5,7 +5,8 @@ CascadeSec from the terminal. Design: [docs/cli-spec.md](../docs/cli-spec.md).
 Built so far: track R of the spec (§10, §13) -- signing in (`login`,
 `logout`, `whoami`), reading a PR's findings (`findings`, `show`), deciding
 on a fix (`approve`, `reject`, `edit`), committing the approved ones
-(`commit`) -- `scan` in local mode with its `baseline`, and `version`.
+(`commit`) -- `scan` in local mode with its `baseline`, the pre-commit
+`hook`, and `version`.
 
 ## Set up
 
@@ -170,6 +171,28 @@ An app local mode cannot run can be skipped in the repository's
 path = "platforms/lab-cdk"
 reason = "Throwaway lab environment; never deployed"
 ```
+
+### As a pre-commit hook
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/konradkelly/CascadeSec
+    rev: <a release tag or commit>
+    hooks:
+      - id: cascadesec
+        # args: [--fail-on, medium]
+```
+
+```
+pre-commit install --hook-type pre-push
+```
+
+It runs on push by default, because a cold scan takes 10 to 20 seconds.
+Set `stages: [pre-commit]` on the hook to run it on every commit instead.
+It scans the directories of the files being pushed and judges only those
+files, after the baseline, so a finding that was already there does not
+block. The CLI and Docker must be installed.
 
 Until the image is published, build it and point the CLI at it:
 

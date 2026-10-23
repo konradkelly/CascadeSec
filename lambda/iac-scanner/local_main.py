@@ -154,9 +154,16 @@ def walk(src):
             yield os.path.relpath(path, src).replace(os.sep, "/"), path
 
 
-def copy_snapshot(src, work_dir):
+def copy_snapshot(src, work_dir, only_dirs=None):
     """(handler.Snapshot, unscanned_apps): the admitted files copied into
-    `work_dir`, and the app roots found on the way."""
+    `work_dir`, and the app roots found on the way.
+
+    `only_dirs`, when given, limits the copy to files directly in those
+    directories (POSIX, relative to `src`, "." for the root): the pre-commit
+    hook's scope (cli-spec §7). A whole directory rather than the changed
+    files alone, because a Terraform module and its tfvars resolve across
+    one. App roots are still looked for everywhere; the CLI keeps the ones a
+    changed file is inside."""
     snapshot, apps = handler.Snapshot(), []
     for rel, path in walk(src):
         name = rel.rsplit("/", 1)[-1]
@@ -166,6 +173,8 @@ def copy_snapshot(src, work_dir):
             apps.append({"path": root, "kind": kind, "reason": APP_REASONS[kind]})
         if not handler._is_candidate(rel):
             continue
+        if only_dirs is not None and (rel.rsplit("/", 1)[0] if "/" in rel else ".") not in only_dirs:
+            continue
         dest = os.path.join(work_dir, *rel.split("/"))
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         shutil.copyfile(path, dest)
@@ -173,11 +182,11 @@ def copy_snapshot(src, work_dir):
     return snapshot, apps
 
 
-def scan(src, pr_id="local", corpus=None):
+def scan(src, pr_id="local", corpus=None, only_dirs=None):
     work_dir = os.path.join("/tmp" if os.path.isdir("/tmp") else os.getcwd(), f"scan-{uuid.uuid4().hex}")
     os.makedirs(work_dir)
     try:
-        snapshot, apps = copy_snapshot(src, work_dir)
+        snapshot, apps = copy_snapshot(src, work_dir, only_dirs)
         findings, scan_errors = [], sorted(snapshot.unreadable_templates)
         if snapshot.downloaded:
             # No source maps: local mode synthesizes nothing (§3.5 stage 1),
@@ -201,6 +210,9 @@ def main(argv=None, stdout=None):
     stdout = stdout or sys.stdout
     ap = argparse.ArgumentParser(description="Scan a directory with the pipeline's scanner, locally.")
     ap.add_argument("src", nargs="?", default="/src", help="the directory to scan (default /src)")
+    ap.add_argument("--only-dir", action="append", metavar="DIR",
+                    help="scan only files directly in DIR, relative to src; repeat for several "
+                         "(the pre-commit hook's scope)")
     args = ap.parse_args(argv)
     if not os.path.isdir(args.src):
         print(f"local_main: {args.src} is not a directory", file=sys.stderr)
@@ -209,7 +221,8 @@ def main(argv=None, stdout=None):
     # a tool's chatter, a stray print -- goes to stderr with the logs.
     corpus = load_corpus()          # before scanning: a misbuilt image fails fast
     with contextlib.redirect_stdout(sys.stderr):
-        result = scan(args.src, corpus=corpus)
+        only = {d.replace("\\", "/").strip("/") or "." for d in args.only_dir} if args.only_dir else None
+        result = scan(args.src, corpus=corpus, only_dirs=only)
     stdout.write(json.dumps(result, sort_keys=True) + "\n")
     return 0
 

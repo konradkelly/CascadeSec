@@ -174,3 +174,34 @@ def test_an_image_without_its_corpus_fails_before_scanning(tmp_path, monkeypatch
         with pytest.raises(SystemExit) as e:
             local_main.main([str(tmp_path)], stdout=io.StringIO())
     assert "--build-context corpus" in str(e.value)
+
+
+def test_only_dirs_copies_files_directly_in_those_directories(tmp_path):
+    """The pre-commit hook's scope (cli-spec §7): a changed file's whole
+    directory, so its module and tfvars resolve, and nothing else."""
+    src = tree(tmp_path / "src", {
+        "main.tf": "", "vars.tfvars": "",
+        "infra/s3.tf": "", "infra/nested/deep.tf": "",
+        "k8s/app.yaml": "kind: Pod", "infra/cdk.json": "{}",
+    })
+    work = tmp_path / "work"
+    work.mkdir()
+
+    snapshot, apps = local_main.copy_snapshot(str(src), str(work), only_dirs={".", "infra"})
+
+    copied = sorted(Path(p).relative_to(work).as_posix() for p in snapshot.downloaded)
+    assert copied == ["infra/s3.tf", "main.tf", "vars.tfvars"]
+    assert [a["path"] for a in apps] == ["infra"]          # apps are still looked for
+
+
+def test_main_takes_only_dir_with_either_separator(tmp_path):
+    src = tree(tmp_path / "src", {"main.tf": "", "infra/s3.tf": "", "other/x.tf": ""})
+    seen = {}
+
+    def fake_scan(work_dir, pr_id, downloaded, *rest, **kwargs):
+        seen["files"] = sorted(Path(p).name for p in downloaded)
+        return [], []
+
+    with patch.object(handler, "scan_directory", side_effect=fake_scan):
+        local_main.main([str(src), "--only-dir", "infra\\", "--only-dir", "."], stdout=io.StringIO())
+    assert seen["files"] == ["main.tf", "s3.tf"]

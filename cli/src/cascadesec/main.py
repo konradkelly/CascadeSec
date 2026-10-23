@@ -3,7 +3,8 @@
 Built so far: track R (§13) -- the skeleton, signing a person in, reading a
 PR's findings (`findings`, `show`), deciding on a fix (`approve`, `reject`,
 `edit`), and committing the approved ones (`commit`) -- and from track S,
-`scan` in local mode with its baseline (`baseline`). Commands that don't exist yet aren't registered, so
+`scan` in local mode with its baseline (`baseline`), and the pre-commit
+`hook`. Commands that don't exist yet aren't registered, so
 `--help` lists only what works.
 
 Results go to stdout in --format; progress, prompts and errors go to stderr,
@@ -20,7 +21,7 @@ import sys
 import time
 from datetime import datetime
 
-from cascadesec import __version__, api, auth, baseline, config, editor, prs, render, review
+from cascadesec import __version__, api, auth, baseline, config, editor, hook, prs, render, review
 from cascadesec import commit as committing
 from cascadesec import scan as scanning
 from cascadesec.errors import OK, REFUSED, USAGE, CliError
@@ -84,6 +85,20 @@ def build_parser():
                       help="only remove entries that no longer fire; add nothing new")
     base.add_argument("--file", metavar="FILE", help=f"where to write it (default: PATH/{baseline.FILE})")
     base.add_argument("--image", help="the scanner image (as for scan)")
+
+    hk = commands.add_parser(
+        "hook", help="the pre-commit hook: scan the given files' directories, report only them",
+        description="Run by pre-commit (see .pre-commit-hooks.yaml), from the repository root, "
+                    "with the files a commit or push changes. Scans each directory holding one and "
+                    "reports only findings in those files, after the baseline. Exit codes as for scan.")
+    hk.add_argument("files", nargs="*", help="the changed files, relative to the repository root")
+    hk.add_argument("--fail-on", choices=scanning.FAIL_ON, default="high",
+                    help="block when a finding is at or above this severity (default high)")
+    hk.add_argument("--allow-scan-errors", action="store_true",
+                    help="do not block on a changed file that failed to parse")
+    hk.add_argument("--baseline", metavar="FILE",
+                    help=f"findings to leave out (default: ./{baseline.FILE} if present)")
+    hk.add_argument("--image", help="the scanner image (as for scan)")
 
     pr_help = "the PR: owner/repo#123, its GitHub URL, or a review-api id such as gh-1352957770-50"
     findings = commands.add_parser(
@@ -160,7 +175,9 @@ def main(argv=None, *, stdout=None, env=None, cwd=None, backend=None,
         if hasattr(stdout, "reconfigure"):
             stdout.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
-    fmt = args.format or ("table" if stdout.isatty() else "json")
+    # pre-commit captures a hook's output, so it is never a terminal -- and
+    # what it shows when a push is blocked is read by a person, not parsed.
+    fmt = args.format or ("table" if stdout.isatty() or args.command == "hook" else "json")
     ctx = _Context(env, cwd, backend, prompt=prompt, interactive=interactive, run=run,
                    sleep=sleep, clock=clock)
     try:
@@ -518,6 +535,20 @@ def _hold_back(args, ctx, result, image_ref, settings, path, document):
     }
 
 
+def cmd_hook(args, ctx):
+    root = ctx._cwd or os.getcwd()
+    if not args.files:
+        return {"hook_files": [], "exit_code": 0, "_exit": 0, "_nothing": True}
+    settings = config.load(cwd=root, env=ctx.env)
+    path = args.baseline or baseline.default_path(root)
+    if args.baseline and not os.path.isfile(path):
+        raise CliError(f"--baseline {args.baseline}: no such file", USAGE)
+    image_ref = scanning.image(args.image, ctx.env)
+    summary = hook.run(args.files, root, image_ref, args.fail_on, args.allow_scan_errors,
+                       path if os.path.isfile(path) else None, skips=settings.skip_apps, run=ctx.run)
+    return {**summary, "path": ".", "_exit": summary["exit_code"]}
+
+
 def cmd_baseline(args, ctx):
     image_ref = scanning.image(args.image, ctx.env)
     if not os.path.isdir(args.path):
@@ -575,6 +606,7 @@ COMMANDS = {
     "commit": cmd_commit,
     "scan": cmd_scan,
     "baseline": cmd_baseline,
+    "hook": cmd_hook,
 }
 
 # Commands whose table format is more than key/value lines.
@@ -588,6 +620,7 @@ RENDERERS = {
     "commit": lambda result, out: render.commit_result(result, out),
     "scan": lambda result, out: render.scan_result(result, out),
     "baseline": lambda result, out: render.baseline_result(result, out),
+    "hook": lambda result, out: render.hook_result(result, out),
 }
 
 
