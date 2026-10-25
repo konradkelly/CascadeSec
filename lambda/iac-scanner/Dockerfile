@@ -93,8 +93,12 @@ COPY --from=corpus frameworks/ /opt/corpus/frameworks/
 # rather than starting a container (CASCADESEC_IN_IMAGE). A named build
 # context like the corpus; build-image.sh passes it:
 #   docker build --build-context corpus=../../corpus --build-context cli=../../cli .
+# --no-deps: the CLI's one dependency is keyring, for a signed-in session,
+# which nothing in this image has. It would bring cryptography, cffi and
+# Secret Service into the Lambda; cli/tests/test_hook.py runs the hook with
+# keyring unimportable to keep that true.
 COPY --from=cli . /tmp/cascadesec-cli
-RUN pip install --no-cache-dir /tmp/cascadesec-cli && rm -rf /tmp/cascadesec-cli
+RUN pip install --no-cache-dir --no-deps /tmp/cascadesec-cli && rm -rf /tmp/cascadesec-cli
 ENV CASCADESEC_IN_IMAGE=1
 
 CMD ["handler.handler"]

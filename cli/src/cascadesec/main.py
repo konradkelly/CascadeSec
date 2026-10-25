@@ -25,7 +25,6 @@ from cascadesec import __version__, api, auth, baseline, config, editor, hook, p
 from cascadesec import commit as committing
 from cascadesec import scan as scanning
 from cascadesec.errors import OK, REFUSED, USAGE, CliError
-from cascadesec.store import SessionStore
 
 FULL_FINDING_ID = re.compile(r"^[0-9a-f]{16}$")
 
@@ -228,6 +227,11 @@ class _Context:
         return self._settings
 
     def store(self):
+        # Imported here so that keyring, which only a session needs, stays
+        # off the scan and hook path: the scanner image installs the CLI
+        # without its dependencies (cli-spec §7).
+        from cascadesec.store import SessionStore  # noqa: PLC0415
+
         s = self.settings.require("auth_domain", "client_id")
         kwargs = {"backend": self._backend} if self._backend else {}
         return SessionStore(s.auth_domain, s.client_id, **kwargs)

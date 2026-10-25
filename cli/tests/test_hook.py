@@ -8,6 +8,7 @@ import io
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -139,7 +140,6 @@ def test_inside_the_image_it_scans_in_process_with_the_same_verdict(repo, monkey
     """The docker_image hook runs this command in the scanner image, where
     it cannot start a container: it calls local_main directly, and judges
     the result exactly as the installed CLI's hook would."""
-    import sys
     import types
 
     seen = {}
@@ -159,3 +159,22 @@ def test_inside_the_image_it_scans_in_process_with_the_same_verdict(repo, monkey
     assert seen["dirs"] == {"."}
     assert code == 1 and [f["fingerprint"] for f in result["findings"]] == ["a"]
     assert result["scanner_image"] == "this container"
+
+
+def test_inside_the_image_the_hook_runs_without_keyring(repo):
+    """The image installs the CLI with --no-deps, so keyring is not there:
+    the hook, and everything it imports, must not need it."""
+    (repo / "s3.tf").write_text("")
+    script = (
+        "import json, sys, types\n"
+        "sys.modules['keyring'] = None\n"        # any `import keyring` now raises
+        "sys.modules['local_main'] = types.SimpleNamespace(load_corpus=lambda: None,\n"
+        "    scan=lambda root, corpus, only_dirs: {'scanned_files': 1, 'scan_errors': [],\n"
+        "        'unscanned_apps': [], 'findings': []})\n"
+        "from cascadesec import main\n"
+        "sys.exit(main.main(['--format', 'json', 'hook', 's3.tf'],\n"
+        "                   env={'CASCADESEC_IN_IMAGE': '1'}, cwd=sys.argv[1]))\n"
+    )
+    done = subprocess.run([sys.executable, "-c", script, str(repo)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout)["exit_code"] == 0
