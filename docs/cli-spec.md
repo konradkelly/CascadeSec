@@ -417,12 +417,14 @@ check run's added-lines approximation, and has the same stated limit.
 `.pre-commit-hooks.yaml` at the repository root:
 
 ```yaml
-- id: cascadesec
-  name: CascadeSec IaC scan
+- id: cascadesec-docker
+  name: CascadeSec IaC scan (Docker)
   language: docker_image
-  entry: ghcr.io/konradkelly/cascadesec-scanner:<version> python /var/task/local_main.py --pre-commit
-  files: \.(tf|tf\.json|tfvars|tfvars\.json|tofu|tofu\.json|ya?ml|json|bicep)$
+  entry: --network none --entrypoint python ghcr.io/konradkelly/cascadesec-scanner@sha256:<digest> -m cascadesec hook
+  files: \.(tf|tf\.json|tfvars|tfvars\.json|tofu|tofu\.json|ya?ml|bicep|json|template)$
   pass_filenames: true
+  require_serial: true
+  stages: [pre-push]
 ```
 
 - pre-commit passes the staged file names. The hook scans **each directory
@@ -437,13 +439,20 @@ check run's added-lines approximation, and has the same stated limit.
   unreachable` with it and connected without it. The docker hook therefore
   has the same guarantee as `cascadesec scan`, not just the tools' offline
   flags.
-- Tagged by version, not digest, because pre-commit's `rev` pins the hook
-  repository, and the tag inside it is fixed per release.
+- ~~Tagged by version, not digest~~ **Pinned by manifest digest**, the
+  one `scan.py`'s `SCANNER_IMAGE` pins. pre-commit's `rev` fixes the hook
+  repository, but a tag inside it can still move, and a GHCR tag names the
+  index `imagetools create` wraps around the manifest, not the manifest the
+  Lambda runs (§3.2). The entry lands with a test holding its digest to
+  `SCANNER_IMAGE`'s, so a publish bumps both or neither.
 - Latency is §3.4's measurement. If it's over budget, the hook ships as
   `stages: [pre-push]` by default.
 
-A `language: python` variant (`entry: cascadesec scan --pre-commit`) is for
-users who already have the CLI. It runs the same image through Docker.
+A `language: system` variant, `cascadesec` (`entry: cascadesec hook`), is
+for users who already have the CLI. It runs the same image through Docker.
+Inside the image, `cascadesec hook` sees `CASCADESEC_IN_IMAGE` and scans
+in-process, so both hooks judge a file with one copy of the scoping,
+baseline and verdict.
 
 ## 8. Distribution
 
@@ -695,9 +704,11 @@ work. **S** (scan) needs no auth until remote mode.
 6. Pre-commit hook. **Built 2026-10-23**, the `language: system` variant
    first: `cascadesec hook`, which runs the installed CLI and so the pinned
    image under `--network none`, on push by default (D6), `require_serial`
-   so one scan covers every changed file. The `docker_image` variant waits
-   for the next image publish, which must carry the CLI's baseline and exit
-   logic so the two hooks cannot judge a file differently. Live through a
+   so one scan covers every changed file. The `docker_image` variant needs
+   the CLI's baseline and exit logic inside the image, so the two hooks
+   cannot judge a file differently: the image carries the CLI since
+   2026-10-23, and the hook's manifest entry comes with the first publish
+   of that image, pinned to its digest. Live through a
    real `git push` (pre-commit 4.7.0) to a scratch remote: a commit adding a
    public bucket to baselined terragoat was blocked in 14 seconds, judged
    on `s3.tf` alone (17 findings, 65 baselined, 268 elsewhere left out),
