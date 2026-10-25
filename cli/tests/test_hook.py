@@ -15,6 +15,7 @@ import pytest
 
 from cascadesec import hook
 from cascadesec import main as cli
+from conftest import Scanner
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -31,13 +32,18 @@ class FakeDocker:
         self.calls = []
 
     def __call__(self, cmd, **kwargs):
+        if cmd[0] == "git":
+            return subprocess.run(cmd, **kwargs)
         self.calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, json.dumps(self.result), "")
 
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
+    """Not a repository (an empty .git), so there is no earlier version and
+    the hook judges the changed files themselves. git_repo is the real one."""
     (tmp_path / ".git").mkdir()
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     monkeypatch.setattr("cascadesec.scan.shutil.which", lambda name: "/usr/bin/docker")
     return tmp_path
 

@@ -408,9 +408,17 @@ decision in a diff, which suits a project where nothing is silently decided.
 The server-side baseline (§4.1) serves the same content per project for
 teams that don't want it in the repository. It's phase B, and optional.
 
-`--changed-only REV` is the cheap complement. It reports findings only in
-files `git diff --name-only REV` lists. It's the CLI's version of the
-check run's added-lines approximation, and has the same stated limit.
+`--changed-only REV` is the cheap complement. ~~It reports findings only in
+files `git diff --name-only REV` lists.~~ **Revised 2026-10-25:** it reports
+the findings a scan of REV's files does not have, matched by fingerprint,
+in whichever file they land. Keeping the findings in changed files missed
+a change that makes another file vulnerable: a variable's default turned
+off in `variables.tf` opens the bucket in `main.tf`, and that push went
+through. It also blocked an edit to a file with old findings. Parse errors
+and unscanned apps still count only in changed files. REV's files are
+exported from git and scanned side by side with the current ones. The
+limit: a renamed file's findings read as new, because a fingerprint
+includes the path.
 
 ## 7. Pre-commit hook
 
@@ -420,17 +428,30 @@ check run's added-lines approximation, and has the same stated limit.
 - id: cascadesec-docker
   name: CascadeSec IaC scan (Docker)
   language: docker_image
-  entry: --network none --entrypoint python ghcr.io/konradkelly/cascadesec-scanner@sha256:<digest> -m cascadesec hook
+  entry: --network none -e PRE_COMMIT_FROM_REF -e PRE_COMMIT_TO_REF --entrypoint python ghcr.io/konradkelly/cascadesec-scanner@sha256:<digest> -m cascadesec hook
   files: \.(tf|tf\.json|tfvars|tfvars\.json|tofu|tofu\.json|ya?ml|bicep|json|template)$
   pass_filenames: true
   require_serial: true
   stages: [pre-push]
 ```
 
-- pre-commit passes the staged file names. The hook scans **each directory
-  containing a staged file**, not the files alone, because Terraform modules
-  and tfvars resolve across a directory. It **reports only findings in the
-  staged files**, after the baseline.
+- pre-commit passes the changed file names. The hook scans **each directory
+  containing one**, not the files alone, because Terraform modules and
+  tfvars resolve across a directory. ~~It reports only findings in the
+  staged files, after the baseline.~~ **Revised 2026-10-25:** it also scans
+  those directories **as they were before the change**, read from git, and
+  blocks on the findings the change brought, after the baseline. Before is
+  the push's merge base (`PRE_COMMIT_FROM_REF...PRE_COMMIT_TO_REF`, the
+  range pre-commit took the files from), or HEAD for a commit. A finding in
+  an untracked file is outside the change. With nothing to compare with (a
+  first commit, `pre-commit run --all-files`, whose files are not a staged
+  change, or git unreadable) it judges the changed files themselves, as it
+  used to, and says why. On the system hook the two scans run side by side.
+- The docker variant reads history inside the container, so the image
+  carries git (a 64 MB layer the Lambda never runs). Its entry passes the
+  two refs with `-e`, because `docker run` passes no environment. A
+  worktree's `.git` points outside the mount, so there it falls back to
+  judging the files, and says so.
 - ~~`--network none` cannot be set~~ **It can, measured 2026-10-23.**
   pre-commit appends a `docker_image` hook's `entry` tokens straight after
   its own `docker run --rm -v ...:/src --workdir /src`, so an entry of
@@ -713,7 +734,14 @@ work. **S** (scan) needs no auth until remote mode.
    public bucket to baselined terragoat was blocked in 14 seconds, judged
    on `s3.tf` alone (17 findings, 65 baselined, 268 elsewhere left out),
    and a push touching only a Markdown file went through with the hook
-   skipped.
+   skipped. **Revised 2026-10-25:** judged against the version before the
+   change (§7). Through pre-commit 4.7.0 and `git push`, both variants, on
+   terragoat plus a bucket that a variable guards: a comment fixed in
+   `s3.tf` went through (blocked on 24 old HIGH findings before), a variable
+   turned off was blocked for 4 HIGH findings in the untouched `main.tf`
+   (let through before), a new public bucket was blocked, and the two
+   variants agreed on all four pushes. The system hook took 7.3-8.1s and
+   the docker hook, which scans in turn, 11.3-13.1s.
 7. `scan-api` and `unpack` under `/v1` on the JWT authorizer (phase H).
    Then remote mode, `--fix` and `--apply` for a signed-in person.
 8. Phase M (machine-auth-spec build order), when CI needs step 7.

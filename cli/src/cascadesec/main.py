@@ -19,9 +19,10 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from cascadesec import __version__, api, auth, baseline, config, editor, hook, prs, render, review
+from cascadesec import __version__, api, auth, baseline, config, editor, history, hook, prs, render, review
 from cascadesec import commit as committing
 from cascadesec import scan as scanning
 from cascadesec.errors import OK, REFUSED, USAGE, CliError
@@ -71,8 +72,9 @@ def build_parser():
                       help=f"findings to leave out of the verdict (default: PATH/{baseline.FILE} if present)")
     scan.add_argument("--no-baseline", action="store_true", help="ignore the baseline file")
     scan.add_argument("--changed-only", metavar="REV",
-                      help="report only what is in files changed since REV (git diff --name-only REV, "
-                           "plus new untracked files)")
+                      help="report only what changed since REV: findings a scan of REV's files does not "
+                           "have, wherever they land, and parse errors and apps in files changed since "
+                           "REV (git diff --name-only REV, plus new untracked files). Scans twice")
 
     base = commands.add_parser(
         "baseline", help=f"write {baseline.FILE}: the findings to accept for now",
@@ -288,8 +290,13 @@ def cmd_scan(args, ctx):
     document = baseline.load(path) if path else None
     if args.baseline and document is None:
         raise CliError(f"--baseline {args.baseline}: no such file", USAGE)
-    result = scanning.run_scanner(args.path, image_ref, run=ctx.run)
-    result, held_back = _hold_back(args, ctx, result, image_ref, settings, path, document)
+    changes = _changes(args, ctx) if args.changed_only else None
+    # REV's scan beside this one, each in its own container (hook.py).
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(_scan_earlier, args, ctx, image_ref, changes[1]) if changes else None
+        result = scanning.run_scanner(args.path, image_ref, run=ctx.run)
+        before = pending.result() if pending else None
+    result, held_back = _hold_back(args, result, image_ref, settings, path, document, changes, before)
     summary = {**scanning.summarise(result, args.path, image_ref, args.fail_on, args.allow_scan_errors),
                **held_back}
     if args.output:
@@ -509,19 +516,44 @@ def cmd_commit(args, ctx):
             "_exit": committing.outcome_code(record)}
 
 
-def _hold_back(args, ctx, result, image_ref, settings, path, document):
-    """What leaves the verdict, in order: apps skip_apps names, everything
-    outside --changed-only, then baselined findings. Each is counted, so
-    nothing leaves silently (cli-spec §6). The baseline's fixed list is
-    taken from the full scan, before --changed-only: a finding in a file
-    nobody touched has not been fixed for having been left out."""
+def _changes(args, ctx):
+    """(files changed since REV, REV's commit), checked before any scan so a
+    mistyped REV costs a moment rather than two scans."""
+    changed = baseline.changed_files(args.path, args.changed_only, run=ctx.run)
+    rev = history.commit(args.path, args.changed_only, run=ctx.run)
+    if rev is None:
+        raise CliError(f"--changed-only {args.changed_only}: not a commit", USAGE)
+    print(f"cascadesec: scanning {args.changed_only} ({rev[:12]}) too, to compare with", file=sys.stderr)
+    return changed, rev
+
+
+def _scan_earlier(args, ctx, image_ref, rev):
+    try:
+        return history.scan_at(args.path, rev, lambda d: scanning.run_scanner(d, image_ref, run=ctx.run),
+                               run=ctx.run)
+    except history.Unavailable as e:
+        raise CliError(f"--changed-only {args.changed_only}: git said: {e}", USAGE) from None
+
+
+def _hold_back(args, result, image_ref, settings, path, document, changes=None, before=None):
+    """What leaves the verdict, in order: apps skip_apps names, what
+    --changed-only finds was already there at REV, then baselined findings.
+    Each is counted, so nothing leaves silently (cli-spec §6). The
+    baseline's fixed list is taken from the full scan, before
+    --changed-only: a finding left out for being old has not been fixed."""
     full = result.get("findings") or []
     result, skipped = baseline.skip_apps(result, args.path, settings.skip_apps)
 
-    outside = 0
-    if args.changed_only:
-        changed = baseline.changed_files(args.path, args.changed_only, run=ctx.run)
-        result, outside = baseline.scope_to_changes(result, changed)
+    preexisting, rev = 0, None
+    if changes:
+        changed, rev = changes
+        # A finding is reported when REV's scan (`before`) has no finding
+        # with its fingerprint (history.py), in whichever file it lands:
+        # changing one file can open a resource declared in another. Parse
+        # errors and apps still count only when a changed file is in them.
+        scoped, _ = baseline.scope_to_changes(result, changed)
+        brought, preexisting, _ = baseline.introduced(result, before)
+        result = {**scoped, "findings": brought["findings"]}
 
     kept, suppressed, _ = baseline.apply(result.get("findings") or [], document)
     _, _, fixed = baseline.apply(full, document)
@@ -534,7 +566,9 @@ def _hold_back(args, ctx, result, image_ref, settings, path, document):
         "baselined_count": len(suppressed),
         "baseline_fixed": fixed,
         "changed_only": args.changed_only,
-        "outside_changes_count": outside,
+        "compared_with": rev,
+        "preexisting_count": preexisting,
+        "outside_changes_count": 0,
         "skipped_apps": [{k: a[k] for k in ("path", "kind", "reason", "source")} for a in skipped],
     }
 
@@ -551,7 +585,7 @@ def cmd_hook(args, ctx):
                  else scanning.image(args.image, ctx.env))
     summary = hook.run(args.files, root, image_ref, args.fail_on, args.allow_scan_errors,
                        path if os.path.isfile(path) else None, skips=settings.skip_apps, run=ctx.run,
-                       in_image=ctx.env.get("CASCADESEC_IN_IMAGE") == "1")
+                       in_image=ctx.env.get("CASCADESEC_IN_IMAGE") == "1", env=ctx.env)
     return {**summary, "path": ".", "_exit": summary["exit_code"]}
 
 

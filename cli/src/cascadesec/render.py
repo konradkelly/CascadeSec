@@ -498,17 +498,30 @@ def scan_result(result, out):
 
 def _held_back(result, out):
     """Everything the verdict left out, counted (cli-spec §6: never silently)."""
+    def findings(n, verb=None):
+        text = f"{n} finding{'' if n == 1 else 's'}"
+        return f"{text} {verb[0] if n == 1 else verb[1]}" if verb else text
+
     if result.get("hook_files"):
-        n = result.get("outside_changes_count", 0)
+        n, outside = result.get("preexisting_count", 0), result.get("outside_changes_count", 0)
         out.line()
-        out.wrap(f"Judged only the changed files: {n} finding{'' if n == 1 else 's'} elsewhere in "
-                 "their directories left out, since they were there before this change.", indent=0)
+        if result.get("compared_with"):
+            text = (f"Compared with {result['compared_label']}: {findings(n, ('was', 'were'))} already "
+                    "there, left out.")
+            if outside:
+                text += (f" {findings(outside, ('is', 'are'))} in files this change does not hold "
+                         "(untracked), left out.")
+            out.wrap(text, indent=0)
+        else:
+            out.wrap(f"Nothing to compare with: {result.get('not_compared_reason')}. Judged the "
+                     f"changed files themselves, so {findings(outside)} elsewhere in their directories "
+                     "were left out, and a change that makes one of those newly vulnerable is not "
+                     "caught here.", indent=0)
     elif result.get("changed_only"):
-        n = result.get("outside_changes_count", 0)
+        n = result.get("preexisting_count", 0)
         out.line()
-        out.wrap(f"Only files changed since {result['changed_only']}: {n} finding{'' if n == 1 else 's'} "
-                 "in other files left out. A change can still make an untouched file newly "
-                 "vulnerable; a full scan is the check for that.", indent=0)
+        out.wrap(f"Compared with {result['changed_only']} ({(result.get('compared_with') or '')[:12]}): "
+                 f"{findings(n, ('was', 'were'))} already there, left out.", indent=0)
     if result.get("baseline"):
         n = result.get("baselined_count", 0)
         out.line()
@@ -544,9 +557,10 @@ def hook_result(result, out):
     if result.get("_nothing"):
         return
     files = result.get("hook_files") or []
+    judged = "new with this change" if result.get("compared_with") else "in the files themselves"
     out.line(out.style(f"CascadeSec checked {len(files)} changed file{'' if len(files) == 1 else 's'} "
                        f"({result.get('_scanned_findings', 0)} findings in their directories, "
-                       f"{len(result.get('findings') or [])} in the files themselves)", "bold"))
+                       f"{len(result.get('findings') or [])} {judged})", "bold"))
     scan_result({**result, "path": "the changed files' directories"}, out)
     if result["exit_code"]:
         out.line()

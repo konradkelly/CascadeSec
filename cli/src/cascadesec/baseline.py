@@ -155,6 +155,22 @@ def scope_to_changes(result, changed):
     }, len(findings) - len(kept)
 
 
+def introduced(result, earlier_findings, in_change=None):
+    """(result with only the findings the change brought, how many were
+    already there, how many lie in files outside the change). Brought means
+    the earlier version's scan has no finding with that fingerprint
+    (history.py). `in_change`, when given, is the files the change's own
+    version holds; a finding in any other file -- an untracked file beside a
+    changed one -- is outside it. Two findings that share a fingerprint are
+    one, as in the baseline: a second line of one resource tripping the
+    same rule reads as already there."""
+    before = {f.get("fingerprint") for f in earlier_findings}
+    findings = result.get("findings") or []
+    held = [f for f in findings if in_change is None or f.get("file") in in_change]
+    new = [f for f in held if f.get("fingerprint") not in before]
+    return {**result, "findings": new}, len(held) - len(new), len(findings) - len(held)
+
+
 # ---------- skip_apps ----------
 
 def skip_apps(result, scan_path, skips):
