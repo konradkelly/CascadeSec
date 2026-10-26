@@ -25,6 +25,12 @@
 # why the CLI pins the manifest digest, never a tag. Needs a
 # GitHub token with write:packages (`gh auth refresh -s write:packages`).
 # A new package is private; make it public once, in its package settings.
+#
+# --ghcr then builds the pre-commit hook's image on that published scanner
+# (cli/Dockerfile) and pushes it to ghcr.io/konradkelly/cascadesec-hook, a
+# second package to make public. The hook pins its digest, which the script
+# prints last; bump the hook's entry with SCANNER_IMAGE and cli/Dockerfile's
+# default, which tests hold equal.
 
 set -euo pipefail
 
@@ -34,6 +40,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 GHCR=""
 if [ "${1:-}" = "--ghcr" ]; then
   GHCR="ghcr.io/konradkelly/cascadesec-scanner"
+  HOOK="ghcr.io/konradkelly/cascadesec-hook"
   shift
 fi
 
@@ -56,7 +63,6 @@ docker build \
   -t "${REPOSITORY}:latest" \
   -t "${REPOSITORY}:${COMMIT}" \
   --build-context corpus="${REPO_DIR}/corpus" \
-  --build-context cli="${REPO_DIR}/cli" \
   "$SCRIPT_DIR"
 
 docker push "${REPOSITORY}:latest"
@@ -82,4 +88,18 @@ if [ -n "$GHCR" ]; then
     exit 1
   fi
   echo "Published ${GHCR}@${ECR_DIGEST} (${COMMIT}), the digest ECR and the Lambda use"
+
+  # The docker_image hook's image (cli/Dockerfile), built on the scanner just
+  # published, by that digest, so the hook scans with what the Lambda runs.
+  # Pushed from the local build: it exists only on GHCR, not in ECR.
+  docker build \
+    --platform linux/amd64 \
+    --provenance=false \
+    --build-arg SCANNER_IMAGE="${GHCR}@${ECR_DIGEST}" \
+    -t "${HOOK}:${COMMIT}" \
+    -t "${HOOK}:latest" \
+    "${REPO_DIR}/cli"
+  docker push "${HOOK}:${COMMIT}"
+  docker push "${HOOK}:latest"
+  echo "Published ${HOOK}@$(digest "${HOOK}:${COMMIT}") (${COMMIT}), on ${GHCR}@${ECR_DIGEST}"
 fi
