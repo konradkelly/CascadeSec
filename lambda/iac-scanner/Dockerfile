@@ -74,16 +74,6 @@ EOF
 COPY --from=kics /app/bin/kics /opt/bin/kics
 COPY --from=kics /app/bin/assets /opt/kics-assets
 
-# git, for the docker_image pre-commit hook only (docs/cli-spec.md §7): it
-# judges a change by scanning the version before it too, which it reads
-# from the mounted repository's history (cli/src/cascadesec/history.py).
-# The Lambda never runs it. A 64 MB layer, with the package cache removed.
-# safe.directory: pre-commit mounts the repository at /src, owned by
-# whoever owns it on the host, and the hook only reads it.
-RUN dnf install -y git-core \
- && dnf clean all && rm -rf /var/cache/dnf \
- && git config --system --add safe.directory '*'
-
 # The project's own Trivy checks (handler.py: TRIVY_CHECKS_DIR).
 COPY checks/ /opt/checks/
 COPY handler.py ${LAMBDA_TASK_ROOT}/

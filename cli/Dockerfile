@@ -18,6 +18,16 @@ ARG SCANNER_IMAGE=ghcr.io/konradkelly/cascadesec-scanner@sha256:6d0901b06d7a16b6
 FROM ${SCANNER_IMAGE}
 ARG SCANNER_IMAGE
 
+# git: the hook judges a change by scanning the version before it too, which
+# it reads from the mounted repository's history (cascadesec/history.py). A
+# 64 MB layer, with the package cache removed, that the scanner image and so
+# the Lambda go without. safe.directory: pre-commit mounts the repository at
+# /src, owned by whoever owns it on the host, and the hook only reads it.
+# Before the CLI, so a CLI change does not reinstall it.
+RUN dnf install -y git-core \
+ && dnf clean all && rm -rf /var/cache/dnf \
+ && git config --system --add safe.directory '*'
+
 # --no-deps: the CLI's one dependency is keyring, for a signed-in session,
 # which a hook never opens. It would bring cryptography, cffi and Secret
 # Service; tests/test_hook.py runs the hook with keyring unimportable to

@@ -203,7 +203,7 @@ Docker must be installed.
 Until the image is published, build it and point the CLI at it:
 
 ```
-docker build --build-context corpus=corpus --build-context cli=cli -t cascadesec-scanner:local lambda/iac-scanner
+docker build --build-context corpus=corpus -t cascadesec-scanner:local lambda/iac-scanner
 $env:CASCADESEC_SCANNER_IMAGE = "cascadesec-scanner:local"     # or pass --image
 ```
 

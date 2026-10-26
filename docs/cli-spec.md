@@ -447,8 +447,9 @@ includes the path.
   first commit, `pre-commit run --all-files`, whose files are not a staged
   change, or git unreadable) it judges the changed files themselves, as it
   used to, and says why. On the system hook the two scans run side by side.
-- The docker variant reads history inside the container, so the image
-  carries git (a 64 MB layer the Lambda never runs). Its entry passes the
+- The docker variant reads history inside the container, so the hook
+  image carries git (a 64 MB layer; the scanner image, and so the Lambda,
+  goes without it). Its entry passes the
   two refs with `-e`, because `docker run` passes no environment. A
   worktree's `.git` points outside the mount, so there it falls back to
   judging the files, and says so.
