@@ -1,0 +1,9 @@
+# The hook image (Dockerfile) installs the package from pyproject.toml and
+# src/; nothing else in this directory belongs in it.
+build/
+dist/
+tests/
+**/__pycache__/
+**/*.egg-info/
+.pytest_cache/
+Dockerfile

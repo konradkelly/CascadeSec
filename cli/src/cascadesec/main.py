@@ -230,7 +230,7 @@ class _Context:
 
     def store(self):
         # Imported here so that keyring, which only a session needs, stays
-        # off the scan and hook path: the scanner image installs the CLI
+        # off the scan and hook path: the hook image installs the CLI
         # without its dependencies (cli-spec §7).
         from cascadesec.store import SessionStore  # noqa: PLC0415
 
@@ -581,8 +581,9 @@ def cmd_hook(args, ctx):
     path = args.baseline or baseline.default_path(root)
     if args.baseline and not os.path.isfile(path):
         raise CliError(f"--baseline {args.baseline}: no such file", USAGE)
-    image_ref = ("this container" if ctx.env.get("CASCADESEC_IN_IMAGE") == "1"
-                 else scanning.image(args.image, ctx.env))
+    # In the hook image, CASCADESEC_SCANNER_IMAGE names the scanner it is
+    # built on (cli/Dockerfile), so both hooks name the scanner that ran.
+    image_ref = scanning.image(args.image, ctx.env)
     summary = hook.run(args.files, root, image_ref, args.fail_on, args.allow_scan_errors,
                        path if os.path.isfile(path) else None, skips=settings.skip_apps, run=ctx.run,
                        in_image=ctx.env.get("CASCADESEC_IN_IMAGE") == "1", env=ctx.env)

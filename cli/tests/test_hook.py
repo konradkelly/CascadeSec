@@ -134,6 +134,17 @@ def test_the_manifest_matches_what_the_scanner_admits():
         assert not pattern.search(other), other
 
 
+def test_the_hook_image_is_built_on_the_scanner_the_cli_pins():
+    """Both hooks then scan with the same tools at the same versions: the
+    installed one starts SCANNER_IMAGE, and the docker one runs an image
+    built FROM it. A publish bumps both or neither."""
+    from cascadesec import scan as scanning
+
+    dockerfile = (REPO / "cli" / "Dockerfile").read_text(encoding="utf-8")
+    assert re.search(r"^ARG SCANNER_IMAGE=(\S+)$", dockerfile, re.M).group(1) == scanning.SCANNER_IMAGE
+    assert re.search(r"^FROM \$\{SCANNER_IMAGE\}$", dockerfile, re.M)
+
+
 def test_the_hook_prints_the_table_even_without_a_terminal(repo):
     """pre-commit captures output, so it is never a TTY; a person reads it."""
     _, out = run(["hook", "s3.tf"], repo, FakeDocker([finding("a", "s3.tf")]))
@@ -158,17 +169,18 @@ def test_inside_the_image_it_scans_in_process_with_the_same_verdict(repo, monkey
     docker = FakeDocker()
     out = io.StringIO()
     code = cli.main(["--format", "json", "hook", "s3.tf"], stdout=out,
-                    env={"CASCADESEC_IN_IMAGE": "1"}, cwd=repo, run=docker)
+                    env={"CASCADESEC_IN_IMAGE": "1", "CASCADESEC_SCANNER_IMAGE": "scanner@sha256:1"},
+                    cwd=repo, run=docker)
 
     result = json.loads(out.getvalue())
     assert docker.calls == []                              # no container from inside one
     assert seen["dirs"] == {"."}
     assert code == 1 and [f["fingerprint"] for f in result["findings"]] == ["a"]
-    assert result["scanner_image"] == "this container"
+    assert result["scanner_image"] == "scanner@sha256:1"     # the base the hook image names
 
 
 def test_inside_the_image_the_hook_runs_without_keyring(repo):
-    """The image installs the CLI with --no-deps, so keyring is not there:
+    """The hook image installs the CLI with --no-deps, so keyring is not there:
     the hook, and everything it imports, must not need it."""
     (repo / "s3.tf").write_text("")
     script = (

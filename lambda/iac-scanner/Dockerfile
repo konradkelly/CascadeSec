@@ -94,21 +94,9 @@ COPY local_main.py ${LAMBDA_TASK_ROOT}/
 # §3.3): the same rule_mappings.json and framework files mapping-agent
 # reads from S3, at the version this image was built from. It sits outside
 # this directory, so it arrives as a named build context; build-image.sh
-# passes it, and a plain `docker build` needs it too (with the CLI's, below).
+# passes it, and a plain `docker build` needs it too:
+#   docker build --build-context corpus=../../corpus .
 COPY --from=corpus rule_mappings.json /opt/corpus/
 COPY --from=corpus frameworks/ /opt/corpus/frameworks/
-# The CLI itself, for the docker_image pre-commit hook (docs/cli-spec.md
-# §7): `python -m cascadesec hook` run in this image judges files with the
-# same baseline and exit logic as the installed CLI, and scans in-process
-# rather than starting a container (CASCADESEC_IN_IMAGE). A named build
-# context like the corpus; build-image.sh passes it:
-#   docker build --build-context corpus=../../corpus --build-context cli=../../cli .
-# --no-deps: the CLI's one dependency is keyring, for a signed-in session,
-# which nothing in this image has. It would bring cryptography, cffi and
-# Secret Service into the Lambda; cli/tests/test_hook.py runs the hook with
-# keyring unimportable to keep that true.
-COPY --from=cli . /tmp/cascadesec-cli
-RUN pip install --no-cache-dir --no-deps /tmp/cascadesec-cli && rm -rf /tmp/cascadesec-cli
-ENV CASCADESEC_IN_IMAGE=1
 
 CMD ["handler.handler"]

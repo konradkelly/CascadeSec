@@ -17,11 +17,12 @@ about a finding. It runs the same pinned image, under --network none,
 through scan.run_scanner.
 
 Two hooks run it (.pre-commit-hooks.yaml). `cascadesec` is the installed
-CLI, which starts the image. `cascadesec-docker` is pre-commit starting the
-image itself, with this same command inside it: there it cannot start a
-container, so it calls local_main's scan in-process instead
-(CASCADESEC_IN_IMAGE, set by the Dockerfile). Everything after the scan --
-scoping, baseline, verdict -- is one code path for both.
+CLI, which starts the scanner image. `cascadesec-docker` is pre-commit
+starting the hook image (cli/Dockerfile: the scanner image with this CLI on
+top), which runs this same command: there it cannot start a container, so it
+calls local_main's scan in-process instead (CASCADESEC_IN_IMAGE, set by that
+Dockerfile). Everything after the scan -- scoping, baseline, verdict -- is
+one code path for both.
 
 It ships as `stages: [pre-push]` by default (decision D6): a cold local
 scan takes 10-20 seconds, and 81 on module-heavy Terraform (§3.4), which a
