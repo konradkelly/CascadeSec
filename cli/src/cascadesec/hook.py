@@ -2,15 +2,19 @@
 
 pre-commit passes the files a commit or push changes. The hook scans each
 directory holding one -- the directory rather than the file, because a
-Terraform module and its tfvars resolve across it -- and reports only
-findings in the files themselves, after the baseline. A finding in a file
-nobody touched was there before, and blocking a commit over it is how a
-hook gets uninstalled.
+Terraform module and its tfvars resolve across it -- and scans the same
+directories again as they were before the change (history.py). It blocks
+on the findings the change brought, after the baseline: an old finding
+blocks nobody, which is what keeps a hook installed, and a new one blocks
+in whichever file it lands, which is what makes it a gate. When there is no
+earlier version to compare with (a first commit, `pre-commit run
+--all-files`, git unreadable), it judges the changed files themselves, and
+says why.
 
-The scoping is S5's: scope_to_changes and the baseline are the same calls
-`cascadesec scan --changed-only` makes, so the hook and the CLI cannot
-decide differently about one file. It runs the same pinned image, under
---network none, through scan.run_scanner.
+The rule is the one `cascadesec scan --changed-only` applies, through the
+same baseline.introduced, so the hook and the CLI cannot decide differently
+about a finding. It runs the same pinned image, under --network none,
+through scan.run_scanner.
 
 Two hooks run it (.pre-commit-hooks.yaml). `cascadesec` is the installed
 CLI, which starts the scanner image. `cascadesec-docker` is pre-commit
@@ -28,9 +32,10 @@ commit-time hook would make every commit pay.
 import contextlib
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 
-from cascadesec import baseline
+from cascadesec import baseline, history
 from cascadesec import scan as scanning
 from cascadesec.errors import USAGE, CliError
 
@@ -76,22 +81,51 @@ def scan_in_image(root, dirs):
 
 
 def run(files, root, image_ref, fail_on, allow_scan_errors, baseline_path, skips=(), run=None,
-        which=None, in_image=False):
+        which=None, in_image=False, env=None):
     """The summary `scan` would print for these files, with its exit code."""
     staged = staged_paths(files, root)
     if not staged:
         return None
     dirs = directories(staged)
     document = baseline.load(baseline_path) if baseline_path else None
-    if in_image:
-        result = scan_in_image(root, dirs)
+    earlier, not_compared = history.for_hook(root, staged, dirs, env or {}, run=run)
+
+    def scan(path):
+        if in_image:
+            return scan_in_image(path, dirs)
+        return scanning.run_scanner(path, image_ref, run=run, which=which,
+                                    command=docker_command(os.path.abspath(path), image_ref, dirs))
+
+    def scan_earlier():
+        try:
+            return history.scan_at(root, earlier.rev, scan, dirs, run=run)
+        except history.Unavailable as e:
+            raise CliError(f"could not read {earlier.rev[:12]} to compare with: {e}", USAGE) from None
+
+    # The two scans side by side, each in its own container, so comparing
+    # costs the slower scan rather than both. Measured on terragoat's
+    # terraform/aws on 16 cores: 6.8s for one scan, 12.5-13.2s for two in
+    # turn, 7.5-8.3s side by side. In the image they run in turn: an
+    # in-process scan redirects this process's stdout, which two at once
+    # would tangle.
+    before = None
+    if earlier and not in_image:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(scan_earlier)
+            result = scan(root)
+            before = pending.result()
     else:
-        result = scanning.run_scanner(
-            root, image_ref, run=run, which=which,
-            command=docker_command(os.path.abspath(root), image_ref, dirs))
+        result = scan(root)
+        before = scan_earlier() if earlier else None
     full = result.get("findings") or []
     result, skipped = baseline.skip_apps(result, root, list(skips))
+    # Parse errors and apps count when a changed file is in them, compared
+    # or not: a file that does not parse now is not judged by what it was.
     scoped, outside = baseline.scope_to_changes(result, staged)
+    preexisting = 0
+    if earlier:
+        brought, preexisting, outside = baseline.introduced(result, before, earlier.files)
+        scoped = {**scoped, "findings": brought["findings"]}
     kept, suppressed, _ = baseline.apply(scoped.get("findings") or [], document)
     scoped = {**scoped, "findings": kept}
     summary = scanning.summarise(scoped, root, image_ref, fail_on, allow_scan_errors)
@@ -103,6 +137,10 @@ def run(files, root, image_ref, fail_on, allow_scan_errors, baseline_path, skips
         "baselined_count": len(suppressed),
         "baseline_fixed": [],          # a hook sees part of the repo; fixed is a full scan's call
         "changed_only": None,          # said as "only the changed files" instead
+        "compared_with": earlier.rev if earlier else None,
+        "compared_label": earlier.label if earlier else None,
+        "not_compared_reason": not_compared,
+        "preexisting_count": preexisting,
         "outside_changes_count": outside,
         "skipped_apps": [{k: a[k] for k in ("path", "kind", "reason", "source")} for a in skipped],
         "_scanned_findings": len(full),

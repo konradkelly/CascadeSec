@@ -151,7 +151,7 @@ findings count only with `--fail-on any`.
 ```
 cascadesec baseline                       # write .cascadesec-baseline.json; commit it
 cascadesec scan                           # leaves the baselined findings out, and counts them
-cascadesec scan --changed-only main       # only files changed since main (and new ones)
+cascadesec scan --changed-only main       # only findings a scan of main does not have
 cascadesec baseline --prune               # drop entries that no longer fire; adds nothing
 ```
 
@@ -190,9 +190,15 @@ pre-commit install --hook-type pre-push
 
 It runs on push by default, because a cold scan takes 10 to 20 seconds.
 Set `stages: [pre-commit]` on the hook to run it on every commit instead.
-It scans the directories of the files being pushed and judges only those
-files, after the baseline, so a finding that was already there does not
-block. The CLI and Docker must be installed.
+It scans the directories of the files being pushed, and the same
+directories as they were before the push, read from git. A finding blocks
+only if the push brought it, wherever it lands: a typo fixed in a file with
+old findings goes through, and a variable turned off in `variables.tf` is
+blocked for the bucket it opens in `main.tf`. The baseline still applies on
+top. With nothing to compare with (a first commit, `pre-commit run
+--all-files`), it judges the changed files themselves, and says so. The
+two scans run side by side, so comparing adds about a second. The CLI and
+Docker must be installed.
 
 Until the image is published, build it and point the CLI at it:
 

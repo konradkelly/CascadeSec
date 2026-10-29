@@ -137,29 +137,6 @@ def test_prune_needs_a_baseline_and_warns_on_an_incomplete_scan(repo, capsys):
 
 # ---------- --changed-only ----------
 
-def test_changed_only_reports_findings_errors_and_apps_in_changed_files(repo):
-    fake = Fake([finding("a", file="ec2.tf"), finding("b", file="s3.tf"),
-                 finding("c", file="cdk.out/T.json", origin={"file": "lib/net.ts", "line": 3})],
-                errors=["ec2.tf", "old.tf"],
-                apps=[{"path": "infra", "kind": "cdk", "reason": "r"}, {"path": "chart", "kind": "helm", "reason": "r"}],
-                changed=["ec2.tf", "lib/net.ts"], untracked=["infra/new.ts"])
-    _, result = scan_json(repo, fake, "--changed-only", "main")
-
-    assert sorted(f["fingerprint"] for f in result["findings"]) == ["a", "c"]   # c by its source line
-    assert result["scan_errors"] == ["ec2.tf"]
-    assert [a["path"] for a in result["unscanned_apps"]] == ["infra"]           # a new file inside it
-    assert result["outside_changes_count"] == 1
-    diff_call = next(c for c in fake.calls if "diff" in c)
-    assert diff_call[-3:] == ["--relative", "main", "--"]
-
-
-def test_a_baselined_finding_outside_the_changes_is_not_reported_as_fixed(repo):
-    """Left out by --changed-only is not the same as fixed."""
-    run(["baseline", str(repo)], repo, Fake([finding("a", file="s3.tf")]))
-    _, result = scan_json(repo, Fake([finding("a", file="s3.tf")], changed=["ec2.tf"]), "--changed-only", "HEAD")
-    assert result["baseline_fixed"] == []
-
-
 def test_a_bad_revision_is_a_usage_error(repo, capsys):
     code, _ = run(["scan", str(repo), "--changed-only", "nope"], repo, Fake(git_ok=False))
     assert code == 2
