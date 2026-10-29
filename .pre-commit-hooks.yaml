@@ -1,15 +1,19 @@
-# CascadeSec's pre-commit hook (docs/cli-spec.md §7). In a repository's
+# CascadeSec's pre-commit hooks (docs/cli-spec.md §7). In a repository's
 # .pre-commit-config.yaml:
 #
 #   - repo: https://github.com/konradkelly/CascadeSec
 #     rev: <a release tag or commit>
 #     hooks:
-#       - id: cascadesec
+#       - id: cascadesec-docker      # needs only Docker
+#       # or: - id: cascadesec       # runs the installed CLI
 #
-# then `pre-commit install --hook-type pre-push`. It runs the CascadeSec CLI,
-# which must be installed (pipx install ...; see cli/README.md) along with
-# Docker: the CLI runs the pipeline's own scanner image, pinned by digest,
-# under --network none.
+# then `pre-commit install --hook-type pre-push`. Both scan with the
+# pipeline's own scanner, pinned by digest, under --network none, and judge
+# a change against the version before it with one copy of the same code.
+# `cascadesec` runs the CascadeSec CLI, which must be installed (pipx install
+# ...; see cli/README.md) along with Docker. `cascadesec-docker` needs only
+# Docker: pre-commit runs the hook image, which is the scanner image with
+# the CLI on top.
 #
 # On push by default (decision D6): a cold scan is 10-20 seconds, which a
 # hook on every commit would make every commit pay. To run it on commit
@@ -17,7 +21,7 @@
 
 - id: cascadesec
   name: CascadeSec IaC scan
-  description: Scan changed IaC with the CascadeSec pipeline's own scanner, offline, and block on findings at or above --fail-on (default high), after the baseline.
+  description: Scan changed IaC with the CascadeSec pipeline's own scanner, offline, and block on the findings the change brought at or above --fail-on (default high), after the baseline.
   entry: cascadesec hook
   language: system
   # What the scanner admits: its SNAPSHOT_SUFFIXES, plus the .json and
@@ -27,5 +31,22 @@
   pass_filenames: true
   # One scan for all the changed files. pre-commit would otherwise split them
   # across parallel invocations, each a cold container.
+  require_serial: true
+  stages: [pre-push]
+
+- id: cascadesec-docker
+  name: CascadeSec IaC scan (Docker)
+  description: The cascadesec hook in its own image, so only Docker is needed.
+  # pre-commit appends these tokens to its own `docker run ... -v
+  # <repo>:/src`: --network none isolates the scan, and the two refs give
+  # the hook the push's range, which `docker run` would not pass on. The
+  # image is ghcr.io/konradkelly/cascadesec-hook, built on
+  # ghcr.io/konradkelly/cascadesec-scanner@sha256:6b0d04178988733b851aab363b0387861a0ca4e2d89f0843aceaf51913ee4c2e
+  # (the digest scan.py's SCANNER_IMAGE pins; cli/tests/test_hook.py holds
+  # all three together). Its entrypoint is `cascadesec hook`.
+  entry: --network none -e PRE_COMMIT_FROM_REF -e PRE_COMMIT_TO_REF ghcr.io/konradkelly/cascadesec-hook@sha256:ee208fc08045d8e6e4535f6588b9bfe724bf14e098de65af3bffd1634f37bbfe
+  language: docker_image
+  files: \.(tf|tf\.json|tfvars|tfvars\.json|tofu|tofu\.json|ya?ml|bicep|json|template)$
+  pass_filenames: true
   require_serial: true
   stages: [pre-push]
