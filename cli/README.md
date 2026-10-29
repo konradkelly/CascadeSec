@@ -180,8 +180,9 @@ repos:
   - repo: https://github.com/konradkelly/CascadeSec
     rev: <a release tag or commit>
     hooks:
-      - id: cascadesec
+      - id: cascadesec-docker      # needs only Docker
         # args: [--fail-on, medium]
+      # or - id: cascadesec        # runs the installed CLI
 ```
 
 ```
@@ -196,11 +197,17 @@ only if the push brought it, wherever it lands: a typo fixed in a file with
 old findings goes through, and a variable turned off in `variables.tf` is
 blocked for the bucket it opens in `main.tf`. The baseline still applies on
 top. With nothing to compare with (a first commit, `pre-commit run
---all-files`), it judges the changed files themselves, and says so. The
-two scans run side by side, so comparing adds about a second. The CLI and
-Docker must be installed.
+--all-files`), it judges the changed files themselves, and says so.
 
-Until the image is published, build it and point the CLI at it:
+`cascadesec-docker` needs only Docker: pre-commit runs the hook image, the
+pipeline's scanner image with this CLI on top, pinned by digest. It runs
+the two scans in turn. `cascadesec` needs the CLI and Docker, and runs them
+side by side, so comparing adds about a second. In a git worktree use
+`cascadesec`: a worktree's history lies outside the folder the Docker hook
+can see, so that hook can only judge the changed files.
+
+Both images are on GHCR (`cascadesec-scanner` and `cascadesec-hook`). To
+scan with a locally built scanner instead, build it and point the CLI at it:
 
 ```
 docker build --build-context corpus=corpus -t cascadesec-scanner:local lambda/iac-scanner

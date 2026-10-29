@@ -113,19 +113,33 @@ def manifest():
     return (REPO / ".pre-commit-hooks.yaml").read_text(encoding="utf-8")
 
 
-def test_the_manifest_runs_serially_on_push_with_the_file_names():
-    text = manifest()
-    assert re.search(r"^- id: cascadesec$", text, re.M)
-    assert re.search(r"^\s*entry: cascadesec hook$", text, re.M)
-    assert re.search(r"^\s*pass_filenames: true$", text, re.M)
-    assert re.search(r"^\s*require_serial: true$", text, re.M)
-    assert re.search(r"^\s*stages: \[pre-push\]$", text, re.M)
+def hooks():
+    """{id: the hook's block of lines}, split on the manifest's `- id:` lines
+    (no YAML parser in the test dependencies)."""
+    blocks = re.split(r"^- id: ", manifest(), flags=re.M)[1:]
+    return {b.split("\n", 1)[0].strip(): b for b in blocks}
+
+
+def field(block, name):
+    return re.search(rf"^\s*{name}: (.+)$", block, re.M).group(1).strip()
+
+
+def test_both_hooks_run_serially_on_push_with_the_file_names():
+    found = hooks()
+    assert set(found) == {"cascadesec", "cascadesec-docker"}
+    assert field(found["cascadesec"], "entry") == "cascadesec hook"
+    assert field(found["cascadesec-docker"], "language") == "docker_image"
+    for block in found.values():
+        assert field(block, "pass_filenames") == "true"
+        assert field(block, "require_serial") == "true"
+        assert field(block, "stages") == "[pre-push]"
+    assert field(found["cascadesec"], "files") == field(found["cascadesec-docker"], "files")
 
 
 def test_the_manifest_matches_what_the_scanner_admits():
     """A suffix the scanner admits and the hook's pattern misses would let a
     change through unscanned; the reverse would run Docker for nothing."""
-    pattern = re.compile(re.search(r"^\s*files: (.+)$", manifest(), re.M).group(1))
+    pattern = re.compile(field(hooks()["cascadesec"], "files"))
     source = (REPO / "lambda" / "iac-scanner" / "handler.py").read_text(encoding="utf-8")
     suffixes = ast.literal_eval(re.search(r"^SNAPSHOT_SUFFIXES = (\(.*?\))", source, re.S | re.M).group(1))
     for suffix in (*suffixes, ".json", ".template"):              # admitted, or sniffed
@@ -134,15 +148,31 @@ def test_the_manifest_matches_what_the_scanner_admits():
         assert not pattern.search(other), other
 
 
+def test_the_docker_hook_is_isolated_pinned_and_told_the_push_range():
+    """pre-commit appends the entry to its own `docker run`: --network none
+    keeps the scan offline, the two refs let the hook compare with the
+    version before the push, and the image is named by digest, which a tag
+    is not, so a rev of this repository always runs the same image."""
+    tokens = field(hooks()["cascadesec-docker"], "entry").split()
+    assert tokens[:2] == ["--network", "none"]
+    assert " ".join(tokens[2:6]) == "-e PRE_COMMIT_FROM_REF -e PRE_COMMIT_TO_REF"
+    assert re.fullmatch(r"ghcr\.io/konradkelly/cascadesec-hook@sha256:[0-9a-f]{64}", tokens[-1])
+    assert len(tokens) == 7
+
+
 def test_the_hook_image_is_built_on_the_scanner_the_cli_pins():
     """Both hooks then scan with the same tools at the same versions: the
     installed one starts SCANNER_IMAGE, and the docker one runs an image
-    built FROM it. A publish bumps both or neither."""
+    built FROM it. The manifest names the base its hook image was built on.
+    A publish bumps all three or none."""
     from cascadesec import scan as scanning
 
     dockerfile = (REPO / "cli" / "Dockerfile").read_text(encoding="utf-8")
     assert re.search(r"^ARG SCANNER_IMAGE=(\S+)$", dockerfile, re.M).group(1) == scanning.SCANNER_IMAGE
     assert re.search(r"^FROM \$\{SCANNER_IMAGE\}$", dockerfile, re.M)
+    built_on = re.findall(r"ghcr\.io/konradkelly/cascadesec-scanner@sha256:[0-9a-f]{64}",
+                          hooks()["cascadesec-docker"])
+    assert built_on == [scanning.SCANNER_IMAGE]
 
 
 def test_the_hook_prints_the_table_even_without_a_terminal(repo):
