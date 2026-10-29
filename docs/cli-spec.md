@@ -735,9 +735,13 @@ work. **S** (scan) needs no auth until remote mode.
    so one scan covers every changed file. The `docker_image` variant needs
    the CLI's baseline and exit logic inside the image, so the two hooks
    cannot judge a file differently: the hook image (`cli/Dockerfile`, the
-   scanner image with the CLI on top) carries it since 2026-10-26, and the
-   hook's manifest entry comes with the first publish of that image, pinned
-   to its digest.
+   scanner image with the CLI on top) carries it since 2026-10-26. Both
+   images were first published on 2026-10-29, from b85206d, and the
+   `cascadesec-docker` manifest entry came with them, pinned to the hook
+   image's digest. Taken through the manifest as a user takes it (a
+   `repo:` at a commit, the image pulled from GHCR by digest), it let a
+   comment fixed in `s3.tf` through, blocked a variable turned off for the
+   4 HIGH findings in `main.tf`, and skipped a Markdown push.
    Live through a
    real `git push` (pre-commit 4.7.0) to a scratch remote: a commit adding a
    public bucket to baselined terragoat was blocked in 14 seconds, judged
