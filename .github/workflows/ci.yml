@@ -114,6 +114,41 @@ jobs:
         # region -- and because a broken mapping is not one Lambda's fault.
         run: python -m pytest corpus/ -q
 
+  core:
+    name: core
+    runs-on: ubuntu-latest
+    # The RecordStore conformance suite (portable-runtime-spec §4) on every
+    # store, the AWS adapter's against DynamoDB Local. No AWS credentials:
+    # DynamoDB Local takes any, and the suite's name nothing real.
+    services:
+      dynamodb:
+        # amazon/dynamodb-local:2.6.1, by digest.
+        image: amazon/dynamodb-local@sha256:1856c05cc66a0e49dc1099e483ad2851477eeebe2135250ac11a1d1227db54b1
+        ports: ['8000:8000']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Wait for DynamoDB Local
+        # A JVM: the container is up seconds before it answers. Any HTTP
+        # status is an answer (it says 400 to a bare GET).
+        run: |
+          for i in $(seq 1 30); do
+            curl -s -o /dev/null http://localhost:8000 && exit 0
+            sleep 1
+          done
+          echo "DynamoDB Local did not answer in 30s" && exit 1
+      - name: pytest
+        working-directory: core
+        env:
+          # A store the suite cannot reach is a failure here, never a skip.
+          CASCADESEC_REQUIRE_DYNAMODB: '1'
+        run: python -m pytest -q tests
+
   deploy-guard:
     name: deploy-guard
     runs-on: ubuntu-latest
