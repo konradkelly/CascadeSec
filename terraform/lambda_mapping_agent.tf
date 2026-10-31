@@ -3,10 +3,43 @@
 # is missing or stale. Shares the anthropic layer with remediation-agent once
 # that Lambda exists.
 
+# The handler, and cascadesec_core vendored beside it (portable-runtime-spec
+# §8): still one artifact per function. What the zip holds, by its path in
+# the zip, from where each file lives in the repository.
+locals {
+  mapping_agent_build = "${path.module}/../build/mapping-agent"
+  mapping_agent_files = merge(
+    { "handler.py" = "${path.module}/../lambda/mapping-agent/handler.py" },
+    { for f in fileset("${path.module}/../core", "cascadesec_core/**/*.py") : f => "${path.module}/../core/${f}" },
+  )
+}
+
+# Zipped from build/mapping-agent, which scripts/deploy.py assembles from
+# those files before every plan, not from them directly. A source block
+# would need no build directory, but archive_file writes its entries with
+# no file mode at all and ignores output_file_mode for them, and Lambda
+# documents only that it enforces the mode a zip gives (644 for code).
+# source_dir writes real Unix entries, and 0644 makes the zip the same on
+# Windows and Linux.
 data "archive_file" "mapping_agent_handler" {
-  type        = "zip"
-  source_file = "${path.module}/../lambda/mapping-agent/handler.py"
-  output_path = "${path.module}/../lambda/mapping-agent/handler.zip"
+  type             = "zip"
+  source_dir       = local.mapping_agent_build
+  output_path      = "${path.module}/../lambda/mapping-agent/handler.zip"
+  output_file_mode = "0644"
+
+  lifecycle {
+    # A build directory left from another run, or never made, would ship
+    # code nobody compared. So it must hold exactly those files, byte for
+    # byte, or nothing is planned.
+    precondition {
+      condition = (
+        fileset(local.mapping_agent_build, "**") == toset(keys(local.mapping_agent_files))
+        && alltrue([for rel, src in local.mapping_agent_files :
+        try(filesha256("${local.mapping_agent_build}/${rel}") == filesha256(src), false)])
+      )
+      error_message = "build/mapping-agent is not lambda/mapping-agent/handler.py plus core/cascadesec_core. scripts/deploy.py assembles it before planning: deploy through it, not with terraform directly."
+    }
+  }
 }
 
 resource "aws_lambda_layer_version" "anthropic" {

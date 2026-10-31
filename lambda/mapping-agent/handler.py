@@ -56,6 +56,13 @@ from datetime import datetime, timezone
 import anthropic
 import boto3
 
+# Vendored into the zip beside this file by terraform/lambda_mapping_agent.tf
+# (portable-runtime-spec §8). Imported under the names this module used
+# when it held them.
+from cascadesec_core.mapping import DETECTION_ONLY_TARGET_TYPES
+from cascadesec_core.mapping import candidates_for as _candidates_for
+from cascadesec_core.mapping import unmapped_reason as _unmapped_reason
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -79,18 +86,10 @@ secretsmanager = boto3.client("secretsmanager")
 
 # Cold-start caches -- corpus content and the API key don't change within a
 # warm execution environment, so fetch each at most once per container.
-# Mapped, but never handed to remediation: detection only until a fix to
-# their source can be verified by synthesizing again (sandbox-spec §9).
-DETECTION_ONLY_TARGET_TYPES = {"cdk", "pulumi"}
-
 _anthropic_client = None
 _rule_mappings = None
 _unmapped_rules = None
 _framework_cache = {}
-
-# The reason a rule with no candidate gets when rule_mappings.json's
-# `unmapped` section does not name it.
-UNREVIEWED = "unreviewed"
 
 _FRAMEWORK_FILES = {
     "CIS-AWS-1.4": "cis-aws-1.4.json",
@@ -281,47 +280,6 @@ def _query_raw_findings(pr_id):
             ":status": "raw",
         },
     )
-
-
-def _candidates_for(rule_mappings, finding):
-    """The candidate controls that apply to this finding.
-
-    A rule's candidates are keyed by (source, rule_id), which is all a rule
-    normally needs: CKV_AWS_145 only ever fires on Terraform. It is not
-    enough for the rules that fire on more than one language. CKV_SECRET_6
-    is the case that forced this -- a plaintext secret, raised on a .tf file
-    and on a Kubernetes manifest alike. The Kubernetes control that fits it
-    (CIS Kubernetes 5.4.2, external secret storage) must not be offered as a
-    candidate for the Terraform finding, and before this it could only be
-    added to both or neither.
-
-    So a candidate may carry an optional `target_type` that scopes it. One
-    without it is universal, which is every candidate written before
-    2026-09-20 and most written after. One with it is offered only when the
-    finding came from that target type.
-
-    A finding with no target_type -- written before the field split
-    (multi-iac-spec §3.1) -- matches universal candidates only. That is the
-    safe direction: it withholds a control rather than citing one against a
-    finding whose language is unknown.
-    """
-    refs = rule_mappings.get(f"{finding['source']}:{finding['rule_id']}") or []
-    target_type = finding.get("target_type")
-    # A synthesized CDK template is CloudFormation, and a control scoped to
-    # CloudFormation fits it as well as it fits a hand-written template.
-    matches = {target_type} | ({"cloudformation"} if target_type == "cdk" else set())
-    return [r for r in refs
-            if "target_type" not in r or r["target_type"] in matches]
-
-
-def _unmapped_reason(unmapped_rules, finding):
-    """Why this finding has no candidate. Keyed on (source, rule_id) like
-    the mappings: a rule is triaged once, not per finding or per target.
-    The table is passed in rather than loaded here, so this body is the one
-    iac-scanner's local_main.py copies (corpus/test_corpus.py holds them
-    together until the core is shared, portable-runtime-spec §8)."""
-    entry = unmapped_rules.get(f"{finding['source']}:{finding['rule_id']}")
-    return entry["reason"] if entry else UNREVIEWED
 
 
 def _load_rule_mappings():

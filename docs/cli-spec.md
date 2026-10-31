@@ -759,6 +759,9 @@ work. **S** (scan) needs no auth until remote mode.
    the docker hook, which scans in turn, 11.3-13.1s.
 7. `scan-api` and `unpack` under `/v1` on the JWT authorizer (phase H).
    Then remote mode, `--fix` and `--apply` for a signed-in person.
+   **Deferred 2026-10-31:** portable-runtime-spec P9 was accepted, so its
+   phases come first, and a CI job runs the pipeline itself with its own
+   key.
 8. Phase M (machine-auth-spec build order), when CI needs step 7.
 9. When asked for: `--helm` (§3.5 stage 2), once the sandbox image's Helm
    rendering is deployed. Then `--synth` (stage 3), with `cdk.py` and

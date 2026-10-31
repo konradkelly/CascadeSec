@@ -18,10 +18,14 @@ So this script checks, in order, and stops at the first failure:
 
   1. terraform.tfvars sets every variable that gates resources
      (REQUIRED_VARIABLES). A missing one is named, with what it would cost.
-  2. The code Terraform packages from disk -- the root's *.tf and every
-     lambda/*/handler.py -- matches --ref (default origin/main). archive_file
-     zips whatever is on disk, so an uncommitted edit would otherwise ship
-     without anyone deciding to. --allow-local-changes overrides it.
+  2. The code Terraform packages from disk -- the root's *.tf, every
+     lambda/*/handler.py, and core/cascadesec_core, which is vendored into
+     the zips that import it -- matches --ref (default origin/main).
+     archive_file zips whatever is on disk, so an uncommitted edit would
+     otherwise ship without anyone deciding to. --allow-local-changes
+     overrides it. Then the Lambdas that vendor the core get their
+     build/<function>/ directory assembled afresh from those same files,
+     since that is what Terraform zips for them (VENDORED_CORE).
   3. `terraform plan -input=false`: a variable that is still missing is an
      error, never a prompt.
   4. The plan's real changes, read from `terraform show -json`: what it
@@ -41,6 +45,7 @@ at the root that holds the state (default: this repository's terraform/).
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -99,10 +104,38 @@ def _variables_help(variables):
 # ---------- 2. the code Terraform packages ----------
 
 def packaged_paths(repo):
-    """Repository-relative paths Terraform reads from disk into a deploy."""
+    """Repository-relative paths Terraform reads from disk into a deploy.
+    test_deploy.py holds this to every file an archive_file zips."""
     paths = sorted(p for p in (repo / "terraform").glob("*.tf"))
     paths += sorted((repo / "lambda").glob("*/handler.py"))
+    paths += sorted((repo / "core").glob("cascadesec_core/**/*.py"))
     return [p.relative_to(repo).as_posix() for p in paths]
+
+
+# Zip-packaged Lambdas that import cascadesec_core. Terraform zips each from
+# build/<function>/ (portable-runtime-spec §8), and its precondition refuses
+# a directory that is not exactly package_sources' files, byte for byte.
+VENDORED_CORE = ("mapping-agent",)
+
+
+def package_sources(repo, function):
+    """{path in the zip: repository-relative source} for one function: its
+    handler, and the core beside it."""
+    sources = {"handler.py": f"lambda/{function}/handler.py"}
+    for path in sorted((repo / "core").glob("cascadesec_core/**/*.py")):
+        sources[path.relative_to(repo / "core").as_posix()] = path.relative_to(repo).as_posix()
+    return sources
+
+
+def assemble(repo):
+    """Each VENDORED_CORE function's build directory, removed and filled
+    again with byte copies, so nothing from an earlier run survives in it."""
+    for function in VENDORED_CORE:
+        target = repo / "build" / function
+        shutil.rmtree(target, ignore_errors=True)
+        for rel, source in package_sources(repo, function).items():
+            (target / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(repo / source, target / rel)
 
 
 def _normalise(data):
@@ -120,6 +153,14 @@ def check_code(repo, ref, git=subprocess.run):
             differs.append(f"{path} (not in {ref})")
         elif _normalise(shown.stdout) != on_disk:
             differs.append(path)
+    # A core file the ref has and this tree lacks: the zip would go without
+    # it, and Terraform would not notice, since its list of the core's files
+    # would just be shorter.
+    listed = git(["git", "-C", str(repo), "ls-tree", "-r", "--name-only", ref, "--", "core/cascadesec_core"],
+                 capture_output=True)
+    if listed.returncode == 0:
+        differs += [f"{path} (in {ref}, missing here)" for path in listed.stdout.decode().splitlines()
+                    if path.endswith(".py") and not (repo / path).is_file()]
     if differs:
         raise Stop(f"the code Terraform would package is not {ref}'s:\n"
                    + "\n".join(f"  - {d}" for d in differs)
@@ -222,7 +263,9 @@ def main(argv=None, run=subprocess.run, out=print):
         else:
             run(["git", "-C", str(repo), "fetch", "--quiet", "origin"], capture_output=True)
             check_code(repo, args.ref, git=run)
-            out(f"code: the packaged .tf and handlers match {args.ref}")
+            out(f"code: the packaged .tf, handlers and core match {args.ref}")
+        assemble(repo)
+        out("build: assembled " + ", ".join(f"build/{f}" for f in VENDORED_CORE))
         terraform(["plan", "-input=false", "-out", PLAN_FILE], terraform_dir, run)
         summary = read_plan(terraform_dir, run)
         report(summary, out)

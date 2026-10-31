@@ -1,0 +1,5 @@
+# Assembled by scripts/deploy.py before every plan: each zip-packaged Lambda
+# with cascadesec_core vendored in, which Terraform zips from here
+# (portable-runtime-spec §8). Never edited by hand, never committed.
+*
+!.gitignore
