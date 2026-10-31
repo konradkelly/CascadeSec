@@ -710,7 +710,9 @@ work. **S** (scan) needs no auth until remote mode.
    rather than mixed into `scan_errors`, which lists files; the CLI exits 3
    for either.
 4. CLI local mode: table, json, and exit codes, with candidates and raw
-   reasons (§3.3). SARIF comes with sarif-spec. **Built 2026-10-18.** The
+   reasons (§3.3). SARIF comes with sarif-spec. **Built 2026-10-18**, and
+   SARIF on 2026-10-31 (`--format sarif`, uploaded to the testbed:
+   sarif-spec §5). The
    corpus ships in the image through a named build context, so candidates
    come from the corpus version the image was built from. §3.3's "one copy"
    of `_unmapped_reason` became an agreement-tested copy instead: mapping-
