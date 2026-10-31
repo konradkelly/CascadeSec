@@ -78,9 +78,10 @@ FINDING_FIELDS = ("finding_id", "fingerprint", "source", "rule_id", "title", "de
 
 # ---------- what a remote scan would make of each finding ----------
 #
-# Copies of mapping-agent's, held to it by corpus/test_corpus.py until the
-# core is one shared package (portable-runtime-spec §8). Local output
-# predicts what the pipeline will do, so it must decide it the same way.
+# Copies of core/cascadesec_core/mapping.py's, which mapping-agent runs,
+# held to it by corpus/test_corpus.py until this image ships the core too
+# (portable-runtime-spec §8). Local output predicts what the pipeline will
+# do, so it must decide it the same way.
 
 UNREVIEWED = "unreviewed"
 DETECTION_ONLY_TARGET_TYPES = {"cdk", "pulumi"}
