@@ -14,4 +14,8 @@ origin/main like any handler.
 
   mapping   which controls a finding may be mapped to, and why it stays raw
             when none may
+  records   the RecordStore port, its conditions, and what a guarantee
+            means (§3, §4); adapters live in cascadesec_aws and, later,
+            the local and portable-hosted runtimes
+  memory    a RecordStore in memory, the conformance suite's reference
 """
