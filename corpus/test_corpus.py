@@ -395,17 +395,34 @@ def test_the_agent_and_the_gateway_agree_on_what_is_stale():
     assert len(set(bodies.values())) == 1, bodies
 
 
-@pytest.mark.parametrize("name", ["_candidates_for", "_unmapped_reason"])
-def test_local_mode_predicts_mapping_as_mapping_agent_decides_it(name):
+CORE_MAPPING = "core/cascadesec_core/mapping.py"
+
+
+@pytest.mark.parametrize("core_name, local_name", [("candidates_for", "_candidates_for"),
+                                                   ("unmapped_reason", "_unmapped_reason")])
+def test_local_mode_predicts_mapping_as_mapping_agent_decides_it(core_name, local_name):
     """iac-scanner's local_main.py labels each local finding with its
     candidate controls, or why it will stay raw, so a developer sees what a
     remote scan will make of it (cli-spec §3.3). Its copies drifting from
-    mapping-agent's would show candidates the pipeline never offers. Copies
-    rather than one module until the core is shared (portable-runtime-spec
-    §8)."""
-    bodies = _function_bodies(name, "lambda/mapping-agent/handler.py",
-                              "lambda/iac-scanner/local_main.py")
-    assert len(set(bodies.values())) == 1, bodies
+    the core's, which mapping-agent runs, would show candidates the pipeline
+    never offers. Copies until the scanner image ships the core too
+    (portable-runtime-spec §8)."""
+    core = _function_bodies(core_name, CORE_MAPPING)[CORE_MAPPING]
+    local = _function_bodies(local_name, "lambda/iac-scanner/local_main.py")
+    assert local == {"lambda/iac-scanner/local_main.py": core}
+
+
+def test_mapping_agent_runs_the_cores_mapping_not_a_copy():
+    """The other half of the test above: it holds local_main's copies to the
+    core, which proves nothing if mapping-agent keeps one of its own."""
+    tree = ast.parse((CORPUS.parent / "lambda/mapping-agent/handler.py").read_text(encoding="utf-8"))
+    defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)} | {
+        t.id for n in tree.body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
+    assert not defined & {"_candidates_for", "_unmapped_reason", "candidates_for", "unmapped_reason",
+                          "UNREVIEWED", "DETECTION_ONLY_TARGET_TYPES"}
+    imported = {(n.module, a.name) for n in tree.body if isinstance(n, ast.ImportFrom) for a in n.names}
+    assert {("cascadesec_core.mapping", "candidates_for"), ("cascadesec_core.mapping", "unmapped_reason"),
+            ("cascadesec_core.mapping", "DETECTION_ONLY_TARGET_TYPES")} <= imported
 
 
 def test_local_mode_and_mapping_agent_agree_on_constants():
@@ -415,9 +432,9 @@ def test_local_mode_and_mapping_agent_agree_on_constants():
                 for t in n.targets if isinstance(t, ast.Name)
                 and t.id in ("UNREVIEWED", "DETECTION_ONLY_TARGET_TYPES")}
 
-    agent = constants("lambda/mapping-agent/handler.py")
-    assert agent == constants("lambda/iac-scanner/local_main.py")
-    assert set(agent) == {"UNREVIEWED", "DETECTION_ONLY_TARGET_TYPES"}
+    core = constants(CORE_MAPPING)
+    assert core == constants("lambda/iac-scanner/local_main.py")
+    assert set(core) == {"UNREVIEWED", "DETECTION_ONLY_TARGET_TYPES"}
 
 
 @pytest.mark.parametrize("name", ["plan_commit", "approved_tip", "_commit_diff",

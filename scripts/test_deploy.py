@@ -6,6 +6,7 @@ writer App id must stop before any plan, and a plan that destroys
 github-committer must be refused, not summarised and waved through."""
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,12 @@ RESTORE = {"resource_changes": [
 def root(tmp_path):
     (tmp_path / "terraform").mkdir()
     (tmp_path / "terraform" / "terraform.tfvars").write_text(FULL_TFVARS)
+    # What assemble() copies into build/ before a plan.
+    (tmp_path / "lambda" / "mapping-agent").mkdir(parents=True)
+    (tmp_path / "lambda" / "mapping-agent" / "handler.py").write_bytes(b"import cascadesec_core\r\n")
+    (tmp_path / "core" / "cascadesec_core").mkdir(parents=True)
+    (tmp_path / "core" / "cascadesec_core" / "__init__.py").write_bytes(b"")
+    (tmp_path / "core" / "cascadesec_core" / "mapping.py").write_bytes(b"UNREVIEWED = 'unreviewed'\n")
     return tmp_path
 
 
@@ -191,12 +198,110 @@ def test_packaged_code_that_differs_from_the_ref_is_named(tmp_path):
     (tmp_path / "lambda" / "review-api" / "handler.py").write_bytes(b"print('edited')\n")
     committed = {"terraform/main.tf": b'resource "x" "y" {}\n', "lambda/review-api/handler.py": b"print('main')\n"}
 
-    def git(cmd, capture_output=True):
-        path = cmd[-1].split(":", 1)[1]
-        return subprocess.CompletedProcess(cmd, 0, committed[path], b"")
-
     with pytest.raises(deploy.Stop) as e:
-        deploy.check_code(tmp_path, "origin/main", git=git)
+        deploy.check_code(tmp_path, "origin/main", git=git_at(committed))
     message = str(e.value)
     assert "lambda/review-api/handler.py" in message
     assert "terraform/main.tf" not in message            # CRLF alone is not a difference
+
+
+def git_at(committed):
+    """git, answering `show REF:PATH` and `ls-tree` from {path: bytes}."""
+    def git(cmd, capture_output=True):
+        if "ls-tree" in cmd:
+            listed = "\n".join(p for p in committed if p.startswith(cmd[-1] + "/"))
+            return subprocess.CompletedProcess(cmd, 0, listed.encode(), b"")
+        return subprocess.CompletedProcess(cmd, 0, committed[cmd[-1].split(":", 1)[1]], b"")
+    return git
+
+
+def test_an_edit_to_the_vendored_core_is_named(tmp_path):
+    (tmp_path / "core" / "cascadesec_core").mkdir(parents=True)
+    (tmp_path / "core" / "cascadesec_core" / "mapping.py").write_bytes(b"UNREVIEWED = 'edited'\n")
+    committed = {"core/cascadesec_core/mapping.py": b"UNREVIEWED = 'unreviewed'\n"}
+
+    with pytest.raises(deploy.Stop) as e:
+        deploy.check_code(tmp_path, "origin/main", git=git_at(committed))
+    assert "core/cascadesec_core/mapping.py" in str(e.value)
+
+
+def test_a_core_file_missing_here_is_named(tmp_path):
+    """The zip would go without it, and Terraform's list of the core's files
+    would just be shorter: nothing else would say so."""
+    (tmp_path / "core" / "cascadesec_core").mkdir(parents=True)
+    (tmp_path / "core" / "cascadesec_core" / "__init__.py").write_bytes(b"")
+    committed = {"core/cascadesec_core/__init__.py": b"", "core/cascadesec_core/mapping.py": b"x = 1\n"}
+
+    with pytest.raises(deploy.Stop) as e:
+        deploy.check_code(tmp_path, "origin/main", git=git_at(committed))
+    assert "core/cascadesec_core/mapping.py (in origin/main, missing here)" in str(e.value)
+    assert "__init__.py" not in str(e.value)
+
+
+# ---------- build/: the Lambdas that vendor the core ----------
+
+def test_a_plan_assembles_the_build_directory_first(root):
+    stale = root / "build" / "mapping-agent" / "left_over.py"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("from an earlier run")
+    code, runner, out = run_main(root, RESTORE)
+
+    assert code == 0 and "build: assembled build/mapping-agent" in out
+    built = root / "build" / "mapping-agent"
+    assert sorted(p.relative_to(built).as_posix() for p in built.rglob("*") if p.is_file()) == [
+        "cascadesec_core/__init__.py", "cascadesec_core/mapping.py", "handler.py"]
+    # Byte copies: line endings and all, as the precondition's hashes need.
+    assert (built / "handler.py").read_bytes() == b"import cascadesec_core\r\n"
+
+
+def test_apply_saved_does_not_rebuild(root):
+    """The saved plan already holds the zip's hash; the directory is not
+    what is applied."""
+    run_main(root, RESTORE)
+    (root / "build" / "mapping-agent" / "handler.py").write_text("changed after the plan")
+    run_main(root, RESTORE, "--apply-saved")
+    assert (root / "build" / "mapping-agent" / "handler.py").read_text() == "changed after the plan"
+
+
+REPO = Path(__file__).resolve().parent.parent
+FROM_MODULE = r'"\$\{path\.module\}/\.\./'
+ARCHIVES = r'data "archive_file" "\w+" \{.*?\n\}'
+
+
+def archive_blocks():
+    for tf in (REPO / "terraform").glob("*.tf"):
+        yield from ((tf.name, block) for block in re.findall(ARCHIVES, tf.read_text(encoding="utf-8"), re.S))
+
+
+def zipped_files():
+    """Every repository file an archive_file in terraform/ zips: a
+    source_file, or what assemble() puts in a build directory."""
+    files = set()
+    for _, block in archive_blocks():
+        files |= set(re.findall(r'source_file\s*=\s*' + FROM_MODULE + r'([^"$]+)"', block))
+        for function in re.findall(r'source_dir\s*=\s*local\.(\w+)_build', block):
+            files |= set(deploy.package_sources(REPO, function.replace("_", "-")).values())
+    return files
+
+
+def test_the_guard_compares_every_file_a_zip_is_built_from():
+    """A zip built from a file the guard does not compare would ship an
+    uncommitted edit unseen, which is what check 2 exists to stop. The core
+    is the case that brought this in: it is vendored into zips (portable-
+    runtime-spec §8), so it is packaged code like any handler."""
+    zipped = zipped_files()
+    assert "lambda/mapping-agent/handler.py" in zipped
+    assert "core/cascadesec_core/mapping.py" in zipped
+    assert zipped <= set(deploy.packaged_paths(REPO)), zipped - set(deploy.packaged_paths(REPO))
+
+
+def test_every_zip_built_from_a_directory_is_one_the_guard_assembles_and_terraform_checks():
+    """A build directory nobody assembles is stale or missing; one Terraform
+    does not check could be either and still be zipped."""
+    from_build = {}
+    for name, block in archive_blocks():
+        for function in re.findall(r'source_dir\s*=\s*local\.(\w+)_build', block):
+            from_build[function.replace("_", "-")] = block
+            assert re.search(r'output_file_mode\s*=\s*"0644"', block), name
+            assert "precondition" in block and f"local.{function}_files" in block, name
+    assert set(from_build) == set(deploy.VENDORED_CORE)
