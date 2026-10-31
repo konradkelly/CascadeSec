@@ -94,6 +94,29 @@ update(pk, sk, set={}, set_if_absent={}, remove=[], condition=None) -> item
                | AbsentOr(StatusIn(...))      a failed condition -> Conflict
 ```
 
+**Built 2026-10-31** (`core/cascadesec_core/records.py`), with what the
+call sites showed the sketch lacked:
+
+- **`Missing(attr)`**, for G2's `attribute_not_exists(no_longer_detected)`.
+  `Absent()` is about the item, so the sketch had no way to say "this
+  attribute".
+- **An update creates the item when there is none**, as DynamoDB's does. The
+  scanner's `_write_findings` relies on it. A condition on a missing item
+  fails without creating it.
+- **A `set` key may be a path into a map** (`proposed_fix.committed`, review-api's
+  `proposed_fix.stale_reason`). A path under a missing map raises
+  `PathError`, as DynamoDB refuses it.
+- **`query` takes an optional `attributes` list**, because the scanner projects a
+  large partition. Filters stay with the caller: DynamoDB applies them after
+  reading, so filtering in Python costs the same reads.
+- **Numbers are `int` or `float`** at the port. The DynamoDB adapter keeps
+  `Decimal` to itself, so each call site that uses `Decimal` (review-api's
+  encoder among them) is checked when it moves.
+- **Each condition states its meaning as `holds(item)`.** The memory store
+  evaluates that under one lock, and SQLite and Postgres will evaluate it
+  inside their transaction. The DynamoDB adapter (`core/cascadesec_aws/`)
+  writes the expression the condition replaced.
+
 The 39 record call sites (`get_item`, `query`, `put_item`, `update_item`) move from boto3
 expressions to this API, beside the 40 S3 call sites that move to BlobStore. The DynamoDB
 adapter turns each call back into the expression it replaced, so the AWS
@@ -344,6 +367,19 @@ Each phase leaves the AWS runtime working and deployed.
 2. **Ports and the conformance suite.** BlobStore and RecordStore, their AWS
    adapters, and §4's suite passing on DynamoDB Local. Call sites move to
    the ports one component at a time, each behind its existing tests.
+   **RecordStore built 2026-10-31.**
+   - **The suite:** `core/tests/test_records_conformance.py` covers G1-G9,
+     each written as the operation that depends on it, plus the semantics
+     those rest on. It runs on a memory store and on DynamoDB Local
+     (2.6.1), 40 passing, with CI's `core` job refusing to skip DynamoDB.
+     G5 races 8 clients for one claim, and G9 pages past DynamoDB's 1 MB.
+   - **Checked against broken stores:** the suite failed 10 tests on a
+     store that ignored conditions (memory and DynamoDB each), 2 on one
+     that returned only a query's first page, and 1 on a `set_if_absent`
+     that overwrote.
+   - **Next:** BlobStore with its S3 adapter. Then call sites move,
+     component by component, starting with mapping-agent, which already
+     carries the core.
 3. **The core.** Logic moves out of the handlers into `cascadesec_core`,
    component by component: mapping, then the scanner's write path, then
    remediation, then review. The handlers shrink to adapters.
