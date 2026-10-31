@@ -32,3 +32,8 @@ Rules for you:
   a saved plan once the state has moved on, which is the point.
 - The state is local, in the main checkout's `terraform/`. From a git
   worktree, pass `--terraform-dir` pointing at that root.
+- A bare `terraform plan` stops at a precondition on mapping-agent's zip,
+  which is built from `build/mapping-agent/`. The script assembles that
+  directory before planning, from the files it has just compared with
+  `origin/main`. The stop is deliberate: a build directory nobody
+  assembled could hold code nobody compared.

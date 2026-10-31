@@ -16,8 +16,10 @@ prerequisite, in three runtimes:
 | **AWS** | what exists today, unchanged | this deployment |
 | **Portable hosted** | containers, Postgres and S3-compatible storage, on any cloud | a team that wants the GitHub App and a shared dashboard off AWS |
 
-Written before building, 2026-10-18. Not started. Requested by Konrad on
-2026-10-18, after S1 of the CLI's track S showed how thin the AWS layer is.
+Written before building, 2026-10-18. Requested by Konrad on 2026-10-18,
+after S1 of the CLI's track S showed how thin the AWS layer is. Chosen over
+the CLI's remote scans on 2026-10-31 (P9). Phase 1 built that day for
+mapping-agent, and not yet deployed (§12).
 
 ## 1. How much is actually AWS
 
@@ -242,6 +244,36 @@ image and gets the core in its `COPY`.
 This is also when mapping-agent's `_unmapped_reason` gets its shared home
 (cli-spec §13, S1).
 
+**Built 2026-10-31, for mapping-agent.**
+
+- **The core** lives in `core/cascadesec_core/`. Its first module,
+  `mapping.py`, holds `candidates_for`, `unmapped_reason` and their two
+  constants, moved out of mapping-agent unchanged. The handler imports them
+  under its old names, so its 34 tests pass unchanged. A `conftest.py`
+  puts the core on their path, where the zip puts it. iac-scanner's
+  `local_main.py` keeps its copies until the scanner image ships the core.
+  `corpus/test_corpus.py` now holds those copies to the core, and fails if
+  mapping-agent defines its own again.
+- **The zip** is built with `source_dir` from `build/mapping-agent/`,
+  which `scripts/deploy.py` assembles before every plan from the files it
+  compares with `origin/main`. Terraform's `source` blocks would have
+  needed no build directory, but they write each entry with no file mode at
+  all (a DOS entry, attributes 0), and ignore `output_file_mode`. Lambda
+  documents only that it needs 644 on code and enforces the modes a zip
+  gives, so what it does with no mode would have been found out in
+  production. `source_dir` with `output_file_mode = "0644"` writes Unix
+  entries at 0644, the same on Windows and Linux.
+- **Two guards on the build directory:**
+  - a precondition on the `archive_file` refuses to plan unless the
+    directory holds exactly the handler and the core's files, byte for byte.
+    A missing directory and a stale one were both refused.
+  - the deploy guard compares the core like a handler, and names a core file
+    that `origin/main` has and the working tree lacks, since Terraform's
+    list of the core's files would just be shorter.
+
+The other six zips stay single files until each one first imports the core
+(phase 3): moving them now would change their code hashes for nothing.
+
 ## 9. What changes elsewhere
 
 - **cli-spec, track S.** S3 (`local_main.py`, GHCR) and S4 (local scan)
@@ -282,10 +314,10 @@ This is also when mapping-agent's `_unmapped_reason` gets its shared home
 | P3 | RecordStore keeps the pk/sk item model; explicit operations replace expression strings (§3) | Proposed: readers and the dashboard unchanged |
 | P4 | §4's conformance suite gates every RecordStore adapter, DynamoDB's included | Proposed |
 | P5 | Portable hosted on containers, Postgres and S3-compatible storage, not per-cloud native adapters (§7) | Proposed |
-| P6 | Vendor the core into each Lambda zip (§8) | Proposed |
+| P6 | Vendor the core into each Lambda zip (§8) | Built 2026-10-31 for mapping-agent, from a build directory the deploy guard assembles |
 | P7 | Local review through `cascadesec serve` and the existing commands, not a second review path (§5) | Proposed |
 | P8 | Model provider is configuration: Anthropic API, Bedrock or Vertex (§6) | Proposed |
-| P9 | Lower S7 and phase M's priority (§9) | **Open**: depends on whether teams want CI to hold its own model key |
+| P9 | Lower S7 and phase M's priority (§9) | Accepted 2026-10-31 (Konrad): this runtime before the CLI's remote scans |
 
 ## 12. Build order
 
@@ -293,7 +325,22 @@ Each phase leaves the AWS runtime working and deployed.
 
 1. **Packaging (§8).** Build zips from directories, with mapping-agent
    first (474 lines, the smallest agent). Its tests pass unchanged, and the
-   deploy guard's plan shows only the code hash changing.
+   deploy guard's plan shows only the code hash changing. **Built
+   2026-10-31; not deployed.**
+
+   Planned against the deployed state, it was identical to a plan of `main`
+   except for mapping-agent's code hash: the same 9 updates, 0 destroys.
+   The other 8 updates were already waiting, because nothing has been
+   applied since 2026-10-17:
+   - five Lambdas whose deployed code matches `main` apart from CRLF line
+     endings, zipped from a Windows checkout;
+   - the scanner image moving to the 2026-10-29 publish;
+   - two IAM policies Terraform cannot read until those Lambdas update,
+     because they list the functions' ARNs, which an update does not
+     change.
+
+   Deployed mapping-agent was also not `main`'s: it predates S4's pure
+   `_unmapped_reason`, with the same behaviour.
 2. **Ports and the conformance suite.** BlobStore and RecordStore, their AWS
    adapters, and §4's suite passing on DynamoDB Local. Call sites move to
    the ports one component at a time, each behind its existing tests.
