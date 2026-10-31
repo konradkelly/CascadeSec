@@ -149,7 +149,9 @@ jobs:
           # construct fails here rather than on a user's machine.
           python-version: '3.11'
 
-      - run: python -m pip install ./cli pytest
+      # jsonschema: test_sarif.py validates every SARIF document against the
+      # vendored 2.1.0 schema. Pinned as in requirements-dev.txt.
+      - run: python -m pip install ./cli pytest jsonschema==4.26.0
 
       - name: pytest
         working-directory: cli
