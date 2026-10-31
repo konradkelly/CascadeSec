@@ -3,8 +3,8 @@
 Built so far: track R (§13) -- the skeleton, signing a person in, reading a
 PR's findings (`findings`, `show`), deciding on a fix (`approve`, `reject`,
 `edit`), and committing the approved ones (`commit`) -- and from track S,
-`scan` in local mode with its baseline (`baseline`), and the pre-commit
-`hook`. Commands that don't exist yet aren't registered, so
+`scan` in local mode with its baseline (`baseline`) and SARIF output, and
+the pre-commit `hook`. Commands that don't exist yet aren't registered, so
 `--help` lists only what works.
 
 Results go to stdout in --format; progress, prompts and errors go to stderr,
@@ -22,12 +22,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from cascadesec import __version__, api, auth, baseline, config, editor, history, hook, prs, render, review
+from cascadesec import __version__, api, auth, baseline, config, editor, history, hook, prs, render, review, sarif
 from cascadesec import commit as committing
 from cascadesec import scan as scanning
 from cascadesec.errors import OK, REFUSED, USAGE, CliError
 
 FULL_FINDING_ID = re.compile(r"^[0-9a-f]{16}$")
+FORMATS = ("table", "json", "sarif")
 
 
 def build_parser():
@@ -35,22 +36,28 @@ def build_parser():
         prog="cascadesec",
         description="CascadeSec from the terminal.",
     )
-    parser.add_argument(
-        "--format", choices=("table", "json"),
-        help="output format (default: table on a terminal, json otherwise)",
-    )
+    format_help = "output format (default: table on a terminal, json otherwise; sarif for scan)"
+    parser.add_argument("--format", choices=FORMATS, help=format_help)
     commands = parser.add_subparsers(dest="command", metavar="<command>", required=True)
+    # --format after the command as well (`cascadesec scan . --format json`),
+    # as the README and the SARIF recipe write it. SUPPRESS, so a command
+    # given none leaves alone the one given before it.
+    after = argparse.ArgumentParser(add_help=False)
+    after.add_argument("--format", choices=FORMATS, default=argparse.SUPPRESS, help=format_help)
 
-    login = commands.add_parser("login", help="sign in through the browser")
+    def command(name, **kwargs):
+        return commands.add_parser(name, parents=[after], **kwargs)
+
+    login = command("login", help="sign in through the browser")
     login.add_argument(
         "--no-browser", action="store_true",
         help="print the sign-in URL and paste back the redirect, for a machine with no browser (SSH)",
     )
-    commands.add_parser("logout", help="revoke the session and remove it from the keyring")
-    commands.add_parser("whoami", help="who is signed in, their groups, and when the token expires")
-    commands.add_parser("version", help="the CLI's version and the scanner image it runs")
+    command("logout", help="revoke the session and remove it from the keyring")
+    command("whoami", help="who is signed in, their groups, and when the token expires")
+    command("version", help="the CLI's version and the scanner image it runs")
 
-    scan = commands.add_parser(
+    scan = command(
         "scan", help="scan a directory locally: findings and candidate controls, offline",
         description="Scan a directory with the pipeline's scanner, run on this machine in Docker "
                     "with no network: the same tools and versions, so the same findings a remote "
@@ -76,7 +83,7 @@ def build_parser():
                            "have, wherever they land, and parse errors and apps in files changed since "
                            "REV (git diff --name-only REV, plus new untracked files). Scans twice")
 
-    base = commands.add_parser(
+    base = command(
         "baseline", help=f"write {baseline.FILE}: the findings to accept for now",
         description=f"Scan PATH and write {baseline.FILE}, which `scan` then leaves out of its "
                     "verdict. Commit it: adding to it is a decision reviewed in a diff. --prune "
@@ -87,7 +94,7 @@ def build_parser():
     base.add_argument("--file", metavar="FILE", help=f"where to write it (default: PATH/{baseline.FILE})")
     base.add_argument("--image", help="the scanner image (as for scan)")
 
-    hk = commands.add_parser(
+    hk = command(
         "hook", help="the pre-commit hook: scan the given files' directories, report only them",
         description="Run by pre-commit (see .pre-commit-hooks.yaml), from the repository root, "
                     "with the files a commit or push changes. Scans each directory holding one and "
@@ -102,7 +109,7 @@ def build_parser():
     hk.add_argument("--image", help="the scanner image (as for scan)")
 
     pr_help = "the PR: owner/repo#123, its GitHub URL, or a review-api id such as gh-1352957770-50"
-    findings = commands.add_parser(
+    findings = command(
         "findings", help="a PR's findings, grouped as the dashboard groups them",
         description="List a PR's findings. Findings with a control come first, by what is left "
                     "to decide; raw ones follow, one row per rule, grouped by why they are raw.")
@@ -113,7 +120,7 @@ def build_parser():
                           help="only findings at or above this severity")
     findings.add_argument("--file", help="only this file, directory, or glob (e.g. 'k8s/*.yaml')")
 
-    show = commands.add_parser(
+    show = command(
         "show", help="one finding: its controls, the fix, the self-check, and the audit trail")
     show.add_argument("pr", help=pr_help)
     show.add_argument("finding_id", help="the finding's id, or enough of its start to be unique")
@@ -122,11 +129,11 @@ def build_parser():
 
     id_help = "the finding's id, or enough of its start to be unique"
     notes_help = "why, recorded in the audit trail"
-    approve = commands.add_parser(
+    approve = command(
         "approve", help="accept a fix as drafted",
         description="Accept a fix as drafted. review-api refuses it while a fix it was drafted on "
                     "is not accepted, and says which.")
-    reject = commands.add_parser(
+    reject = command(
         "reject", help="refuse a fix; never blocked",
         description="Refuse a fix. Never blocked, so it is always the way out of a chain gone "
                     "wrong. Fixes drafted on this one are reopened, and listed.")
@@ -135,7 +142,7 @@ def build_parser():
         p.add_argument("finding_id", help=id_help)
         p.add_argument("--notes", default="", help=notes_help)
 
-    edit = commands.add_parser(
+    edit = command(
         "edit", help="correct a fix's file in your editor, then record it as edited",
         description="Open the fix's corrected file in $VISUAL or $EDITOR (Notepad on Windows if "
                     "neither is set; a GUI editor needs its wait flag, e.g. `code --wait`). On "
@@ -149,7 +156,7 @@ def build_parser():
     edit.add_argument("--yes", action="store_true",
                       help="record without asking; required when there is no terminal")
 
-    commit = commands.add_parser(
+    commit = command(
         "commit", help="commit a PR's approved fixes to its branch (committers only)",
         description="Show the commit plan -- per file, the diff from the branch to the approved "
                     "fixes, and what is held and why -- then confirm and commit it as the "
@@ -175,7 +182,10 @@ def main(argv=None, *, stdout=None, env=None, cwd=None, backend=None,
         # console's code page lacks; print them as `?` rather than crash.
         if hasattr(stdout, "reconfigure"):
             stdout.reconfigure(errors="replace")
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.format == "sarif" and args.command != "scan":
+        parser.error("--format sarif is for scan, whose findings it describes")
     # pre-commit captures a hook's output, so it is never a terminal -- and
     # what it shows when a push is blocked is read by a person, not parsed.
     fmt = args.format or ("table" if stdout.isatty() or args.command == "hook" else "json")
@@ -189,7 +199,9 @@ def main(argv=None, *, stdout=None, env=None, cwd=None, backend=None,
     except KeyboardInterrupt:
         print("cascadesec: interrupted", file=sys.stderr)
         return USAGE
-    if fmt == "table" and args.command in RENDERERS:
+    if fmt == "sarif":
+        stdout.write(result["_sarif"])
+    elif fmt == "table" and args.command in RENDERERS:
         color = stdout.isatty() and "NO_COLOR" not in ctx.env
         RENDERERS[args.command](result, render.Out(stdout, color=color))
     else:
@@ -296,16 +308,43 @@ def cmd_scan(args, ctx):
         pending = pool.submit(_scan_earlier, args, ctx, image_ref, changes[1]) if changes else None
         result = scanning.run_scanner(args.path, image_ref, run=ctx.run)
         before = pending.result() if pending else None
-    result, held_back = _hold_back(args, result, image_ref, settings, path, document, changes, before)
+    result, held_back, baselined = _hold_back(args, result, image_ref, settings, path, document, changes,
+                                              before)
     summary = {**scanning.summarise(result, args.path, image_ref, args.fail_on, args.allow_scan_errors),
                **held_back}
+    sarif_text = _sarif(args, ctx, summary, baselined) if args.format == "sarif" else None
     if args.output:
         with open(args.output, "w", encoding="utf-8", newline="\n") as fh:
-            if (args.format or "json") == "json":
+            if sarif_text is not None:
+                fh.write(sarif_text)
+            elif (args.format or "json") == "json":
                 fh.write(json.dumps(summary, indent=2) + "\n")
             else:
                 render.scan_result(summary, render.Out(fh))
-    return {**summary, "_exit": summary["exit_code"]}
+    return {**summary, "_exit": summary["exit_code"], "_sarif": sarif_text}
+
+
+def _sarif(args, ctx, summary, baselined):
+    """The scan as SARIF (sarif-spec), or a usage error naming the limit
+    GitHub would reject the file for: an upload that fails after the scan
+    passed would leave Code Scanning showing the last run as current."""
+    document = sarif.document(summary, baselined, __version__, _repository_prefix(args.path, ctx))
+    text = sarif.dumps(document)
+    problems = sarif.over_limits(document, text)
+    if problems:
+        raise CliError("GitHub Code Scanning rejects a SARIF file over its limits, and this one has "
+                       + "; ".join(problems) + ". Scan a subdirectory, or use --format json", USAGE)
+    return text
+
+
+def _repository_prefix(path, ctx):
+    """The scanned directory's path from the repository root (`infra/`),
+    which is where a SARIF consumer reads paths from. Empty at the root, and
+    outside a repository, where the paths stay relative to the scan."""
+    try:
+        return history.git(path, "rev-parse", "--show-prefix", run=ctx.run).strip()
+    except history.Unavailable:
+        return ""
 
 
 def cmd_findings(args, ctx):
@@ -540,7 +579,9 @@ def _hold_back(args, result, image_ref, settings, path, document, changes=None, 
     --changed-only finds was already there at REV, then baselined findings.
     Each is counted, so nothing leaves silently (cli-spec §6). The
     baseline's fixed list is taken from the full scan, before
-    --changed-only: a finding left out for being old has not been fixed."""
+    --changed-only: a finding left out for being old has not been fixed.
+    The baselined findings themselves are returned too, for SARIF, which
+    shows them as suppressed rather than leave them out (sarif-spec §4)."""
     full = result.get("findings") or []
     result, skipped = baseline.skip_apps(result, args.path, settings.skip_apps)
 
@@ -570,7 +611,7 @@ def _hold_back(args, result, image_ref, settings, path, document, changes=None, 
         "preexisting_count": preexisting,
         "outside_changes_count": 0,
         "skipped_apps": [{k: a[k] for k in ("path", "kind", "reason", "source")} for a in skipped],
-    }
+    }, suppressed
 
 
 def cmd_hook(args, ctx):

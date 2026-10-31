@@ -6,6 +6,7 @@ pre-commit run is recorded in cli-spec §7."""
 import ast
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -223,6 +224,10 @@ def test_inside_the_image_the_hook_runs_without_keyring(repo):
         "sys.exit(main.main(['--format', 'json', 'hook', 's3.tf'],\n"
         "                   env={'CASCADESEC_IN_IMAGE': '1'}, cwd=sys.argv[1]))\n"
     )
-    done = subprocess.run([sys.executable, "-c", script, str(repo)], capture_output=True, text=True)
+    # The code under test, not whichever copy of the CLI the interpreter has
+    # installed, which the child would otherwise import.
+    src = str(Path(cli.__file__).resolve().parents[1])
+    done = subprocess.run([sys.executable, "-c", script, str(repo)], capture_output=True, text=True,
+                          env={**os.environ, "PYTHONPATH": src})
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout)["exit_code"] == 0

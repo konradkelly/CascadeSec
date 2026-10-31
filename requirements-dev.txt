@@ -30,6 +30,9 @@ cryptography==50.0.1
 # The cli/ suite: the CLI's one runtime dependency (cli/pyproject.toml). Its
 # tests use an in-memory backend, but import keyring for its error types.
 keyring==25.7.0
+# The cli/ suite too: test_sarif.py validates each SARIF document against the
+# 2.1.0 schema vendored in cli/tests/data.
+jsonschema==4.26.0
 pytest==9.1.1
 # PyYAML is NOT a runtime dependency added here -- the scanner reads it from
 # /opt/python, where checkov already ships it (the image's strip removes only
