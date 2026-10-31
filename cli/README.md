@@ -5,8 +5,8 @@ CascadeSec from the terminal. Design: [docs/cli-spec.md](../docs/cli-spec.md).
 Built so far: track R of the spec (§10, §13) -- signing in (`login`,
 `logout`, `whoami`), reading a PR's findings (`findings`, `show`), deciding
 on a fix (`approve`, `reject`, `edit`), committing the approved ones
-(`commit`) -- `scan` in local mode with its `baseline`, the pre-commit
-`hook`, and `version`.
+(`commit`) -- `scan` in local mode with its `baseline` and SARIF output,
+the pre-commit `hook`, and `version`.
 
 ## Set up
 
@@ -145,6 +145,40 @@ at or above it, 3 incomplete (a file did not parse, or an app was not run;
 `--allow-scan-errors` reports the findings' result instead), 2 usage or no
 Docker, 4 the scanner image failed. Checkov rates no severity, so its
 findings count only with `--fail-on any`.
+
+### As SARIF, for GitHub Code Scanning and SARIF viewers
+
+```
+cascadesec scan ./infra --format sarif > cascadesec.sarif
+```
+
+One SARIF 2.1.0 run ([sarif-spec](../docs/sarif-spec.md)). Paths are
+written from the repository root, so a subdirectory's findings land on the
+right files. Each rule's help lists the candidate controls, or why there
+are none. Baselined findings are included, marked as suppressed. A file
+that did not parse, or an app that was not run, is an error notification,
+and the run is marked as not successful. The exit code follows `--fail-on`
+as usual, and a file GitHub would reject (over 25,000 results, or 10 MB
+gzipped) exits 2 with nothing written.
+
+In GitHub Actions:
+
+```yaml
+permissions: { contents: read, security-events: write }
+steps:
+  - uses: actions/checkout@v4
+  - run: pipx install "git+https://github.com/konradkelly/CascadeSec@<commit>#subdirectory=cli"
+  - run: cascadesec scan . --format sarif --fail-on none > cascadesec.sarif
+  - uses: github/codeql-action/upload-sarif@v3
+    if: ${{ !cancelled() }}
+    with: { sarif_file: cascadesec.sarif, category: cascadesec }
+```
+
+`--fail-on none`, so that findings don't stop the upload: Code Scanning's
+own status is the gate. GitHub keeps each alert when lines move. It does
+not read SARIF's suppressions, though: a baselined finding is an open alert
+there, to dismiss in GitHub. Private repositories need GitHub Code
+Security.
 
 ### On a repository that already has findings
 
