@@ -75,12 +75,15 @@ def load_pairs(cases_dir=CASES):
 
 
 def load_corpus(corpus=CORPUS):
+    """The candidate lists, and {(framework, id): {title, text}}: mapping-agent
+    shows the model both, so a citation may come from either."""
     mappings = json.loads((corpus / "rule_mappings.json").read_text(encoding="utf-8"))["mappings"]
-    texts = {}
+    controls = {}
     for path in (corpus / "frameworks").glob("*.json"):
         data = json.loads(path.read_text(encoding="utf-8"))
-        texts.update({(data["framework"], c["control_id"]): c["text"] for c in data["controls"]})
-    return mappings, texts
+        controls.update({(data["framework"], c["control_id"]): {"title": c["title"], "text": c["text"]}
+                         for c in data["controls"]})
+    return mappings, controls
 
 
 def classify(pair, mappings):
@@ -102,20 +105,54 @@ def words(text):
     return re.findall(r"\S+", text)
 
 
-def citation_verdict(citation, control_text):
-    """'verbatim' (whitespace aside), 'reworded' (the same words, with case
-    or punctuation changed), or 'not in the text'; and whether it is under
-    the word limit."""
-    def squash(s, loose):
-        s = " ".join(words(s.strip().strip("\"'“”‘’").strip(".…")))
+VERBATIM, FROM_TITLE, ELIDED = "verbatim", "verbatim, from the title", "elided, the cut marked"
+REWORDED, NOT_AN_EXCERPT = "reworded", "not an excerpt"
+CITATION_VERDICTS = (VERBATIM, FROM_TITLE, ELIDED, REWORDED, NOT_AN_EXCERPT)
+ELLIPSIS = re.compile(r"\s*(?:\.\.\.|…)\s*")
+
+
+def citation_verdict(citation, control):
+    """What the citation is, against the control it cites ({title, text}),
+    and whether it is under the word limit. In order:
+
+      verbatim                 the text has it, whitespace and quotes aside
+      verbatim, from the title the title has it; the prompt asks for the text
+      elided, the cut marked   pieces joined by '...', each in the text, in order
+      reworded                 the same words, with case or punctuation changed
+      not an excerpt           none of these: words changed or joined unmarked
+
+    The first three are faithful quotations. The first run found every
+    citation that missed the first check in the second or third, but for an
+    unmarked rewrite of a NIST template's [Selection] brackets."""
+    def squash(s, loose=False):
+        s = " ".join(words(s.strip().strip("\"'“”‘’")))
         return re.sub(r"[^\w\s]", "", s.lower()) if loose else s
-    if squash(citation, False) and squash(citation, False) in squash(control_text, False):
-        verdict = "verbatim"
-    elif squash(citation, True) and squash(citation, True) in squash(control_text, True):
-        verdict = "reworded"
+    quoted = squash(ELLIPSIS.sub(" ... ", citation.strip().strip("\"'“”‘’")).strip(" .…"))
+    text, title = squash(control.get("text", "")), squash(control.get("title", ""))
+    pieces = [p for p in ELLIPSIS.split(quoted) if p]
+    if not pieces:
+        verdict = NOT_AN_EXCERPT
+    elif len(pieces) == 1 and pieces[0] in text:
+        verdict = VERBATIM
+    elif len(pieces) == 1 and pieces[0] in title:
+        verdict = FROM_TITLE
+    elif len(pieces) > 1 and _in_order(pieces, text):
+        verdict = ELIDED
+    elif squash(" ".join(pieces), True) in squash(text, True):
+        verdict = REWORDED
     else:
-        verdict = "not in the text"
-    return verdict, len(words(citation)) < CITATION_MAX_WORDS
+        verdict = NOT_AN_EXCERPT
+    return verdict, len(words(ELLIPSIS.sub(" ", citation))) < CITATION_MAX_WORDS
+
+
+def _in_order(pieces, text):
+    at = 0
+    for piece in pieces:
+        found = text.find(piece, at)
+        if found < 0:
+            return False
+        at = found + len(piece)
+    return True
 
 
 def score_run(pairs, mappings, findings):
@@ -141,13 +178,13 @@ def score_run(pairs, mappings, findings):
     return scored
 
 
-def citations(findings, texts):
+def citations(findings, controls):
     """[(verdict, under the limit, finding)] for every mapped finding in a
     run, labelled or not: the dashboard shows all of them."""
     out = []
     for f in findings:
         for m in f.get("control_mappings") or []:
-            verdict, short = citation_verdict(m.get("citation_span", ""), texts.get(control(m), ""))
+            verdict, short = citation_verdict(m.get("citation_span", ""), controls.get(control(m), {}))
             out.append((verdict, short, f))
     return out
 
@@ -177,7 +214,7 @@ def pct(n, d):
     return f"{n}/{d} = {100 * n / d:.1f}%" if d else f"{n}/0"
 
 
-def report(pairs, mappings, texts, runs, out=print):
+def report(pairs, mappings, controls, runs, out=print):
     corpus = score_corpus(pairs, mappings)
     out(f"CORPUS  {len(pairs)} labelled pairs, by what their candidates allow (rule_mappings.json)")
     for kind in (EVERY_RIGHT, SOME_RIGHT, NONE_RIGHT, RIGHTLY_EMPTY, MISSED):
@@ -199,7 +236,7 @@ def report(pairs, mappings, texts, runs, out=print):
         out(f"  {pr_id}: {pct(right, len(choosing))} of findings; all labelled findings {dict(outcomes)}")
         for s in choosing:
             picks[(s["pair"]["case"], s["pair"]["source"], s["pair"]["rule_id"])].append(s["outcome"])
-        cited = citations(findings, texts)
+        cited = citations(findings, controls)
         result["runs"][pr_id] = {
             "outcomes": dict(outcomes), "choice_right": right, "choice_total": len(choosing),
             "citations": dict(collections.Counter(v for v, _, _ in cited)),
@@ -213,9 +250,11 @@ def report(pairs, mappings, texts, runs, out=print):
     out("\nCITATION  every mapped finding, labelled or not")
     for pr_id, r in result["runs"].items():
         total = sum(r["citations"].values())
-        out(f"  {pr_id}: verbatim {pct(r['citations'].get('verbatim', 0), total)}; "
-            f"reworded {r['citations'].get('reworded', 0)}; not in the text {r['citations'].get('not in the text', 0)}; "
+        faithful = sum(r["citations"].get(v, 0) for v in (VERBATIM, FROM_TITLE, ELIDED))
+        out(f"  {pr_id}: a faithful quotation {pct(faithful, total)}; "
             f"{CITATION_MAX_WORDS} words or more {r['citations_over_limit']}")
+        for verdict in CITATION_VERDICTS:
+            out(f"    {verdict:26} {r['citations'].get(verdict, 0):4}")
     return result
 
 
@@ -225,10 +264,10 @@ def main(argv=None):
     ap.add_argument("--report", type=pathlib.Path, help="also write the full result as JSON")
     args = ap.parse_args(argv)
     pairs = load_pairs()
-    mappings, texts = load_corpus()
+    mappings, controls = load_corpus()
     table = table_from_terraform() if args.pr_id else None
     runs = {pr_id: findings_of(pr_id, table) for pr_id in args.pr_id}
-    result = report(pairs, mappings, texts, runs)
+    result = report(pairs, mappings, controls, runs)
     if args.report:
         args.report.write_text(json.dumps(result, indent=2, default=list), encoding="utf-8")
     return 0
