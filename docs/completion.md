@@ -69,7 +69,7 @@ CascadeSec 1.0 is done when all six hold:
 | Area | State | Evidence |
 |---|---|---|
 | Detection: Terraform, OpenTofu, Kubernetes, CloudFormation, ARM, Bicep | Deployed | Recall 98.9%, 178 of 180, on 84 positive cases and 6 clean controls, 2026-11-01, image `b22fc47`, the same as on 2026-09-23 (`corpus/eval/README.md`) |
-| Control mapping with citations | Deployed | Coverage measured: 98.5% of labelled pairs and 71.9% of distinct rules have a candidate (2026-11-01), with NIST 800-53 loaded for the unmapped tail (`#51`). It was 72% and 39% on 2026-09-12. Accuracy never measured |
+| Control mapping with citations | Deployed | Coverage measured: 98.5% of labelled pairs and 71.9% of distinct rules have a candidate (2026-11-01), with NIST 800-53 loaded for the unmapped tail (`#51`). It was 72% and 39% on 2026-09-12. Accuracy measured 2026-11-01: 154 of 181 labelled findings mapped right (85.1%), every miss a corpus gap rather than the agent's choice; citations 99.4-99.7% faithful |
 | Remediation: self-check, suppression and deletion gates, assumptions, held fixes | Deployed | Gates proven by unit tests on captured diffs; neither had fired in production when iacposture-spec §6 was written. Fix quality not measured |
 | context-agent | Deployed | context-agent-spec; Lambda last updated 2026-09-24 |
 | GitHub App: check runs, annotations, suggested changes (v3) | Deployed 2026-09-25 | ci-integration-spec |
@@ -222,8 +222,21 @@ the specs finds no claim that the deployed system contradicts.
 
    Claude drafts the labels from the control texts without reading the
    candidates or mapping-agent's answers, and Konrad reviews every label
-   before any number is computed. **Labels drafted 2026-11-01**, with the
-   rules, the script and the corpus test; review and the numbers are next.
+   before any number is computed.
+
+   **Done 2026-11-01.** Konrad accepted the labels unchanged (`#79`). Over
+   three runs of the deployed pipeline, $7.65 in all:
+   - corpus correctness: on 152 of 180 pairs (84.4%) every candidate is
+     right, and on 28 the agent cannot be right;
+   - the agent's choice: no pair to measure, because every pair with more
+     than one candidate offers only right ones. 154 of 181 labelled
+     findings were mapped right (85.1%), identically in every run, so on
+     this corpus mapping accuracy is corpus accuracy;
+   - citation fidelity: 99.4-99.7% faithful quotations, with nothing
+     invented.
+
+   The 28 pairs are corrected in `rule_mappings.json` next, and measured
+   again (`corpus/eval/README.md` § Mapping accuracy).
 2. **Fix quality.** A new `corpus/eval/run_fix_eval.py`.
    - **Cases:** every positive eval case, plus the repositories
      `corpus/external/` pins, at their pinned commits.

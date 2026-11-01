@@ -417,9 +417,11 @@ before deploy: 26/26 fired, and the deployed run matched.
 
 Whether mapping-agent cites the right control, which coverage above cannot
 say (docs/completion.md phase 2 step 1). `run_mapping_eval.py` reports it.
-**Not yet measured:** the labels below were drafted on 2026-11-01 and are
-waiting for review, and no number is computed from them until they have
-been.
+**First measured 2026-11-01** ([result](#result-2026-11-01)): 154 of 181
+labelled findings mapped to a right control, the same in three runs. The 27
+that were not are the corpus's doing, not the agent's: on those pairs no
+candidate it could pick was right. 99.4-99.7% of citations are faithful
+quotations of the control.
 
 ### Why it is three numbers and not one
 
@@ -478,8 +480,8 @@ have.
 5. **The labeller does not look at the answers.** Labels were made from
    each rule's own title and description and the control texts, without
    reading `rule_mappings.json` or anything mapping-agent wrote. Drafted by
-   Claude (Opus 5.5) on 2026-11-01, to be reviewed by Konrad before any
-   number is computed.
+   Claude (Opus 5.5) on 2026-11-01 and reviewed by Konrad the same day
+   (`#79`), who accepted them unchanged, before any number was computed.
 
 The calls a reviewer is most likely to dispute:
 
@@ -499,6 +501,75 @@ The calls a reviewer is most likely to dispute:
 - **Trivy `KSV-0112`** ("manage all resources") is labelled NIST AC-6 only:
   its description does not say it checks for wildcards, so CIS Kubernetes
   5.1.3 is not established from it.
+
+### Result, 2026-11-01
+
+Three runs against the **deployed** stack, `eval-map-20261101-1` to `-3`:
+the scanner image `b22fc47` (`sha256:a60b6aaa`), mapping-agent on
+`claude-opus-5` at effort low, and the corpus files as at `main` `d7578d8`,
+unchanged since `scripts/drift.py` last reported the deployed corpus
+matching `main`. Each run scanned the
+90 cases (517 findings, of which five share another's `finding_id`, so 512
+records), mapped all 347 with a candidate, and left 165 raw with their
+reason. No mapping call failed or was refused. The three cost **$7.65**
+together: 685,088 input and 169,079 output tokens at $5 and $25 per million,
+over 1,037 logged calls for 1,041 mappings written (four calls' usage lines
+are missing from the log).
+
+**Corpus correctness**, from the files alone:
+
+| what the candidates allow | pairs |
+|---|---|
+| every candidate right: the agent cannot be wrong | **152 / 180, 84.4%** |
+| only some right: the agent's choice decides | 0 |
+| no candidate right: the agent cannot be right | 24 |
+| no candidate, though one applies | 4 |
+
+**The agent's choice: nothing to measure.** The 18 pairs with more than one
+candidate all offer equivalents from different frameworks (OWASP CICD-SEC-6
+and CNAS-5 for a hardcoded secret, CICD-SEC-9 and CNAS-4 for an unpinned
+module), every one of them right. So on today's corpus mapping-agent never
+makes a choice that matters, and its accuracy is the corpus's. The runs
+bear that out: of the 181 labelled findings that fired (two labelled pairs
+are known misses), **154 were mapped right (85.1%), 23 wrong and 4 had no
+candidate, identically in all three runs**, exactly as the corpus predicts.
+
+**Citation fidelity**, on every mapped finding, labelled or not:
+
+| | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| verbatim from the control's text | 331 | 332 | 333 |
+| verbatim from its title | 6 | 5 | 5 |
+| elided, the cut marked with "..." | 8 | 8 | 8 |
+| not an excerpt | 2 | 2 | 1 |
+| **a faithful quotation** | **345 / 347, 99.4%** | **345 / 347, 99.4%** | **346 / 347, 99.7%** |
+| 15 words or more (asked: under 15) | 19 | 20 | 20 |
+
+Nothing was invented. Every "not an excerpt" is NIST SC-8(1), whose text
+is a template, "to [Selection (one-or-more): prevent unauthorized disclosure
+of information; detect changes to information] during transmission", quoted
+as one clean sentence with nothing to show the brackets were removed. The
+title and elided quotations are faithful, though the prompt asks for the
+text, and the dashboard shows each in quotation marks as a verbatim
+excerpt. The long ones are 15 or 16 words (median 10), on CIS AWS 1.15 and
+2.1.5 and NIST AU-12 and SC-28(1).
+
+**The 28 pairs the agent cannot get right**, by what `rule_mappings.json`
+offers:
+
+| pattern | pairs | offered | labelled |
+|---|---|---|---|
+| customer-managed-key rules on S3 (`AWS-0132` x5, `CKV_AWS_145`) | 6 | CIS AWS 2.1.1 | NIST SC-12 |
+| IAM rules narrower than `*:*` (`CKV_AWS_63`, `_109`, `_110`, `_111`, KICS data exfiltration) | 5 | CIS AWS 1.16 | NIST AC-6 |
+| public IPs and subnets (`CKV_AWS_88` x2, `CKV_AWS_130`, `AWS-0009`, `AWS-0164`) | 5 | OWASP CNAS-1 | NIST SC-7 |
+| public endpoints and databases (`CKV_AWS_17`, `CKV_AWS_39`, `AWS-0040`, `AWS-0180`) | 4 | OWASP CNAS-6 | NIST SC-7 |
+| any principal may assume a role (`CKV_AWS_60` x2) | 2 | NIST AC-6 | NIST AC-3 |
+| KICS any-port open ingress (`4a1e6b34`) | 1 | CIS AWS 5.2 | NIST SC-7, CNAS-6 |
+| Trivy `KSV-0112`, full control of a namespace | 1 | CIS Kubernetes 5.1.3 | NIST AC-6 |
+| writable root filesystem (`KSV-0014`, `CKV_K8S_22`, two cases each) | 4 | none | OWASP CNAS-1 |
+
+This is the baseline. The corpus is corrected in a change of its own, and
+measured again, so the difference is the correction's.
 
 ## How the labels were produced, and what happened to them
 
