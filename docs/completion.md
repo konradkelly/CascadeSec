@@ -68,8 +68,8 @@ CascadeSec 1.0 is done when all six hold:
 
 | Area | State | Evidence |
 |---|---|---|
-| Detection: Terraform, OpenTofu, Kubernetes, CloudFormation, ARM, Bicep | Deployed | Recall 98.9%, 178 of 180, on 84 positive cases and 6 clean controls, 2026-09-23, image `3b74055` (`corpus/eval/README.md`) |
-| Control mapping with citations | Deployed | Coverage measured: 72% of labelled pairs and 39% of distinct rules have a candidate (2026-09-12); NIST 800-53 added for the unmapped tail (`#51`). Accuracy never measured |
+| Detection: Terraform, OpenTofu, Kubernetes, CloudFormation, ARM, Bicep | Deployed | Recall 98.9%, 178 of 180, on 84 positive cases and 6 clean controls, 2026-11-01, image `b22fc47`, the same as on 2026-09-23 (`corpus/eval/README.md`) |
+| Control mapping with citations | Deployed | Coverage measured: 98.5% of labelled pairs and 71.9% of distinct rules have a candidate (2026-11-01), with NIST 800-53 loaded for the unmapped tail (`#51`). It was 72% and 39% on 2026-09-12. Accuracy never measured |
 | Remediation: self-check, suppression and deletion gates, assumptions, held fixes | Deployed | Gates proven by unit tests on captured diffs; neither had fired in production when iacposture-spec §6 was written. Fix quality not measured |
 | context-agent | Deployed | context-agent-spec; Lambda last updated 2026-09-24 |
 | GitHub App: check runs, annotations, suggested changes (v3) | Deployed 2026-09-25 | ci-integration-spec |
@@ -161,7 +161,8 @@ the specs finds no claim that the deployed system contradicts.
    the cases and report four outcomes: one of the expected controls, a
    wrong control, no candidate, and declined. Coverage, meaning a candidate
    exists, is reported apart from accuracy, meaning the right one was
-   picked, because §3's 72% is the first and says nothing about the second.
+   picked, because §3's coverage is the first and says nothing about the
+   second.
    Done when the number and the labelling rules are in
    `corpus/eval/README.md`, and a corpus test fails on a label that names a
    control the corpus does not have.
