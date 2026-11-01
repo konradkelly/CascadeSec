@@ -12,10 +12,11 @@ A deterministic scanner finds the misconfiguration. An LLM drafts the fix, then 
 **At a glance**
 
 - **98.9% detection recall** (178 of 180) on a labelled corpus of 90 cases, measured against the deployed scanner — [method](./corpus/eval/README.md)
+- **85.1% mapping accuracy** (154 of 181 findings mapped to a right control, the same in three runs). Every miss is a gap in the corpus's candidates, not a wrong choice by the agent — [method](./corpus/eval/README.md#mapping-accuracy)
 - **Seven IaC languages in pull requests:** Terraform, OpenTofu, Kubernetes, CloudFormation, Azure ARM, Bicep, and AWS CDK apps, which run in a sandbox with no credentials. Pulumi and Helm can be scanned by hand, detection only. Findings are mapped to OWASP, CIS and NIST 800-53 controls
 - **Deployed end to end:** pull request → check run → self-verified fixes → one-click commit, verified live on a test repository
 - **From the terminal too:** the `cascadesec` CLI scans locally with a baseline, runs as a pre-commit hook, writes SARIF for GitHub Code Scanning, and reviews and commits fixes
-- **18 AWS services, all in Terraform**, and 1,558 tests in CI (Lambdas, CLI on Linux and Windows, corpus, deploy guard, sandbox harnesses, dashboard), run with no AWS credentials
+- **18 AWS services, all in Terraform**, and 1,677 tests in CI (Lambdas, CLI on Linux and Windows, corpus, deploy guard, sandbox harnesses, dashboard), run with no AWS credentials
 
 ![Proposed diff replacing an open egress rule with four scoped rules](docs/images/proposed-diff-egress.png)
 
@@ -68,7 +69,7 @@ webhook-receiver (Lambda) ──▶ Step Functions (one execution per PR push)
                                       │
                                       ▼
                              mapping-agent (Lambda)
-                       finding → OWASP/CIS control + citation
+                     finding → OWASP/CIS/NIST control + citation
                                       │
                                       ▼
                     Map state: remediation-agent, one per file
@@ -94,11 +95,11 @@ Full technical spec (data model, agent JSON contracts, eval plan, build phases):
 
 ## Evaluation
 
-Detection recall is measured, not assumed. The test set is a labelled corpus of Terraform, OpenTofu, Kubernetes, ARM and Bicep cases with known injected vulnerabilities, scanned by the **deployed** scanner.
+Detection recall is measured, not assumed. The test set is a labelled corpus of Terraform, OpenTofu, Kubernetes, CloudFormation, ARM and Bicep cases with known injected vulnerabilities, scanned by the **deployed** scanner.
 
 **98.9%: 178 of 180 expected findings across 84 positive cases and 6 clean controls** (2026-11-01, image `b22fc47`, the same as on 2026-09-23: Trivy 0.74.0 + Checkov 3.3.16 + KICS 2.1.20 + `IACP-0001`). By source: Trivy 63/63, KICS 22/22, Checkov 93/95. Both misses are documented upstream tool gaps and were left as misses, not relabelled. The full method, the corrections log, and what the number does *not* measure are in [`corpus/eval/README.md`](./corpus/eval/README.md).
 
-Detection recall mostly measures the scanners. CascadeSec's own claims are that mapping picks the right control and that a self-checked fix is a correct fix. **Mapping is measured** (2026-11-01): 154 of 181 labelled findings are mapped to a right control (85.1%), the same in three runs, and every miss is a gap in the corpus's candidates rather than a wrong choice by the agent; 99.4-99.7% of its citations are faithful quotations ([method and the misses](./corpus/eval/README.md#mapping-accuracy)). Fix quality is not measured yet and is the next step ([`docs/completion.md`](./docs/completion.md), phase 2).
+Detection recall mostly measures the scanners. CascadeSec's own claims are that mapping picks the right control and that a self-checked fix is a correct fix. **Mapping is measured** (2026-11-01): 154 of 181 labelled findings are mapped to a right control (85.1%), the same in three runs, and every miss is a gap in the corpus's candidates rather than a wrong choice by the agent; 99.4-99.7% of its citations are faithful quotations ([method and the misses](./corpus/eval/README.md#mapping-accuracy)). The corpus's candidates are corrected next and measured again against this baseline. Fix quality is not measured yet ([`docs/completion.md`](./docs/completion.md), phase 2).
 
 ## Running it
 
@@ -113,7 +114,7 @@ python corpus/external/run_external.py           # scan pinned third-party repos
 
 `scan.py` uploads the directory, starts one execution of the pipeline, reports each stage as it runs, and prints the dashboard URL when it finishes. Remediation costs one model call per mapped finding, so `scan.py` asks before running it (`--no-remediate` stops after mapping).
 
-From the terminal, the `cascadesec` CLI ([`cli/README.md`](./cli/README.md)) scans a directory locally through the pinned scanner image, under `--network none`. It holds known findings back with a baseline, runs as a pre-commit hook, and writes SARIF. Against the deployed stack it reads, decides on and commits fixes. The scanner and hook images are on GHCR but not public yet, so local scans work only for the owner until they are.
+From the terminal, the `cascadesec` CLI ([`cli/README.md`](./cli/README.md)) scans a directory locally through the pinned scanner image, under `--network none`. It holds known findings back with a baseline, runs as a pre-commit hook, and writes SARIF. Against the deployed stack it reads, decides on and commits fixes. The scanner and hook images are public on GHCR, so a local scan needs Docker but no account.
 
 Helm charts can be rendered offline in the sandbox and their generated manifests
 scanned with `python scripts/sandbox.py helm path/to/repo --app-dir charts/app --scan`.
@@ -125,10 +126,11 @@ it requires rebuilding the sandbox image and applying `terraform/sandbox`
 
 ## Status
 
-**Deployed and running** against a dev AWS account, with a GitHub App installed on a test repository. CI runs on every push. It runs 1,558 tests, counted on 2026-10-31:
+**Deployed and running** against a dev AWS account, with a GitHub App installed on a test repository. CI runs on every push. It runs 1,677 tests, counted on 2026-11-01:
 - the Lambda suites (915);
 - the CLI on Linux and Windows (227);
-- the corpus data tests (219);
+- the corpus data tests (309);
+- the mapping eval's scoring (29);
 - the core's record store and its conformance suite (40);
 - the deploy guard and the drift check (42);
 - the Pulumi and Helm harnesses (15);
@@ -144,8 +146,8 @@ It runs deliberately without AWS credentials, so a test run can never touch real
 | v4 | Write-back: verified fixes committed to the PR branch from the dashboard or a **Commit fixes** button on the check | Deployed and verified live 2026-09-30 ([write-back](docs/write-back-spec.md), [GitHub-first review](docs/github-first-review-spec.md)) |
 | Sandbox | CDK apps synthesized with no credentials, findings placed on the TypeScript line, fixes verified by synthesizing again | Deployed 2026-10-11 ([spec](docs/sandbox-spec.md)) |
 | Sandbox, by hand | Pulumi programs (TypeScript and JavaScript, 13 AWS resource types) and Helm charts, detection only | Run on AWS by 2026-10-13 |
-| CLI | Review commands; local scan with a baseline; pre-commit hooks; SARIF | Merged by 2026-10-31. Images on GHCR, not yet public ([CLI](docs/cli-spec.md), [SARIF](docs/sarif-spec.md)) |
-| Portable runtime | The agents without AWS: one core, local stores, `cascadesec run` | Phase 1 deployed 2026-10-31; the rest in progress ([spec](docs/portable-runtime-spec.md)) |
+| CLI | Review commands; local scan with a baseline; pre-commit hooks; SARIF | Merged by 2026-10-31. Images public on GHCR since 2026-11-01 ([CLI](docs/cli-spec.md), [SARIF](docs/sarif-spec.md)) |
+| Portable runtime | The agents without AWS: one core, local stores, `cascadesec run` | Phase 1 deployed 2026-10-31. The RecordStore port and its conformance suite are merged, and no handler uses them yet; the rest is in progress ([spec](docs/portable-runtime-spec.md)) |
 
 What is left before 1.0, and what is deliberately out of it, is in [`docs/completion.md`](docs/completion.md).
 
