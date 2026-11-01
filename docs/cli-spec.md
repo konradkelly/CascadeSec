@@ -16,8 +16,8 @@ track S steps 1-6 built (2026-10-23).
 
 **Status, 2026-10-31.** Track R and track S steps 1 to 6 are merged, with
 SARIF output (sarif-spec) and the docker hook. The images local mode and
-the docker hook pull are published to GHCR but still private
-(`docs/completion.md` phase 1 step 3). Steps 7 to 9 are past 1.0 (§13).
+the docker hook pull are published to GHCR, and public since 2026-11-01.
+Steps 7 to 9 are past 1.0 (§13).
 
 Revised 2026-10-13. Added review from the terminal (§10), and changed the
 authentication order (§11). Humans sign in with the existing Cognito pool
