@@ -186,7 +186,9 @@ second and not last.
      scanner gave the same 178 of 180. `#76` pins it in the CLI and the
      hook.
 
-   The step is done when a run after `#76` merges reports clean.
+   **Done 2026-11-01.** After `#76` and `#77` merged, a run against `main`
+   at `4b49146` reported every check matching: the corpus, the scanner
+   image, the dashboard, and a plan with no changes.
 
 **Phase 1 is done when** steps 1 to 5 are, and a reader of the README and
 the specs finds no claim that the deployed system contradicts.
