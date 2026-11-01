@@ -1,7 +1,13 @@
-# Beyond Terraform — spec (draft)
+# Beyond Terraform — spec
 
 Covering more IaC languages: OpenTofu, Kubernetes/Helm, CloudFormation,
 Bicep/ARM, and what to do about Pulumi.
+
+**Status, 2026-10-31.** OpenTofu, Kubernetes, CloudFormation, ARM and Bicep
+are deployed (§6). CDK detection and remediation are deployed through the
+sandbox since 2026-10-11 (§9, sandbox-spec §9). Pulumi and Helm rendering
+are detection only, run by hand through `scripts/sandbox.py`. Their
+remediation is past 1.0 (`docs/completion.md` §4).
 
 Written before building. Every claim about tool support below was tested
 against the pinned Trivy 0.74.0 and checkov 3.3.16 in the deployed scanner
@@ -1033,6 +1039,11 @@ rules that did not exist -- and leave the one §7 named first: executing
 untrusted input inside a security tool. Nothing here is built until the
 sandbox spec is.
 
+**Since shipped.** The sandbox was built, and CDK detection and remediation
+have been deployed through it since 2026-10-11, so §7.1 no longer describes
+what is deployed. Pulumi followed on 2026-10-13 as detection only, run by
+hand (sandbox-spec §9 step 4).
+
 ## 8. What this does not change
 
 - **§8.1's admission rule.** A deterministic scanner rule still originates
@@ -1093,7 +1104,10 @@ sandbox spec is.
       numbering has been stable since v1.10, so the choice of edition
       within 1.10-2.0 does not change a citation; v1.9 and earlier differ.
       Azure is still open.
-- [ ] Whether CDK and Pulumi are built (§7.2). Reopened 2026-10-03 on
+- [x] Whether CDK and Pulumi are built (§7.2). **Answered by building:**
+      CDK detection and remediation deployed 2026-10-11 (sandbox-spec §9
+      steps 2-3), Pulumi detection only on 2026-10-13 (step 4), and Pulumi
+      remediation past 1.0 (`docs/completion.md` §4). Reopened 2026-10-03 on
       three probes: CDK findings map to source lines, Pulumi runs under
       mocks with no engine or credentials, and Pulumi's resources get the
       Terraform rules with findings identical to a hand-written twin. Gated

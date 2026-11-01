@@ -14,12 +14,18 @@ prerequisite, in three runtimes:
 |---|---|---|
 | **Local** | one process and Docker, on a laptop or in any CI job | anyone; no account, no cloud |
 | **AWS** | what exists today, unchanged | this deployment |
-| **Portable hosted** | containers, Postgres and S3-compatible storage, on any cloud | a team that wants the GitHub App and a shared dashboard off AWS |
+| **Portable hosted** | containers, Postgres and S3-compatible storage, on any cloud | a team that wants the GitHub App and a shared dashboard off AWS. **Past 1.0** (§7) |
 
 Written before building, 2026-10-18. Requested by Konrad on 2026-10-18,
 after S1 of the CLI's track S showed how thin the AWS layer is. Chosen over
-the CLI's remote scans on 2026-10-31 (P9). Phase 1 built that day for
-mapping-agent, and not yet deployed (§12).
+the CLI's remote scans on 2026-10-31 (P9). Phase 1 built and deployed that
+day for mapping-agent (§12).
+
+**Status, 2026-10-31.** The local and AWS runtimes are what 1.0 builds
+(`docs/completion.md` phase 3). The portable hosted runtime is past 1.0
+(P5): nothing of it was built, and §7 stays as the design it would start
+from. The ports and the conformance suite are unchanged by that, because
+the local runtime needs them too.
 
 ## 1. How much is actually AWS
 
@@ -148,8 +154,9 @@ G9 matters more than it looks: the latest review event, found by sorting on
 `sk`, is what decides whether a prerequisite is satisfied
 (review-api `_unmet_prerequisites`).
 
-The suite runs in CI against SQLite and Postgres (a service container),
-and against DynamoDB Local, so the AWS adapter is held to it too.
+The suite runs in CI against SQLite and against DynamoDB Local, so the AWS
+adapter is held to it too. Postgres joins it with the hosted runtime, which
+is past 1.0 (§7).
 
 ## 5. The local runtime
 
@@ -202,6 +209,11 @@ The model id is configuration too, as `ANTHROPIC_MODEL` is in the Lambdas
 today. Providers name models differently, so the setting is per provider.
 
 ## 7. Portable hosted
+
+**Past 1.0, decided 2026-10-31** (P5, `docs/completion.md` §4). It would be
+a second production deployment that nobody runs, and it doubles what has to
+be deployed and tested. None of it was built. What follows is kept as the
+design to start from if it is reopened.
 
 The AWS deployment, rebuilt from containers anyone can run:
 
@@ -313,7 +325,7 @@ The other six zips stay single files until each one first imports the core
 | P2 | One `cascadesec_core`, cloud SDKs only in adapters (§2) | Proposed |
 | P3 | RecordStore keeps the pk/sk item model; explicit operations replace expression strings (§3) | Proposed: readers and the dashboard unchanged |
 | P4 | §4's conformance suite gates every RecordStore adapter, DynamoDB's included | Proposed |
-| P5 | Portable hosted on containers, Postgres and S3-compatible storage, not per-cloud native adapters (§7) | Proposed |
+| P5 | Portable hosted on containers, Postgres and S3-compatible storage, not per-cloud native adapters (§7) | **Past 1.0**, 2026-10-31 (Konrad, `docs/completion.md` C7). The design stands if it is reopened |
 | P6 | Vendor the core into each Lambda zip (§8) | Built 2026-10-31 for mapping-agent, from a build directory the deploy guard assembles |
 | P7 | Local review through `cascadesec serve` and the existing commands, not a second review path (§5) | Proposed |
 | P8 | Model provider is configuration: Anthropic API, Bedrock or Vertex (§6) | Proposed |
@@ -325,8 +337,8 @@ Each phase leaves the AWS runtime working and deployed.
 
 1. **Packaging (§8).** Build zips from directories, with mapping-agent
    first (474 lines, the smallest agent). Its tests pass unchanged, and the
-   deploy guard's plan shows only the code hash changing. **Built
-   2026-10-31; not deployed.**
+   deploy guard's plan shows only the code hash changing. **Built and
+   deployed 2026-10-31.**
 
    Planned against the deployed state, it was identical to a plan of `main`
    except for mapping-agent's code hash: the same 9 updates, 0 destroys.
@@ -352,8 +364,11 @@ Each phase leaves the AWS runtime working and deployed.
    the self-check through the scanner image.
 6. **Local review.** `cascadesec serve`, then `cascadesec apply`.
 7. **Portable hosted.** Server image, Postgres adapter, OIDC, one recipe on
-   one platform.
-8. **Native adapters**, only when someone needs one.
+   one platform. **Past 1.0** (§7).
+8. **Native adapters**, only when someone needs one. **Past 1.0** (§7).
 
 Phases 1 to 4 change no behaviour anywhere and can interleave with track
-S. Phase 5 is the first thing a user can run.
+S. Phase 5 is the first thing a user can run. Phases 2 to 6 are
+`docs/completion.md` phase 3, which adds one ordering rule: remediation's
+call sites move only after completion phase 2's fix-quality subset exists,
+so the move can be measured before and after.

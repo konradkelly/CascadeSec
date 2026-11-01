@@ -11,10 +11,11 @@ A deterministic scanner finds the misconfiguration. An LLM drafts the fix, then 
 
 **At a glance**
 
-- **98.7% detection recall** (155 of 157) on a labelled corpus of 83 cases, measured against the deployed scanner — [method](./corpus/eval/README.md)
-- **Six IaC languages:** Terraform, OpenTofu, Kubernetes, CloudFormation, Azure ARM and Bicep, mapped to OWASP and CIS controls
+- **98.9% detection recall** (178 of 180) on a labelled corpus of 90 cases, measured against the deployed scanner — [method](./corpus/eval/README.md)
+- **Seven IaC languages in pull requests:** Terraform, OpenTofu, Kubernetes, CloudFormation, Azure ARM, Bicep, and AWS CDK apps, which run in a sandbox with no credentials. Pulumi and Helm can be scanned by hand, detection only. Findings are mapped to OWASP, CIS and NIST 800-53 controls
 - **Deployed end to end:** pull request → check run → self-verified fixes → one-click commit, verified live on a test repository
-- **14 AWS services, all in Terraform**, and 880 tests in CI (Lambda, corpus, dashboard), run with no AWS credentials
+- **From the terminal too:** the `cascadesec` CLI scans locally with a baseline, runs as a pre-commit hook, writes SARIF for GitHub Code Scanning, and reviews and commits fixes
+- **18 AWS services, all in Terraform**, and 1,496 tests in CI (Lambdas, CLI on Linux and Windows, corpus, deploy guard, sandbox harnesses, dashboard), run with no AWS credentials
 
 ![Proposed diff replacing an open egress rule with four scoped rules](docs/images/proposed-diff-egress.png)
 
@@ -95,7 +96,9 @@ Full technical spec (data model, agent JSON contracts, eval plan, build phases):
 
 Detection recall is measured, not assumed. The test set is a labelled corpus of Terraform, OpenTofu, Kubernetes, ARM and Bicep cases with known injected vulnerabilities, scanned by the **deployed** scanner.
 
-**98.7%: 155 of 157 expected findings across 78 positive cases and 5 clean controls** (2026-09-23, Trivy 0.74.0 + Checkov 3.3.16 + KICS 2.1.20 + `IACP-0001`). By source: Trivy 57/57, KICS 13/13, Checkov 85/87. Both misses are documented upstream tool gaps and were left as misses, not relabelled. The full method, the corrections log, and what the number does *not* measure are in [`corpus/eval/README.md`](./corpus/eval/README.md).
+**98.9%: 178 of 180 expected findings across 84 positive cases and 6 clean controls** (2026-09-23, image `3b74055`: Trivy 0.74.0 + Checkov 3.3.16 + KICS 2.1.20 + `IACP-0001`). By source: Trivy 63/63, KICS 22/22, Checkov 93/95. Both misses are documented upstream tool gaps and were left as misses, not relabelled. The full method, the corrections log, and what the number does *not* measure are in [`corpus/eval/README.md`](./corpus/eval/README.md).
+
+Detection recall mostly measures the scanners. CascadeSec's own claims are that mapping picks the right control and that a self-checked fix is a correct fix. Neither is measured yet. Both are the next step ([`docs/completion.md`](./docs/completion.md), phase 2).
 
 ## Running it
 
@@ -110,6 +113,8 @@ python corpus/external/run_external.py           # scan pinned third-party repos
 
 `scan.py` uploads the directory, starts one execution of the pipeline, reports each stage as it runs, and prints the dashboard URL when it finishes. Remediation costs one model call per mapped finding, so `scan.py` asks before running it (`--no-remediate` stops after mapping).
 
+From the terminal, the `cascadesec` CLI ([`cli/README.md`](./cli/README.md)) scans a directory locally through the pinned scanner image, under `--network none`. It holds known findings back with a baseline, runs as a pre-commit hook, and writes SARIF. Against the deployed stack it reads, decides on and commits fixes. The scanner and hook images are on GHCR but not public yet, so local scans work only for the owner until they are.
+
 Helm charts can be rendered offline in the sandbox and their generated manifests
 scanned with `python scripts/sandbox.py helm path/to/repo --app-dir charts/app --scan`.
 Vendor dependencies first; use repeatable `--values` options for repository-relative
@@ -120,23 +125,39 @@ it requires rebuilding the sandbox image and applying `terraform/sandbox`
 
 ## Status
 
-**Deployed and running** against a dev AWS account, with a GitHub App installed on a test repository. CI runs the Lambda suites (pytest, 581 tests), the corpus data tests (209) and the dashboard's lint, type-check and tests (90) on every push. It runs deliberately without AWS credentials, so a test run can never touch real infrastructure.
+**Deployed and running** against a dev AWS account, with a GitHub App installed on a test repository. CI runs on every push. It runs 1,496 tests, counted on 2026-10-31:
+- the Lambda suites (915);
+- the CLI on Linux and Windows (227);
+- the corpus data tests (219);
+- the deploy guard (20);
+- the Pulumi and Helm harnesses (15);
+- the dashboard's tests (100), with its lint and type-check.
+
+It runs deliberately without AWS credentials, so a test run can never touch real infrastructure.
 
 | Version | What | State |
 |---|---|---|
 | v1 | Terraform scanning, control mapping, self-verified remediation, review dashboard | Deployed |
-| v2 | Kubernetes manifests, CloudFormation, Azure ARM and Bicep (CIS Azure 3.0) | Deployed; Helm and CDK deliberately out of scope ([why](docs/multi-iac-spec.md)) |
+| v2 | Kubernetes manifests, CloudFormation, Azure ARM and Bicep (CIS Azure 3.0) | Deployed ([spec](docs/multi-iac-spec.md)) |
 | v3 | GitHub App: PR check runs, annotations, Draft fixes as suggested changes | Deployed 2026-09-25 ([spec](docs/ci-integration-spec.md)) |
 | v4 | Write-back: verified fixes committed to the PR branch from the dashboard or a **Commit fixes** button on the check | Deployed and verified live 2026-09-30 ([write-back](docs/write-back-spec.md), [GitHub-first review](docs/github-first-review-spec.md)) |
+| Sandbox | CDK apps synthesized with no credentials, findings placed on the TypeScript line, fixes verified by synthesizing again | Deployed 2026-10-11 ([spec](docs/sandbox-spec.md)) |
+| Sandbox, by hand | Pulumi programs (TypeScript and JavaScript, 13 AWS resource types) and Helm charts, detection only | Run on AWS by 2026-10-13 |
+| CLI | Review commands; local scan with a baseline; pre-commit hooks; SARIF | Merged by 2026-10-31. Images on GHCR, not yet public ([CLI](docs/cli-spec.md), [SARIF](docs/sarif-spec.md)) |
+| Portable runtime | The agents without AWS: one core, local stores, `cascadesec run` | Phase 1 deployed 2026-10-31; the rest in progress ([spec](docs/portable-runtime-spec.md)) |
+
+What is left before 1.0, and what is deliberately out of it, is in [`docs/completion.md`](docs/completion.md).
 
 ## Tech stack
 
 - **Infra:** AWS Lambda (zip and container image), Step Functions, API Gateway, DynamoDB, S3, ECR, Cognito, CloudFront, Secrets Manager, KMS, EventBridge, CloudWatch, X-Ray, SNS, all in Terraform
+- **Sandbox:** ECS on Fargate with no task role, a VPC with endpoints and no route out, CodeArtifact as the only package mirror, Route 53 Resolver DNS Firewall
+- **CLI:** Python, the OS keyring for sessions, the pinned scanner image under Docker, pre-commit, SARIF
 - **GitHub:** two GitHub Apps (a reader and a writer). They use webhooks, the Checks API (annotations and action buttons), PR reviews with suggested changes, and signed commits through the Git Data API
 - **Scanning:** Trivy, Checkov, KICS, and custom Trivy checks in Rego
 - **Agents:** Anthropic API, with outputs constrained to strict JSON schemas
 - **Frontend:** React, Vite, TypeScript
-- **CI:** GitHub Actions: pytest per Lambda, corpus data tests, and oxlint, `tsc` and Vitest for the dashboard
+- **CI:** GitHub Actions: pytest per Lambda, the CLI on Linux and Windows, corpus data tests, the deploy guard, Node and Helm harnesses for the sandbox, and oxlint, `tsc` and Vitest for the dashboard
 
 ## Disclaimer
 

@@ -4,7 +4,7 @@
 
 **Version:** 0.1 (draft)
 **Author:** Konrad Le-De Kelly
-**Status:** Pre-build / architecture phase
+**Status:** v1 to v5 deployed (2026-10-31). What remains for 1.0, and what is out of it, is [`docs/completion.md`](./docs/completion.md). The sections below are the original design, annotated where the build departed from it.
 
 ---
 
@@ -307,6 +307,8 @@ and the resolution rate of the assumptions now in the table is its eval.
 2. **Remediation safety**: for every proposed fix in the labeled set, measure (a) does self-check confirm the original finding cleared, (b) does the fix introduce any new findings
 3. **Fix acceptance rate**: once running against real PRs, track approved-unedited vs edited vs rejected per fix — the headline metric for the project writeup
 
+*As of 2026-10-31, items 2 and 3 and item 1's mapping accuracy are still unmeasured, so the only published number is detection recall, which mostly measures the scanners. All three are [`docs/completion.md`](./docs/completion.md) phase 2. Item 2 grows there to cover what §6.1 says a rescan cannot prove: a human audit of whether a scanner-verified fix is a correct one, and a baseline of first drafts that shows what the self-check and the gates add.*
+
 ---
 
 ## 8. Build Phases
@@ -316,8 +318,10 @@ and the resolution rate of the assumptions now in the table is its eval.
 | **v1 — Terraform only, read-only scan + suggest** | `terraform-scanner` + Layers 2-3 running on manual trigger (CLI or simple upload), findings + proposed diffs shown in dashboard, no GitHub write-back. Fastest path to a complete, demoable project — proves the whole pipeline (scan → map → remediate → self-check → review) on one IaC type before adding scope. Dashboard and review API ship behind Cognito from the start (see below) rather than as a later add-on. |
 | **v2 — Beyond Terraform** | *Steps 1-2 built 2026-09-16: OpenTofu, the one-scanner refactor, the `iac-scanner` rename and the `target_type`/`finding_class` split. Rescoped 2026-09-16 — [`docs/multi-iac-spec.md`](./docs/multi-iac-spec.md).* No `k8s-scanner` Lambda: §4.3's split existed for the 250MB layer ceiling, which the container image removed, and the one image already parses Kubernetes, Helm, CloudFormation, ARM and Ansible (Trivy) plus Bicep (checkov). So one scanner selects the type per file instead, renamed `iac-scanner` (decided 2026-09-16) -- and `iac_type` splits into `target_type` and `finding_class` in the same deploy, since npm is a `vulnerability` on an `npm` target and neither axis derives from the other (multi-iac-spec §3.1). Order: OpenTofu (free — `.tofu` is HCL and scans identically), then the multi-type refactor, then Kubernetes/Helm, CloudFormation, Bicep/ARM. The cost is not the scanner but the corpus (all 51 mappings are AWS; Kubernetes alone raised 239 unmappable findings on PugetScope) and the eval (45 cases, all AWS Terraform). **No language ships until its suppression markers and structural guard are implemented** — both are HCL-shaped today and would fail open on YAML, which looks like a verified fix. Pulumi and CDK are out: no scanner parses them, and the only route runs the user's program. |
 | **v3 — CI integration** | GitHub App/webhook, PR-triggered scans, diff suggestions posted as PR comments. *Built and deployed 2026-09-24–25 -- [`docs/ci-integration-spec.md`](./docs/ci-integration-spec.md). A PR gets a check run annotating the findings on the lines it adds; **Draft fixes** remediates the changed files and posts the fixes that verify as suggested changes. Demonstrated on [cascadesec-testbed](https://github.com/konradkelly/cascadesec-testbed).* |
-| **v4 — Write-back on approval** | Approved fixes committed to PR branch automatically. *Built 2026-09-29, not yet deployed -- [`docs/write-back-spec.md`](./docs/write-back-spec.md). Not automatically: a member of the `committers` group reviews the PR's commit plan and asks, and a second App with Contents write commits it as one commit, only over the exact file versions the fixes were drafted on. The first step also fixed v3: a fix the PR had moved the file under is now reopened and redrafted instead of being held for good.* |
-| **v5 — `context-agent`** | A retrieval step that answers what `remediation-agent` currently has to declare it cannot: it reads the rest of the repository and cites `file:line`. Deferred deliberately, not for lack of motivation — the evidence is already in the table (see below). [`docs/context-agent-spec.md`](./docs/context-agent-spec.md) |
+| **v4 — Write-back on approval** | Approved fixes committed to PR branch automatically. *Built 2026-09-29, deployed and verified live 2026-09-30 -- [`docs/write-back-spec.md`](./docs/write-back-spec.md). Not automatically: a member of the `committers` group reviews the PR's commit plan and asks, and a second App with Contents write commits it as one commit, only over the exact file versions the fixes were drafted on. The first step also fixed v3: a fix the PR had moved the file under is now reopened and redrafted instead of being held for good.* |
+| **v5 — `context-agent`** | A retrieval step that answers what `remediation-agent` currently has to declare it cannot: it reads the rest of the repository and cites `file:line`. Deferred deliberately, not for lack of motivation — the evidence is already in the table (see below). [`docs/context-agent-spec.md`](./docs/context-agent-spec.md) *Built 2026-09-12, earlier than this table planned, and deployed.* |
+
+*After v5, each piece of work has its own spec in [`docs/`](./docs/): CDK, Pulumi and Helm through a sandbox, the `cascadesec` CLI, SARIF, and the portable runtime. What is left before 1.0, and what is cut from it, is [`docs/completion.md`](./docs/completion.md).*
 
 **On v5's position.** `assumptions` is, read literally, a list of queries the
 agent wanted to run and could not — and four of the six in the live table are
