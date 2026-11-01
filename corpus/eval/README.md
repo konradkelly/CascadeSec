@@ -17,9 +17,12 @@ Needs `boto3`, AWS credentials for the dev account, and the `terraform` CLI on
 ## Result
 
 **98.9% — 178 of 180 expected findings, across 84 positive cases and 6 clean
-controls.** Run 2026-09-23 against the **deployed** scanner (image
-`3b74055`): checkov 3.3.16, Trivy 0.74.0 and KICS 2.1.20 plus the project's
-own check `IACP-0001`, as packaged in the `iac-scanner` image.
+controls.** Run last on 2026-11-01 against the **deployed** scanner (image
+`b22fc47`, `sha256:a60b6aaa`), with the same recall by source, the same two
+misses, nothing on the clean controls and 517 findings, as the run of
+2026-09-23 had (image `3b74055`): checkov 3.3.16, Trivy 0.74.0 and KICS
+2.1.20 plus the project's own check `IACP-0001`, as packaged in the
+`iac-scanner` image.
 
 By source: **Trivy 63/63, KICS 22/22, checkov 93/95.** All six clean
 controls raised nothing. Both misses are the long-standing labelled tool
@@ -41,8 +44,8 @@ first run found three more, all on YAML -- checkov's `CKV_SECRET_6` on a
 Kubernetes manifest and on a CloudFormation template, live on manifests
 since `.yaml` was admitted on 2026-09-20, and a KICS secrets query filed
 under its platform name `Common`. The scanner now classifies a `.yaml` by
-its content, as it already did a `.json`. This run is the one after that fix
-was deployed (image `3b74055`).
+its content, as it already did a `.json`. The 2026-09-23 run is the one
+after that fix was deployed (image `3b74055`).
 
 This is now one number over the whole corpus rather than the AWS-and-OpenTofu
 subset. The previous headline was 97.3% (73/75) on 2026-09-16, before the
@@ -296,19 +299,23 @@ in `rule_mappings.json` — spec §7.1's second half. Read from the file rather
 than from a `mapping-agent` run: it is a property of the corpus, costs
 nothing, and is deterministic.
 
-| | coverage |
-|---|---|
-| labelled pairs that fired | **44/61 — 72%** |
-| all distinct rules fired | **48/123 — 39%** |
+| | 2026-11-01, 90 cases | 2026-09-12, 40 cases |
+|---|---|---|
+| labelled pairs that fired | **131/133 — 98.5%** | 44/61 — 72% |
+| all distinct rules fired | **174/242 — 71.9%** | 48/123 — 39% |
+
+The 2026-11-01 figures are from the run on image `b22fc47` above, with NIST
+SP 800-53 loaded (see 2026-10-11 below); the 68 unmapped rules are listed in
+its `--report`.
 
 Two numbers because they answer different questions. The first is comparable
 with detection recall above. The second is the honest one for a real PR: the
-labels are a deliberate *minimum*, so 40 cases written to catch 67 specific
-pairs actually raise 123 distinct rules, and a reviewer's queue reflects the
-123. Most of the long tail is rules no case was written for —
-`aws-rds-enable-performance-insights`, `aws-eks-enable-control-plane-logging`,
-RDS backup retention — which are real findings with no control in the three
-frameworks loaded.
+labels are a deliberate *minimum*, and a reviewer's queue reflects every
+rule that fires. On 2026-09-12, 40 cases written to catch 67 specific pairs
+raised 123 distinct rules. Most of that long tail was rules no case was
+written for — `aws-rds-enable-performance-insights`,
+`aws-eks-enable-control-plane-logging`, RDS backup retention — which were
+real findings with no control in the three frameworks then loaded.
 
 **2026-10-11:** with NIST SP 800-53 Rev. 5 loaded (`corpus/README.md`),
 131 of the 133 distinct labelled pairs across every case have a candidate
