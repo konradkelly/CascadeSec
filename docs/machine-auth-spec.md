@@ -9,6 +9,10 @@ Written before building, 2026-09-25. Part of integrations-spec, phase B.
 Not started. The security-sensitive part of the integrations work. It gets
 its own review (`/security-review`) before deploy.
 
+**Past 1.0** (`docs/completion.md` §4). Remote scans were deferred on
+2026-10-31 (portable-runtime-spec P9, cli-spec §13 step 7), and machine
+access is only needed once they exist.
+
 ## 1. What exists
 
 - One Cognito user pool with admin-created users only (cognito.tf). The

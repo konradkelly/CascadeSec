@@ -658,6 +658,11 @@ to protect yet.
 Two tracks that don't depend on each other. **R** (review) needs no scanner
 work. **S** (scan) needs no auth until remote mode.
 
+**For 1.0** (`docs/completion.md`), track R and steps 1 to 6 of track S are
+complete. Steps 7 to 9 are past 1.0. What the CLI still gains before 1.0
+comes from the portable runtime instead: `cascadesec run`, `--fix`,
+`serve` and `apply` (portable-runtime-spec §5).
+
 **Track R: review, phase H**
 
 1. `cli/` skeleton: `pyproject.toml`, config, `--format`, exit codes.

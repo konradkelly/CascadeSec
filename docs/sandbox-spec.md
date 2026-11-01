@@ -1,4 +1,4 @@
-# Sandbox — spec (draft)
+# Sandbox — spec
 
 Somewhere to run code from a pull request: a CDK app, a Pulumi program, a
 test suite. Until now CascadeSec has only ever *read* its input.
@@ -7,9 +7,20 @@ Written before building, on 2026-10-08. Three specs already need this and
 each declined to specify it on its own: `docs/multi-iac-spec.md` §7.2 (CDK
 and Pulumi), `docs/dependency-safety-spec.md` §5 (the test-suite gate), and
 any future SAST remediation. That spec's open decision -- CodeBuild,
-Fargate or a container Lambda -- is answered in §3. Nothing here has been
-measured on AWS. Each claim that needs measuring says so, and §9 makes
-measuring the containment the first thing built.
+Fargate or a container Lambda -- is answered in §3. When it was written,
+nothing here had been measured on AWS. Each claim that needs measuring says
+so, and §9 makes measuring the containment the first thing built.
+
+**Status, 2026-10-31.** §9 steps 1 to 3 are built and deployed:
+- the containment, whose leak test first passed on 2026-10-10;
+- CDK detection;
+- CDK remediation, with `cdk_synthesis` on in the main stack since
+  2026-10-11.
+
+Pulumi (step 4) and Helm rendering (§1) are built and were run on AWS by
+2026-10-13. Both are detection only and run by hand through
+`scripts/sandbox.py`, not in the PR pipeline. Their remediation, Pulumi's
+pipeline detection and step 5 are past 1.0 (`docs/completion.md` §4).
 
 ## 1. What it is for, and what it is not
 
@@ -711,8 +722,16 @@ someone the repository already trusts to push to it.
      it fixes, and fixes that span files (decided against above).
 4. **Pulumi.** The mock harness and the converter, with a hardened twin for
    every corpus case (multi-iac §7.2: only the hardened twin can fail).
+   **Built 2026-10-13** (`#52`), for detection only. It supports TypeScript
+   and JavaScript programs with 13 AWS resource types on `@pulumi/aws`
+   7.48.0, and is run by hand with `scripts/sandbox.py pulumi --scan`.
+   Its twins gave the same `(rule, resource)` pairs as their Terraform
+   counterparts under Trivy and checkov, and a hardened run on AWS had all
+   its findings on `index.ts`. Pull request detection and remediation are
+   past 1.0 (`docs/completion.md` §4).
 5. **The dependency test gate**, which is when `safe-to-apply` becomes
-   reachable (dependency-safety §3).
+   reachable (dependency-safety §3). **Past 1.0** (`docs/completion.md`
+   §4); not started.
 
 ## 10. Open decisions
 
