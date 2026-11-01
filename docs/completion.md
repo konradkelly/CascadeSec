@@ -38,7 +38,7 @@ Two more things showed up in the review:
   scope after `#50`, `#52` and `#53` merged them.
 - **The parts built for other people cannot be used by them.** CLI local
   mode and the docker pre-commit hook pull images from GHCR, and both
-  packages are still private.
+  packages are still private. (Made public on 2026-11-01, phase 1 step 3.)
 
 So finishing means proving and truthing what exists, making the agents run
 without an AWS account, and then stopping. It does not mean more surfaces.
@@ -77,7 +77,7 @@ CascadeSec 1.0 is done when all six hold:
 | CDK: detection and remediation through the sandbox | Deployed 2026-10-11, behind `cdk_synthesis` | sandbox-spec §9 steps 2-3; testbed #4 and #5 |
 | Pulumi (TypeScript and JavaScript, 13 AWS resource types) and Helm rendering | Built; verified on AWS 2026-10-13; detection only, by hand through `scripts/sandbox.py`; not in the PR pipeline | sandbox-spec §1, `#52`, `#53` |
 | CLI review commands (track R) | Merged 2026-10-18 | cli-spec §13 |
-| CLI local scan, baseline, pre-commit hooks, SARIF | Merged by 2026-10-31. Images published to GHCR 2026-10-29, **still private** | cli-spec §13, sarif-spec |
+| CLI local scan, baseline, pre-commit hooks, SARIF | Merged by 2026-10-31. Images published to GHCR 2026-10-29 and again 2026-11-01 (`#76`), public since 2026-11-01 | cli-spec §13, sarif-spec |
 | Portable runtime, phase 1: the core vendored into mapping-agent | Deployed 2026-10-31 | portable-runtime-spec §8 |
 | Portable runtime, phase 2: RecordStore and the G1-G9 suite | Merged 2026-10-31 (`#74`). No handler uses it yet. mapping-agent's zip vendors the core, so it was deployed with it the same day | portable-runtime-spec §12 |
 | Tests | 1,558, counted by collection on 2026-10-31 | 1,446 Python (Lambdas 915, CLI 227, corpus 219, core 40, deploy guard and drift check 42, Helm harness 3), dashboard 100, Node harness 12. All run in CI without AWS credentials |
@@ -136,6 +136,13 @@ second and not last.
    `docker pull` of the digest `SCANNER_IMAGE` pins
    (`cli/src/cascadesec/scan.py`) succeeds on a machine with no GHCR login,
    and the same for the hook image's digest in `.pre-commit-hooks.yaml`.
+   **Done 2026-11-01.** Konrad made both packages public. With no
+   credentials at all, an anonymous token from GHCR served the manifest at
+   each digest `main` pins and each digest `#76` pins, each hashing to its
+   pin. Each config blob downloaded, and every layer answered 200 to a HEAD
+   request: 16 for the scanner, 18 for the hook. Every version in both
+   packages is public, since visibility is the package's, the older ones
+   included, so a CLI pinned to one still pulls.
 4. **Housekeeping.** Ordinary deletes, with nothing force-pushed:
    - the testbed's scratch branch `sarif-check` and the two Code Scanning
      analyses uploaded from it (sarif-spec §5);
