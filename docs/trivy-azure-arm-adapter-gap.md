@@ -1,10 +1,12 @@
 # Trivy's `azure-arm` adapter does not populate every field its own checks read
 
-**Status: drafted, not filed.** This is written as a Trivy issue so it can be
-submitted as-is. It is kept here because `lambda/iac-scanner/handler.py`
-(`ARM_UNSATISFIABLE_TRIVY_RULES`) drops four rule ids on ARM targets on the
-strength of it, and that exception should not outlive the bug that justifies
-it.
+**Status, 2026-10-31: drafted, not filed.** This is written as a Trivy issue
+so it can be submitted as-is. Nothing in the scanner depends on it now. It
+first justified dropping four rule ids on ARM targets
+(`ARM_UNSATISFIABLE_TRIVY_RULES`), and since 2026-09-23 Trivy does not scan
+ARM at all: KICS scans ARM and Bicep, and that list was deleted (the last
+section). It is kept as the record of why, which `lambda/iac-scanner/handler.py`
+cites, and as an issue still worth filing.
 
 Measured 2026-09-23 against **Trivy 0.74.0**, the current release at the time
 of writing, as packaged in this project's scanner image.

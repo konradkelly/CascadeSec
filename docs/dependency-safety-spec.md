@@ -11,9 +11,13 @@ in today's Lambda with no new trust surface. §0 records what was measured,
 and §3 and §5 are rewritten around it. The argument of §1 is unchanged and
 is what the measurement confirms.
 
-**Status, 2026-10-31.** The test gate (§5) is past 1.0
-(`docs/completion.md` §4). It runs in the sandbox, and sandbox-spec §9
-step 5, which would build it, has not started.
+**Status, 2026-10-31.** Nothing in this spec is built. The scanner runs
+`trivy config` and never `trivy fs --scanners vuln`, so no npm advisory is
+detected, and none of §3's gates exists. The test gate (§5) is past 1.0
+(`docs/completion.md` §4): it runs in the sandbox, and sandbox-spec §9
+step 5, which would build it, has not started. Detection and the four
+gates that read only files are proposed past 1.0 as well (completion C8),
+since they would add a scan source.
 
 ## 0. What Trivy gives us, measured
 

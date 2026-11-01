@@ -3,7 +3,7 @@
 Answers the questions `remediation-agent` would otherwise have to declare it
 cannot answer, by reading the rest of the repository.
 
-**Built 2026-09-12** — `lambda/context-agent/`, `terraform/lambda_context_agent.tf`,
+**Built and deployed 2026-09-12** — `lambda/context-agent/`, `terraform/lambda_context_agent.tf`,
 and the questions step in `remediation-agent`. §9's prerequisites landed the
 same day (§8.2 items 4 and 5). §12 records what was decided and what the
 first live run showed; the sections before it are the design as written, and
