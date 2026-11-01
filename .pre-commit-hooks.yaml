@@ -41,10 +41,10 @@
   # <repo>:/src`: --network none isolates the scan, and the two refs give
   # the hook the push's range, which `docker run` would not pass on. The
   # image is ghcr.io/konradkelly/cascadesec-hook, built on
-  # ghcr.io/konradkelly/cascadesec-scanner@sha256:6b0d04178988733b851aab363b0387861a0ca4e2d89f0843aceaf51913ee4c2e
+  # ghcr.io/konradkelly/cascadesec-scanner@sha256:a60b6aaae929ed7799ca9869b427763bd64efa0aee1013bc2a09f1198ad50c8b
   # (the digest scan.py's SCANNER_IMAGE pins; cli/tests/test_hook.py holds
   # all three together). Its entrypoint is `cascadesec hook`.
-  entry: --network none -e PRE_COMMIT_FROM_REF -e PRE_COMMIT_TO_REF ghcr.io/konradkelly/cascadesec-hook@sha256:ee208fc08045d8e6e4535f6588b9bfe724bf14e098de65af3bffd1634f37bbfe
+  entry: --network none -e PRE_COMMIT_FROM_REF -e PRE_COMMIT_TO_REF ghcr.io/konradkelly/cascadesec-hook@sha256:73af04c3c2e15684460dc1e8058a1bdd2787429dc61b9e6a3844e66202e91289
   language: docker_image
   files: \.(tf|tf\.json|tfvars|tfvars\.json|tofu|tofu\.json|ya?ml|bicep|json|template)$
   pass_filenames: true
