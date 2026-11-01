@@ -4,7 +4,17 @@
   "expected": [
     {
       "source": "trivy",
-      "rule_id": "KSV-0113"
+      "rule_id": "KSV-0113",
+      "expected_controls": [
+        {
+          "framework": "CIS-Kubernetes-2.0",
+          "control_id": "5.1.2"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-6"
+        }
+      ]
     }
   ],
   "note": "CIS Kubernetes 5.1.2. Trivy-only, and narrower than it looks: a subject that can list secrets in a namespace can read every credential in it. checkov has no equivalent check, so single-source again."

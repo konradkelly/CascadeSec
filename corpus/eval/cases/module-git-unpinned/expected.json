@@ -4,7 +4,17 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_TF_1"
+      "rule_id": "CKV_TF_1",
+      "expected_controls": [
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-4"
+        },
+        {
+          "framework": "OWASP-CICD-Top10",
+          "control_id": "CICD-SEC-9"
+        }
+      ]
     }
   ]
 }

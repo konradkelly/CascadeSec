@@ -4,19 +4,51 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_38"
+      "rule_id": "CKV_AWS_38",
+      "expected_controls": [
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        },
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-6"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_39"
+      "rule_id": "CKV_AWS_39",
+      "expected_controls": [
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        }
+      ]
     },
     {
       "source": "trivy",
-      "rule_id": "AWS-0040"
+      "rule_id": "AWS-0040",
+      "expected_controls": [
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        }
+      ]
     },
     {
       "source": "trivy",
-      "rule_id": "AWS-0041"
+      "rule_id": "AWS-0041",
+      "expected_controls": [
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        },
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-6"
+        }
+      ]
     }
   ]
 }

@@ -4,15 +4,45 @@
   "expected": [
     {
       "source": "kics",
-      "rule_id": "1367dd13-2c90-4020-80b7-e4339a3dc2c4"
+      "rule_id": "1367dd13-2c90-4020-80b7-e4339a3dc2c4",
+      "expected_controls": [
+        {
+          "framework": "CIS-Azure-3.0",
+          "control_id": "4.1"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-8(1)"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_AZURE_3"
+      "rule_id": "CKV_AZURE_3",
+      "expected_controls": [
+        {
+          "framework": "CIS-Azure-3.0",
+          "control_id": "4.1"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-8(1)"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_AZURE_44"
+      "rule_id": "CKV_AZURE_44",
+      "expected_controls": [
+        {
+          "framework": "CIS-Azure-3.0",
+          "control_id": "4.15"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-8(1)"
+        }
+      ]
     }
   ],
   "note": "CIS Azure 4.1 and 4.15, the Bicep mirror of arm-storage-insecure-transfer. Bicep now has two sources, not one. KICS parses .bicep natively where Trivy has no Bicep scanner at all, so this case's self-check compares two tools and the single-source caveat multi-iac-spec §4 carried for Bicep is retired."

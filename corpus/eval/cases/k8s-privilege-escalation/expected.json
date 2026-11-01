@@ -4,11 +4,31 @@
   "expected": [
     {
       "source": "trivy",
-      "rule_id": "KSV-0001"
+      "rule_id": "KSV-0001",
+      "expected_controls": [
+        {
+          "framework": "CIS-Kubernetes-2.0",
+          "control_id": "5.2.6"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-6"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_K8S_20"
+      "rule_id": "CKV_K8S_20",
+      "expected_controls": [
+        {
+          "framework": "CIS-Kubernetes-2.0",
+          "control_id": "5.2.6"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-6"
+        }
+      ]
     }
   ],
   "note": "CIS Kubernetes 5.2.6. The default when the field is unset also permits escalation, which is why the hardened base sets it false explicitly."

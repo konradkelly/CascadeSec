@@ -4,7 +4,17 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_SECRET_6"
+      "rule_id": "CKV_SECRET_6",
+      "expected_controls": [
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-5"
+        },
+        {
+          "framework": "OWASP-CICD-Top10",
+          "control_id": "CICD-SEC-6"
+        }
+      ]
     }
   ],
   "note": "Tests the .tfvars surface, so the value is one the detector can see: base64-charset only, no punctuation. checkov's secret detection is EntropyKeywordCombinator: a keyword match must combine with a detect-secrets entropy scanner hit on the value, and those scanners match a quoted run of their charset only -- base64 (A-Za-z0-9+/=) or hex. The regex is `(['\":=])\\s*([<charset>]+)(['\"]|$)`, so a value containing any other character has no token to score. See rds-literal-password for the punctuation gap."

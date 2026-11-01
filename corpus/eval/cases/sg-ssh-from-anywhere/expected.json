@@ -4,11 +4,39 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_24"
+      "rule_id": "CKV_AWS_24",
+      "expected_controls": [
+        {
+          "framework": "CIS-AWS-1.4",
+          "control_id": "5.2"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        },
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-6"
+        }
+      ]
     },
     {
       "source": "trivy",
-      "rule_id": "AWS-0107"
+      "rule_id": "AWS-0107",
+      "expected_controls": [
+        {
+          "framework": "CIS-AWS-1.4",
+          "control_id": "5.2"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        },
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-6"
+        }
+      ]
     }
   ]
 }

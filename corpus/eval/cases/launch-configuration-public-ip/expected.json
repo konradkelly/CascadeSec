@@ -4,7 +4,13 @@
   "expected": [
     {
       "source": "trivy",
-      "rule_id": "AWS-0009"
+      "rule_id": "AWS-0009",
+      "expected_controls": [
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        }
+      ]
     }
   ],
   "note": "Third of three public-IP cases (instance, launch template, launch configuration), added to pin down which resource types tfsec's aws-ec2-no-public-ip actually covers. The short name is embedded in the deployed binary, so the rule exists."

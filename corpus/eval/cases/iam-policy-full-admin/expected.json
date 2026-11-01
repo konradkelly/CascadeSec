@@ -4,11 +4,27 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_62"
+      "rule_id": "CKV_AWS_62",
+      "expected_controls": [
+        {
+          "framework": "CIS-AWS-1.4",
+          "control_id": "1.16"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-6"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_63"
+      "rule_id": "CKV_AWS_63",
+      "expected_controls": [
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-6"
+        }
+      ]
     }
   ],
   "note": "Trivy has deprecated aws-iam-no-policy-wildcards (AWS-0057); it is off by default and nothing replaces it, so this case is checkov-only on that side."
