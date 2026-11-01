@@ -32,6 +32,13 @@ Rules for you:
   a saved plan once the state has moved on, which is the point.
 - The state is local, in the main checkout's `terraform/`. From a git
   worktree, pass `--terraform-dir` pointing at that root.
+- **Check for drift with `python scripts/drift.py`.** It is read-only and
+  compares the deployed stack with `origin/main`: the corpus in S3, the
+  scanner Lambda's image (against ECR's `latest`, the CLI's pinned digest,
+  and the scanner files changed since the image's commit), the dashboard
+  bucket against a fresh build, and a plan that must show no changes. Run
+  it before and after a deploy, and report what it says, not what you
+  expect. It plans into `drift.tfplan`, never `deploy.tfplan`.
 - A bare `terraform plan` stops at a precondition on mapping-agent's zip,
   which is built from `build/mapping-agent/`. The script assembles that
   directory before planning, from the files it has just compared with

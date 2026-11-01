@@ -79,8 +79,8 @@ CascadeSec 1.0 is done when all six hold:
 | CLI review commands (track R) | Merged 2026-10-18 | cli-spec §13 |
 | CLI local scan, baseline, pre-commit hooks, SARIF | Merged by 2026-10-31. Images published to GHCR 2026-10-29, **still private** | cli-spec §13, sarif-spec |
 | Portable runtime, phase 1: the core vendored into mapping-agent | Deployed 2026-10-31 | portable-runtime-spec §8 |
-| Portable runtime, phase 2: RecordStore and the G1-G9 suite | `#74`, open | portable-runtime-spec §12 |
-| Tests | 1,496, counted by collection on 2026-10-31 | 1,384 Python (Lambdas 915, CLI 227, corpus 219, deploy guard 20, Helm harness 3), dashboard 100, Node harness 12. All run in CI without AWS credentials |
+| Portable runtime, phase 2: RecordStore and the G1-G9 suite | Merged 2026-10-31 (`#74`). No handler uses it yet. mapping-agent's zip vendors the core, so it was deployed with it the same day | portable-runtime-spec §12 |
+| Tests | 1,558, counted by collection on 2026-10-31 | 1,446 Python (Lambdas 915, CLI 227, corpus 219, core 40, deploy guard and drift check 42, Helm harness 3), dashboard 100, Node harness 12. All run in CI without AWS credentials |
 
 ## 4. Not in 1.0
 
@@ -156,6 +156,30 @@ second and not last.
    It exists because each of these has drifted unnoticed before (the
    deployed corpus was found stale on 2026-10-11). Done when it reports
    clean against the deployed stack and CLAUDE.md's deploy notes name it.
+
+   **Built 2026-10-31** as `scripts/drift.py`, and named in CLAUDE.md. Its
+   scanner check also compares the image with `main`: build-image.sh tags
+   each image with its commit, and no file the Dockerfile copies may have
+   changed since. The first run, the same day, found two things to deploy,
+   both from merged work:
+   - the scanner image was built from `b85206d`, and `local_main.py` has
+     changed since, in a comment (`9f6af66`);
+   - the plan has two updates and nothing else: mapping-agent, whose zip
+     vendors the core and so gained `#74`'s files, and the pipeline's
+     policy, whose document reads that function's ARN and so is unknown
+     until the apply.
+
+   The corpus and the dashboard matched. The two differences were deployed
+   by the next day:
+   - the plan above, applied 2026-10-31, after which the drift check's
+     plan reported no changes;
+   - the scanner rebuilt from `b22fc47`, published and deployed
+     2026-11-01, after a local scan of the eval cases with the old and the
+     new image gave the same 517 findings, and the eval on the deployed
+     scanner gave the same 178 of 180. `#76` pins it in the CLI and the
+     hook.
+
+   The step is done when a run after `#76` merges reports clean.
 
 **Phase 1 is done when** steps 1 to 5 are, and a reader of the README and
 the specs finds no claim that the deployed system contradicts.
@@ -236,6 +260,7 @@ hosted runtime removed. Each step leaves the AWS runtime working and
 deployed.
 
 1. **Merge `#74`**: RecordStore, its DynamoDB adapter and the G1-G9 suite.
+   **Done 2026-10-31.**
 2. **BlobStore**, with its S3 adapter and a directory adapter, and tests
    that hold both to the same behaviour (`get_range` bounds, `list`
    returning every key under a prefix).

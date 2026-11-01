@@ -159,10 +159,12 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install pytest
       - name: pytest
-        # scripts/deploy.py, the only way a deploy is meant to run. No
-        # terraform and no AWS: the plans are canned JSON. Its own job because
-        # the guard has to keep working even when nothing else here changes.
-        run: python -m pytest scripts/test_deploy.py -q
+        # scripts/deploy.py, the only way a deploy is meant to run, and
+        # scripts/drift.py, which says whether one is due. No terraform, npm
+        # or AWS: the plans are canned JSON and the clients are fakes. Its own
+        # job because the guard has to keep working even when nothing else
+        # here changes.
+        run: python -m pytest scripts/test_deploy.py scripts/test_drift.py -q
 
   cli:
     name: cli (${{ matrix.os }})
