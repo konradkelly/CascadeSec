@@ -4,15 +4,45 @@
   "expected": [
     {
       "source": "trivy",
-      "rule_id": "KSV-0013"
+      "rule_id": "KSV-0013",
+      "expected_controls": [
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-4"
+        },
+        {
+          "framework": "OWASP-CICD-Top10",
+          "control_id": "CICD-SEC-9"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_K8S_14"
+      "rule_id": "CKV_K8S_14",
+      "expected_controls": [
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-4"
+        },
+        {
+          "framework": "OWASP-CICD-Top10",
+          "control_id": "CICD-SEC-9"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_K8S_43"
+      "rule_id": "CKV_K8S_43",
+      "expected_controls": [
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-4"
+        },
+        {
+          "framework": "OWASP-CICD-Top10",
+          "control_id": "CICD-SEC-9"
+        }
+      ]
     }
   ],
   "note": "The Kubernetes half of the pinning category the Terraform module cases cover: what runs is whatever the registry resolves the tag to today. CKV_K8S_43 (pin by digest) is the same problem stated as its remedy."

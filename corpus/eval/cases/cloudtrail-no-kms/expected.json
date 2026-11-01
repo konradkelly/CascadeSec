@@ -4,11 +4,31 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_35"
+      "rule_id": "CKV_AWS_35",
+      "expected_controls": [
+        {
+          "framework": "CIS-AWS-1.4",
+          "control_id": "3.7"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-12"
+        }
+      ]
     },
     {
       "source": "trivy",
-      "rule_id": "AWS-0015"
+      "rule_id": "AWS-0015",
+      "expected_controls": [
+        {
+          "framework": "CIS-AWS-1.4",
+          "control_id": "3.7"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-12"
+        }
+      ]
     }
   ]
 }

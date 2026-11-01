@@ -4,15 +4,57 @@
   "expected": [
     {
       "source": "kics",
-      "rule_id": "9073f073-5d60-4b46-b569-0d6baa80ed95"
+      "rule_id": "9073f073-5d60-4b46-b569-0d6baa80ed95",
+      "expected_controls": [
+        {
+          "framework": "CIS-Azure-3.0",
+          "control_id": "4.7"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        },
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-6"
+        }
+      ]
     },
     {
       "source": "kics",
-      "rule_id": "d855ced8-6157-448f-9f1d-f05a41d046f7"
+      "rule_id": "d855ced8-6157-448f-9f1d-f05a41d046f7",
+      "expected_controls": [
+        {
+          "framework": "CIS-Azure-3.0",
+          "control_id": "4.7"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        },
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-6"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_AZURE_35"
+      "rule_id": "CKV_AZURE_35",
+      "expected_controls": [
+        {
+          "framework": "CIS-Azure-3.0",
+          "control_id": "4.7"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        },
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-6"
+        }
+      ]
     }
   ],
   "note": "CIS Azure 4.7 and 4.8. defaultAction Allow makes every firewall rule on the account decoration, and bypass None additionally cuts off the trusted Azure services. Relabelled 2026-09-23 when KICS replaced Trivy on ARM and Bicep: Trivy's ARM adapter could not satisfy four of its own checks (docs/trivy-azure-arm-adapter-gap.md), so the trivy:AZU-* labels here are gone and the KICS query that covers the same control takes their place. KICS raises three separate queries here where Trivy raised two, and it covers 4.8 (trusted services) on both languages, which AZU-0010 only did on ARM. CORRECTED after the confirming run: KICS's Trusted Microsoft Services query was expected here for the 4.8 half and does not fire, for exactly the reason checkov's CKV_AZURE_36 does not -- an explicit defaultAction of Allow suppresses it in both. Measured 2026-09-23 across the four combinations: no networkAcls at all FIRES, defaultAction Allow is SILENT, Deny without the bypass FIRES, Deny with AzureServices is SILENT. So the precondition is not 'Deny is required' -- an absent block fires too -- it is that an explicit Allow switches the check off. Which is defensible: bypass is a carve-out from a block, and if everything is allowed there is no block to carve out of. Two independent tools agreeing makes it the rule rather than a quirk of one. 4.8 is exercised by the insecure-transfer cases instead, where the account declares no networkAcls at all."

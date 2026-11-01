@@ -4,11 +4,31 @@
   "expected": [
     {
       "source": "trivy",
-      "rule_id": "KSV-0024"
+      "rule_id": "KSV-0024",
+      "expected_controls": [
+        {
+          "framework": "CIS-Kubernetes-2.0",
+          "control_id": "5.2.12"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_K8S_26"
+      "rule_id": "CKV_K8S_26",
+      "expected_controls": [
+        {
+          "framework": "CIS-Kubernetes-2.0",
+          "control_id": "5.2.12"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        }
+      ]
     }
   ],
   "note": "CIS Kubernetes 5.2.12. Exposes the container on the node's interface, outside the Service and NetworkPolicy model."

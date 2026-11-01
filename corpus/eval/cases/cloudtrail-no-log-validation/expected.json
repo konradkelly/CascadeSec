@@ -4,11 +4,23 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_36"
+      "rule_id": "CKV_AWS_36",
+      "expected_controls": [
+        {
+          "framework": "CIS-AWS-1.4",
+          "control_id": "3.2"
+        }
+      ]
     },
     {
       "source": "trivy",
-      "rule_id": "AWS-0016"
+      "rule_id": "AWS-0016",
+      "expected_controls": [
+        {
+          "framework": "CIS-AWS-1.4",
+          "control_id": "3.2"
+        }
+      ]
     }
   ]
 }

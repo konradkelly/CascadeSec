@@ -4,15 +4,45 @@
   "expected": [
     {
       "source": "kics",
-      "rule_id": "e055285c-bc01-48b4-8aa5-8a54acdd29df"
+      "rule_id": "e055285c-bc01-48b4-8aa5-8a54acdd29df",
+      "expected_controls": [
+        {
+          "framework": "CIS-Azure-3.0",
+          "control_id": "5.1.1"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AU-12"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_AZURE_23"
+      "rule_id": "CKV_AZURE_23",
+      "expected_controls": [
+        {
+          "framework": "CIS-Azure-3.0",
+          "control_id": "5.1.1"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AU-12"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_AZURE_113"
+      "rule_id": "CKV_AZURE_113",
+      "expected_controls": [
+        {
+          "framework": "CIS-Azure-3.0",
+          "control_id": "5.1.7"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        }
+      ]
     }
   ],
   "note": "CIS Azure 5.1.1 and 5.1.7. Bicep now has two sources, not one. KICS parses .bicep natively where Trivy has no Bicep scanner at all, so this case's self-check compares two tools and the single-source caveat multi-iac-spec §4 carried for Bicep is retired."

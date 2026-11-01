@@ -301,6 +301,23 @@ def test_an_eval_label_names_a_known_source_and_a_rule(case):
         assert entry.get("rule_id"), f"{case.name}: an expectation with no rule_id"
 
 
+@pytest.mark.parametrize("case", EVAL_CASES, ids=lambda p: p.name)
+def test_an_eval_label_names_the_controls_a_correct_mapping_may_cite(case):
+    """Mapping accuracy (docs/completion.md phase 2 step 1) scores a mapping
+    against these. A pair with no label would drop out of the number
+    unnoticed, and a control the corpus does not have could never be
+    matched, so it would read as the agent's mistake. An empty list is a
+    label: no control in the corpus applies (corpus/eval/README.md)."""
+    index = _framework_index()
+    for entry in _load(case / "expected.json")["expected"]:
+        pair = f"{case.name}: {entry['source']}:{entry['rule_id']}"
+        assert isinstance(entry.get("expected_controls"), list), f"{pair} has no expected_controls"
+        for control in entry["expected_controls"]:
+            assert control["control_id"] in index.get(control["framework"], set()), (
+                f"{pair} names {control['framework']} {control['control_id']}, which the corpus does not have"
+            )
+
+
 def test_a_case_expecting_nothing_says_why():
     """An empty `expected` is a deliberate statement -- a clean control, or
     a gap neither tool covers -- and is indistinguishable from an unfinished

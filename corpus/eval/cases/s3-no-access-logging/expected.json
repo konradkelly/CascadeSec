@@ -4,11 +4,31 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_18"
+      "rule_id": "CKV_AWS_18",
+      "expected_controls": [
+        {
+          "framework": "CIS-AWS-1.4",
+          "control_id": "3.6"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AU-12"
+        }
+      ]
     },
     {
       "source": "trivy",
-      "rule_id": "AWS-0089"
+      "rule_id": "AWS-0089",
+      "expected_controls": [
+        {
+          "framework": "CIS-AWS-1.4",
+          "control_id": "3.6"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AU-12"
+        }
+      ]
     }
   ],
   "note": "Fires many other S3 rules too; only the logging pair is expected here."

@@ -4,7 +4,13 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_287"
+      "rule_id": "CKV_AWS_287",
+      "expected_controls": [
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-6"
+        }
+      ]
     }
   ],
   "note": "Relabelled after run 1: CKV_AWS_107 is the data-source variant (aws_iam_policy_document); the resource check on aws_iam_policy is CKV_AWS_287."

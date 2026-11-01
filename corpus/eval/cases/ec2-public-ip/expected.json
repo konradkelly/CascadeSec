@@ -4,7 +4,13 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_88"
+      "rule_id": "CKV_AWS_88",
+      "expected_controls": [
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        }
+      ]
     }
   ],
   "note": "Relabelled after run 1: tfsec raised nothing on an aws_instance with a public IP. Its aws-ec2-no-public-ip rule targets launch configurations/templates -- see launch-template-public-ip."

@@ -4,11 +4,31 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_41"
+      "rule_id": "CKV_AWS_41",
+      "expected_controls": [
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-5"
+        },
+        {
+          "framework": "OWASP-CICD-Top10",
+          "control_id": "CICD-SEC-6"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_SECRET_2"
+      "rule_id": "CKV_SECRET_2",
+      "expected_controls": [
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-5"
+        },
+        {
+          "framework": "OWASP-CICD-Top10",
+          "control_id": "CICD-SEC-6"
+        }
+      ]
     }
   ],
   "note": "CKV_SECRET_2 (AWS Access Key) added after the secrets framework went live 2026-09-12: detect-secrets' AWSKeyDetector matches the AKIA... pattern."

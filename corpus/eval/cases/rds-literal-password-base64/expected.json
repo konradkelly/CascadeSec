@@ -4,7 +4,17 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_SECRET_6"
+      "rule_id": "CKV_SECRET_6",
+      "expected_controls": [
+        {
+          "framework": "OWASP-CloudNative",
+          "control_id": "CNAS-5"
+        },
+        {
+          "framework": "OWASP-CICD-Top10",
+          "control_id": "CICD-SEC-6"
+        }
+      ]
     }
   ],
   "note": "Sibling of rds-literal-password, which differs only by a trailing `!`. Together they isolate checkov's punctuation gap: the EntropyKeywordCombinator scores the value with detect-secrets' base64/hex entropy scanners, whose regex requires an unbroken charset run up to the closing quote. Same mechanism as the CKV_AWS_60 pair."

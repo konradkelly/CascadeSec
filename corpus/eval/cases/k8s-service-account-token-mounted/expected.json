@@ -4,7 +4,17 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_K8S_38"
+      "rule_id": "CKV_K8S_38",
+      "expected_controls": [
+        {
+          "framework": "CIS-Kubernetes-2.0",
+          "control_id": "5.1.6"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-6"
+        }
+      ]
     }
   ],
   "note": "CIS Kubernetes 5.1.6. checkov-only. The hardened base sets automountServiceAccountToken: false; this case is that line removed, which is the default and therefore the common case."

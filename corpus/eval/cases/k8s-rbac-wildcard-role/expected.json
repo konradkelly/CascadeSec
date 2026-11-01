@@ -4,15 +4,41 @@
   "expected": [
     {
       "source": "trivy",
-      "rule_id": "KSV-0044"
+      "rule_id": "KSV-0044",
+      "expected_controls": [
+        {
+          "framework": "CIS-Kubernetes-2.0",
+          "control_id": "5.1.3"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-6"
+        }
+      ]
     },
     {
       "source": "trivy",
-      "rule_id": "KSV-0112"
+      "rule_id": "KSV-0112",
+      "expected_controls": [
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-6"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_K8S_49"
+      "rule_id": "CKV_K8S_49",
+      "expected_controls": [
+        {
+          "framework": "CIS-Kubernetes-2.0",
+          "control_id": "5.1.3"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-6"
+        }
+      ]
     }
   ],
   "note": "CIS Kubernetes 5.1.3, the Kubernetes analogue of CIS AWS 1.16's \"*:*\" admin policy. Also raises CKV_K8S_157/158 (bind and escalate permissions), which a wildcard necessarily includes."

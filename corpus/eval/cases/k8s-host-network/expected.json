@@ -4,11 +4,31 @@
   "expected": [
     {
       "source": "trivy",
-      "rule_id": "KSV-0009"
+      "rule_id": "KSV-0009",
+      "expected_controls": [
+        {
+          "framework": "CIS-Kubernetes-2.0",
+          "control_id": "5.2.5"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        }
+      ]
     },
     {
       "source": "checkov",
-      "rule_id": "CKV_K8S_19"
+      "rule_id": "CKV_K8S_19",
+      "expected_controls": [
+        {
+          "framework": "CIS-Kubernetes-2.0",
+          "control_id": "5.2.5"
+        },
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "SC-7"
+        }
+      ]
     }
   ],
   "note": "CIS Kubernetes 5.2.5. The pod is on the node's own network stack, which bypasses NetworkPolicy entirely -- so this one finding invalidates the control CKV2_K8S_6 checks for."

@@ -4,7 +4,13 @@
   "expected": [
     {
       "source": "checkov",
-      "rule_id": "CKV_AWS_60"
+      "rule_id": "CKV_AWS_60",
+      "expected_controls": [
+        {
+          "framework": "NIST-800-53-r5",
+          "control_id": "AC-3"
+        }
+      ]
     }
   ],
   "note": "Sibling of iam-role-assumable-by-anyone, which uses the bare \"*\" form the rule misses."
