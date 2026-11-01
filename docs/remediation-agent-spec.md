@@ -1,5 +1,16 @@
 # remediation-agent — build brief
 
+**Status, 2026-10-31.** Historical. This is the brief remediation-agent
+was first built from on 2026-09-07, amended in place until 2026-09-17 for
+chains, supersede and the `fixes/` prefix, and not since. The Lambda is
+deployed, and has grown what this brief never describes: the suppression
+and deletion gates, declared assumptions and held fixes, context-agent's
+questions, the time-boxed yield, and languages beyond Terraform. Some
+details below are out of date. The scanner is `iac-scanner`, the role's
+S3 grants cover `fixes/*` as well as `scans/*`, and the model is set by
+`remediation_agent_model`. The current contract is `iacposture-spec.md`
+§6, and the code.
+
 I'm building `remediation-agent`, one Lambda in a serverless AppSec
 pipeline (`terraform-scanner` and `mapping-agent` are already built and
 deployed by a teammate). Here's the full contract to build against — no

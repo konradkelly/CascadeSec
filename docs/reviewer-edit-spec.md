@@ -4,6 +4,12 @@ Follows `docs/fix-chain-review-spec.md`. That spec makes a reviewer's edit of
 `f1` invalidate every fix drafted on top of it. This one makes the invalidated
 fixes recoverable.
 
+**Status, 2026-10-31.** Built and deployed 2026-09-11, all five steps of
+§8. §6's open decision, re-running the self-check on a reviewer's edit,
+was not built: an edited fix keeps `self_check_passed: false`. Its content
+is scanned only when it roots a later chain, for that chain's counts, and
+on the branch once it is committed (write-back-spec).
+
 ## 1. The dead end
 
 After `f1` is edited, the cascade returns `f2`…`fN` to `needs-human-only` with

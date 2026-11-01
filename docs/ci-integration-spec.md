@@ -6,8 +6,9 @@ reviewer asks for them — fixes posted as suggested changes.
 
 Written before building, 2026-09-23, and revised as it was built,
 2026-09-24–25; where the build departed from the draft, the section says so
-and why. §9 is the status. The GitHub API claims are from GitHub's
-documentation and are marked **(verify)** until a deployed run has shown them.
+and why. **Deployed and verified end to end 2026-09-25** (§9). The GitHub
+API claims are from GitHub's documentation and are marked **(verify)**
+until a deployed run has shown them.
 
 ## 1. What changed since the spec's v3 was written
 

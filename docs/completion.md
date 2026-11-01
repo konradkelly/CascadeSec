@@ -96,7 +96,7 @@ aside, is part of what the project shows.
 | Remote scans: `scan-api`, remote `--fix` and `--apply`, phase M machine auth | cli-spec §13 steps 7-8, machine-auth-spec | A CI job can run the pipeline itself with its own key once phase 3 is done | Accepted 2026-10-31 (P9) |
 | `--helm` and `--synth` in local mode | cli-spec §13 step 9 | Already "when asked for" | Proposed (C8) |
 | Helm and Pulumi in the PR pipeline, and their remediation; Pulumi Python and components | sandbox-spec §1, multi-iac-spec §9 | Needs a chart-aware self-check and source mapping, which would be a v5 of its own | Proposed (C8) |
-| The dependency test gate | sandbox-spec §9 step 5, dependency-safety-spec | Not started | Proposed (C8) |
+| npm advisories (dependency-safety): detection, the four gates that read files, and the test gate | dependency-safety-spec, sandbox-spec §9 step 5 | A new scan source, and none of it was built. The test gate needs the sandbox as well | Proposed (C8). The row named only the test gate until 2026-10-31 |
 | Bedrock and Vertex as model providers | portable-runtime-spec §6, P8 | Configuration only, never tested. The Anthropic API is the one tested provider | Proposed (C8) |
 | The integration surfaces drafted in October and never committed: CI-platform recipes, an HCP Terraform run task, an MCP server, notifications, a VS Code extension | integrations-spec phases C-E (not in the repository) | Each is a new surface. SARIF already gets the findings into Code Scanning and SARIF viewers | Proposed (C6, C8) |
 | `GET /prs` and `cascadesec prs` | cli-spec D8 | Stays open | Unchanged |
@@ -118,11 +118,18 @@ second and not last.
 2. **Spec status lines.** Every spec opens with one line saying what is
    built, deployed or past 1.0, with a date. **Done 2026-10-31** for
    portable-runtime, sandbox, multi-iac, machine-auth, cli and the
-   top-level spec, alongside the stale lines inside them. Still to check:
-   - fix-chain-review, reviewer-edit, remediation-agent and
-     trivy-azure-arm-adapter-gap, which carry no status line;
-   - dependency-safety beyond its test gate, whose status line covers only
-     the gate.
+   top-level spec, alongside the stale lines inside them. **Done
+   2026-10-31** for the rest, each checked against the code:
+   - fix-chain-review and reviewer-edit, deployed 2026-09-11, with the
+     open decisions neither built;
+   - remediation-agent, marked as the historical build brief it is, with
+     what has outgrown it;
+   - trivy-azure-arm-adapter-gap, still not filed, which nothing in the
+     scanner depends on since KICS took ARM over;
+   - dependency-safety, of which nothing is built, not only the test
+     gate, so §4's row now covers all of it;
+   - cli, context-agent and ci-integration, whose status was only further
+     in (§13, §12, §9).
 3. **Publish the images.** Make `ghcr.io/konradkelly/cascadesec-scanner`
    and `ghcr.io/konradkelly/cascadesec-hook` public. Only the owner can,
    from each package's settings on GitHub. Done when an anonymous

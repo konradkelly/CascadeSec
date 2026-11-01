@@ -4,6 +4,13 @@ Follows on from `proposed_fix.applies_after` (commit `8ae2717`), which records
 the chain a fix is drafted on but is currently advisory: nothing stops a
 reviewer approving a fix whose prerequisites never landed.
 
+**Status, 2026-10-31.** Built and deployed 2026-09-11: the object-shaped
+`applies_after` (§2), review-api's enforcement (§3), the cascade (§4) and
+the dashboard's affordance (§5). Of §6's two open decisions, retracting
+`resolved` on a rejection was decided and built in
+`docs/reviewer-edit-spec.md` §2.4. Pruning `applies_after` to overlapping
+hunks was not built.
+
 ## 1. The problem
 
 A prerequisite is an entry in `proposed_fix.applies_after` — an earlier finding
