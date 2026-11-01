@@ -15,7 +15,7 @@ A deterministic scanner finds the misconfiguration. An LLM drafts the fix, then 
 - **Seven IaC languages in pull requests:** Terraform, OpenTofu, Kubernetes, CloudFormation, Azure ARM, Bicep, and AWS CDK apps, which run in a sandbox with no credentials. Pulumi and Helm can be scanned by hand, detection only. Findings are mapped to OWASP, CIS and NIST 800-53 controls
 - **Deployed end to end:** pull request → check run → self-verified fixes → one-click commit, verified live on a test repository
 - **From the terminal too:** the `cascadesec` CLI scans locally with a baseline, runs as a pre-commit hook, writes SARIF for GitHub Code Scanning, and reviews and commits fixes
-- **18 AWS services, all in Terraform**, and 1,496 tests in CI (Lambdas, CLI on Linux and Windows, corpus, deploy guard, sandbox harnesses, dashboard), run with no AWS credentials
+- **18 AWS services, all in Terraform**, and 1,558 tests in CI (Lambdas, CLI on Linux and Windows, corpus, deploy guard, sandbox harnesses, dashboard), run with no AWS credentials
 
 ![Proposed diff replacing an open egress rule with four scoped rules](docs/images/proposed-diff-egress.png)
 
@@ -125,11 +125,12 @@ it requires rebuilding the sandbox image and applying `terraform/sandbox`
 
 ## Status
 
-**Deployed and running** against a dev AWS account, with a GitHub App installed on a test repository. CI runs on every push. It runs 1,496 tests, counted on 2026-10-31:
+**Deployed and running** against a dev AWS account, with a GitHub App installed on a test repository. CI runs on every push. It runs 1,558 tests, counted on 2026-10-31:
 - the Lambda suites (915);
 - the CLI on Linux and Windows (227);
 - the corpus data tests (219);
-- the deploy guard (20);
+- the core's record store and its conformance suite (40);
+- the deploy guard and the drift check (42);
 - the Pulumi and Helm harnesses (15);
 - the dashboard's tests (100), with its lint and type-check.
 
