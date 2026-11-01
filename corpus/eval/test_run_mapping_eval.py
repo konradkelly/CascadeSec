@@ -106,30 +106,53 @@ def test_no_runs_reports_the_corpus_alone():
 # ---------- citations ----------
 
 TEXT = "Every S3 bucket should have default server-side encryption enabled so objects are encrypted at rest."
+S3 = {"title": "S3 buckets employ encryption at rest", "text": TEXT}
+# NIST SC-8(1) as the corpus has it, template brackets and all.
+SC8 = {"title": "Transmission Confidentiality and Integrity | Cryptographic Protection",
+       "text": "Implement cryptographic mechanisms to [Selection (one-or-more): prevent unauthorized disclosure "
+               "of information; detect changes to information] during transmission."}
 
 
-@pytest.mark.parametrize("citation, verdict", [
-    ("default server-side encryption enabled", "verbatim"),
-    ('"default  server-side\nencryption enabled"', "verbatim"),         # quotes and whitespace aside
-    ("Default Server-Side Encryption Enabled", "reworded"),
-    ("default serverside encryption enabled", "reworded"),
-    ("encryption should be enabled by default", "not in the text"),
-    ("", "not in the text"),
+@pytest.mark.parametrize("citation, control, verdict", [
+    ("default server-side encryption enabled", S3, rme.VERBATIM),
+    ('"default  server-side\nencryption enabled."', S3, rme.VERBATIM),      # quotes, whitespace, a closing stop
+    ("S3 buckets employ encryption at rest", S3, rme.FROM_TITLE),
+    ("Every S3 bucket ... encrypted at rest", S3, rme.ELIDED),
+    ("Every S3 bucket…objects are encrypted", S3, rme.ELIDED),
+    ("encrypted at rest ... Every S3 bucket", S3, rme.NOT_AN_EXCERPT),     # pieces out of order
+    ("Default Server-Side Encryption Enabled", S3, rme.REWORDED),
+    ("encryption should be enabled by default", S3, rme.NOT_AN_EXCERPT),
+    ("", S3, rme.NOT_AN_EXCERPT),
+    # Found in the first runs: the bracket elided and marked is faithful;
+    # joined into one sentence with nothing to say so, it is not.
+    ("Implement cryptographic mechanisms to ... prevent unauthorized disclosure of information", SC8, rme.ELIDED),
+    ("Implement cryptographic mechanisms to prevent unauthorized disclosure of information during transmission",
+     SC8, rme.NOT_AN_EXCERPT),
 ])
-def test_a_citation_is_verbatim_only_if_the_text_has_it(citation, verdict):
-    assert rme.citation_verdict(citation, TEXT)[0] == verdict
+def test_a_citation_is_judged_against_the_control_it_cites(citation, control, verdict):
+    assert rme.citation_verdict(citation, control)[0] == verdict
 
 
-def test_a_citation_of_fifteen_words_is_over_the_limit():
+def test_a_citation_of_fifteen_words_is_over_the_limit_and_an_ellipsis_is_not_a_word():
     fourteen = " ".join(TEXT.split()[:14])
-    assert rme.citation_verdict(fourteen, TEXT) == ("verbatim", True)
-    assert rme.citation_verdict(" ".join(TEXT.split()[:15]), TEXT) == ("verbatim", False)
+    assert rme.citation_verdict(fourteen, S3) == (rme.VERBATIM, True)
+    assert rme.citation_verdict(" ".join(TEXT.split()[:15]), S3) == (rme.VERBATIM, False)
+    assert rme.citation_verdict(" ".join(TEXT.split()[:7]) + " ... " + " ".join(TEXT.split()[8:15]), S3) == (
+        rme.ELIDED, True)
 
 
 def test_every_mapped_finding_has_its_citation_checked_labelled_or_not():
-    texts = {A: TEXT}
-    cited = rme.citations([finding("ANY", A, citation="objects are encrypted at rest"), finding("RAW")], texts)
-    assert [(v, short) for v, short, _ in cited] == [("verbatim", True)]
+    cited = rme.citations([finding("ANY", A, citation="objects are encrypted at rest"), finding("RAW")], {A: S3})
+    assert [(v, short) for v, short, _ in cited] == [(rme.VERBATIM, True)]
+
+
+def test_the_report_counts_a_title_or_a_marked_cut_as_a_faithful_quotation():
+    run = [finding("ANY", A, citation="S3 buckets employ encryption at rest"),
+           finding("ANY", A, citation="Every S3 bucket ... at rest", case="case-2"),
+           finding("ANY", A, citation="buckets are always encrypted", case="case-3")]
+    lines = []
+    rme.report([], MAPPINGS, {A: S3}, {"run-1": run}, out=lines.append)
+    assert "run-1: a faithful quotation 2/3 = 66.7%" in "\n".join(lines)
 
 
 # ---------- reading the cases and the runs ----------
