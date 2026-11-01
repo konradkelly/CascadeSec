@@ -98,7 +98,7 @@ Detection recall is measured, not assumed. The test set is a labelled corpus of 
 
 **98.9%: 178 of 180 expected findings across 84 positive cases and 6 clean controls** (2026-11-01, image `b22fc47`, the same as on 2026-09-23: Trivy 0.74.0 + Checkov 3.3.16 + KICS 2.1.20 + `IACP-0001`). By source: Trivy 63/63, KICS 22/22, Checkov 93/95. Both misses are documented upstream tool gaps and were left as misses, not relabelled. The full method, the corrections log, and what the number does *not* measure are in [`corpus/eval/README.md`](./corpus/eval/README.md).
 
-Detection recall mostly measures the scanners. CascadeSec's own claims are that mapping picks the right control and that a self-checked fix is a correct fix. Neither is measured yet. Both are the next step ([`docs/completion.md`](./docs/completion.md), phase 2).
+Detection recall mostly measures the scanners. CascadeSec's own claims are that mapping picks the right control and that a self-checked fix is a correct fix. **Mapping is measured** (2026-11-01): 154 of 181 labelled findings are mapped to a right control (85.1%), the same in three runs, and every miss is a gap in the corpus's candidates rather than a wrong choice by the agent; 99.4-99.7% of its citations are faithful quotations ([method and the misses](./corpus/eval/README.md#mapping-accuracy)). Fix quality is not measured yet and is the next step ([`docs/completion.md`](./docs/completion.md), phase 2).
 
 ## Running it
 
