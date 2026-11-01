@@ -323,8 +323,8 @@ real findings with no control in the three frameworks then loaded.
 run.
 
 It measures whether a finding *can* be mapped, not whether the agent picks
-well among the candidates. That would need a labelled expected control per
-case and a live run, and is not measured.
+well among the candidates. That is [mapping accuracy](#mapping-accuracy),
+below.
 
 ### The two misses are real, and each names a specific gap
 
@@ -412,6 +412,93 @@ upstream and were matched by hand (`aws-cloudtrail-enable-at-rest-encryption`
 and off by default, so they can never fire; see the corrections log. The
 translated labels were then run through the same Trivy binary locally
 before deploy: 26/26 fired, and the deployed run matched.
+
+## Mapping accuracy
+
+Whether mapping-agent cites the right control, which coverage above cannot
+say (docs/completion.md phase 2 step 1). `run_mapping_eval.py` reports it.
+**Not yet measured:** the labels below were drafted on 2026-11-01 and are
+waiting for review, and no number is computed from them until they have
+been.
+
+### Why it is three numbers and not one
+
+mapping-agent is handed a rule's candidate controls from `rule_mappings.json`
+and must pick exactly one; its output has no way to say none fits. 158 of
+the 180 labelled pairs have a single candidate, so on those the model makes
+no choice at all, and whether the mapping is right is decided by the corpus
+file. One accuracy figure would mostly measure the corpus and dilute the
+agent's real decisions to a handful of pairs. So:
+
+- **Corpus correctness**, from the files alone, with no model: for each
+  pair, whether every candidate is right (the agent cannot be wrong), only
+  some are (its choice decides), none is (it cannot be right), or there is
+  none, rightly or not.
+- **The agent's choice**, from pipeline runs of the cases, on the pairs
+  whose candidates are only partly right. Run three times, because the
+  answer varies, and reported per run and as how many pairs were answered
+  the same way every time.
+- **Citation fidelity**, from the same runs, on every mapped finding: is
+  the citation what the prompt asks for, a verbatim excerpt of under 15
+  words from the chosen control's text. Nothing in the pipeline checks it,
+  and the dashboard shows it in quotation marks.
+
+The runs go through the deployed pipeline, stopped after mapping:
+
+```
+python scripts/scan.py corpus/eval/cases --pr-id eval-map-1 --no-remediate
+python corpus/eval/run_mapping_eval.py --pr-id eval-map-1 --pr-id eval-map-2 --pr-id eval-map-3
+```
+
+With no `--pr-id`, it reports corpus correctness alone, which needs no AWS.
+
+### How the labels were made
+
+Each labelled pair carries `expected_controls`: the controls in
+`corpus/frameworks/` that a correct mapping of that finding may cite. Any
+one of them counts as right. `corpus/test_corpus.py` fails on a pair with
+no `expected_controls`, and on one that names a control the corpus does not
+have.
+
+1. **A pair's label is what its rule checks**, not what its case is about
+   and not what else is wrong in the file. A control is in the set when the
+   configuration the rule detects violates what the control's text
+   requires. Related in topic is not enough.
+2. **A platform's benchmark applies to that platform only**: CIS AWS to
+   AWS resources, CIS Azure to Azure, CIS Kubernetes to manifests. NIST
+   800-53 applies wherever one of its controls is violated directly.
+3. **The catch-alls are a last resort.** OWASP CNAS-1 ("secure-by-default
+   configuration") and CIS Kubernetes 5.6.3 ("apply a securityContext")
+   would fit almost any misconfiguration, and a control every finding
+   satisfies would make the number mean nothing. Each is labelled only when
+   no more specific control in the corpus fits, or, for 5.6.3, when the rule
+   checks exactly that.
+4. **An empty set is a label**: no control in the corpus applies, so any
+   mapping is wrong and no candidate is the right outcome.
+5. **The labeller does not look at the answers.** Labels were made from
+   each rule's own title and description and the control texts, without
+   reading `rule_mappings.json` or anything mapping-agent wrote. Drafted by
+   Claude (Opus 5.5) on 2026-11-01, to be reviewed by Konrad before any
+   number is computed.
+
+The calls a reviewer is most likely to dispute:
+
+- **A customer-managed-key rule is key management, not encryption at
+  rest.** `AWS-0132` and `CKV_AWS_145` on a bare S3 bucket, and the CMK
+  rules for CloudWatch Logs, DynamoDB and Lambda, are labelled NIST SC-12
+  only. The data is already encrypted by the service's own key (S3 has
+  encrypted every bucket by default since 2023), so CIS AWS 2.1.1 and
+  SC-28(1) are not violated by what those rules check, though the S3
+  cases' notes name 2.1.1. KICS's "S3 bucket without server-side
+  encryption", which does check for encryption, is labelled 2.1.1.
+- **A writable root filesystem is CNAS-1.** No control in the corpus names
+  it, and mapping it to CIS Kubernetes 5.6.3 would be force-mapping, as the
+  case's note already says.
+- **Log retention left unset is AU-11**, reading AU-11 as "the period is
+  decided", which `CKV_AWS_338` states outright and `CKV_AWS_66` implies.
+- **Trivy `KSV-0112`** ("manage all resources") is labelled NIST AC-6 only:
+  its description does not say it checks for wildcards, so CIS Kubernetes
+  5.1.3 is not established from it.
 
 ## How the labels were produced, and what happened to them
 

@@ -206,6 +206,24 @@ the specs finds no claim that the deployed system contradicts.
    Done when the number and the labelling rules are in
    `corpus/eval/README.md`, and a corpus test fails on a label that names a
    control the corpus does not have.
+
+   **Revised 2026-11-01, decided by Konrad.** It is three numbers, not
+   one. mapping-agent must pick exactly one candidate and cannot decline,
+   and 158 of the 180 pairs have a single candidate, so on those the
+   outcome is fixed by `rule_mappings.json` and "declined" cannot happen.
+   One figure would mostly measure the corpus. So
+   `corpus/eval/run_mapping_eval.py` reports:
+   - **corpus correctness**, from the files alone;
+   - **the agent's choice** on the pairs whose candidates are only partly
+     right, over three pipeline runs;
+   - **citation fidelity** on every mapped finding: whether the citation
+     is the verbatim excerpt of under 15 words the prompt asks for, which
+     nothing checks today.
+
+   Claude drafts the labels from the control texts without reading the
+   candidates or mapping-agent's answers, and Konrad reviews every label
+   before any number is computed. **Labels drafted 2026-11-01**, with the
+   rules, the script and the corpus test; review and the numbers are next.
 2. **Fix quality.** A new `corpus/eval/run_fix_eval.py`.
    - **Cases:** every positive eval case, plus the repositories
      `corpus/external/` pins, at their pinned commits.
