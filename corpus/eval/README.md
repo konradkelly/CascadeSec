@@ -423,7 +423,10 @@ say (docs/completion.md phase 2 step 1). `run_mapping_eval.py` reports it.
 **First measured 2026-11-01** ([result](#result-2026-11-01)): 154 of 181
 labelled findings mapped to a right control, the same in three runs. The 27
 that were not are the corpus's doing, not the agent's: on those pairs no
-candidate it could pick was right. 99.4-99.7% of citations are faithful
+candidate it could pick was right. With the corpus corrected against the
+labels, all 181 map right ([2026-11-03](#corrected-2026-11-03)), which closes
+those gaps and is not a second measure of accuracy, since the labels drove
+it. In both, 99.4-99.7% of citations are faithful
 quotations of the control.
 
 ### Why it is three numbers and not one
@@ -578,11 +581,45 @@ measured again, so the difference is the correction's.
 
 The 20 rules behind those 28 pairs now offer what the labels say
 (`corpus/README.md`, the last section). Corpus correctness is **180 of
-180**: every candidate right on every pair. That is true by construction,
-since the labels made the change, so it says the known gaps are closed and
-nothing about rules the eval does not cover. The agent still makes no
-choice that matters here. **Not yet measured on the pipeline:** the runs
-come after the corrected corpus is deployed.
+180**: every candidate right on every pair.
+
+Three more runs against the **deployed** stack by the same method,
+`eval-map-20261103-1` to `-3`: the scanner image `123b79f`
+(`sha256:9f79cbf0`), mapping-agent on `claude-opus-5` at effort low, and the
+corpus at `main` `123b79f`, uploaded before they started. Each run mapped 351
+findings and left 161 raw with their reason, and no call failed or was
+refused. They cost **$7.76**: 697,665 input and 171,012 output tokens, over
+1,053 logged calls for 1,053 mappings.
+
+| labelled findings | 2026-11-01 | 2026-11-03 |
+|---|---|---|
+| mapped to a right control | 154 / 181, 85.1% | **181 / 181, in all three runs** |
+| mapped to a wrong one | 23 | 0 |
+| no candidate | 4 | 0 |
+
+| citations, every mapped finding | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| verbatim from the control's text | 338 | 338 | 336 |
+| verbatim from its title | 5 | 5 | 5 |
+| elided, the cut marked with "..." | 7 | 7 | 8 |
+| not an excerpt | 1 | 1 | 2 |
+| **a faithful quotation** | **350 / 351, 99.7%** | **350 / 351, 99.7%** | **349 / 351, 99.4%** |
+| 15 words or more (asked: under 15) | 20 | 21 | 22 |
+
+Every "not an excerpt" is NIST SC-8(1) again, in the same rewrite as before.
+
+**Read the 181 for what it is.** The labels drove the correction, so the
+corpus could not come out otherwise. The runs show that the deployed
+pipeline read the corrected corpus and followed it, and nothing more. **85.1%
+remains the only blind measure of the corpus, and the number to quote.** It
+says little about what the labels do not reach: 170 of the 351 findings
+mapped in a run are on no labelled pair, and 176 of the corpus's 309 mapped
+rules have never been labelled. Of those, 12 offered the controls this
+correction moved other rules away from. They were reviewed afterwards, five
+moved to NIST SC-7 (`corpus/README.md`), and none of the five fires on a case
+here, so the numbers above stand. The other 164 have not been reviewed. The
+agent's choice is still unmeasured, since no labelled pair offers it one that
+matters.
 
 ## How the labels were produced, and what happened to them
 
