@@ -85,20 +85,20 @@
     ],
     "checkov:CKV_AWS_109": [
       {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "1.16"
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
       }
     ],
     "checkov:CKV_AWS_110": [
       {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "1.16"
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
       }
     ],
     "checkov:CKV_AWS_111": [
       {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "1.16"
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
       }
     ],
     "checkov:CKV_AWS_115": [
@@ -121,8 +121,8 @@
     ],
     "checkov:CKV_AWS_130": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-1"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
       }
     ],
     "checkov:CKV_AWS_133": [
@@ -151,8 +151,8 @@
     ],
     "checkov:CKV_AWS_145": [
       {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "2.1.1"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
       }
     ],
     "checkov:CKV_AWS_157": [
@@ -181,8 +181,8 @@
     ],
     "checkov:CKV_AWS_17": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
       }
     ],
     "checkov:CKV_AWS_173": [
@@ -441,8 +441,8 @@
     ],
     "checkov:CKV_AWS_39": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
       }
     ],
     "checkov:CKV_AWS_40": [
@@ -518,7 +518,7 @@
     "checkov:CKV_AWS_60": [
       {
         "framework": "NIST-800-53-r5",
-        "control_id": "AC-6"
+        "control_id": "AC-3"
       }
     ],
     "checkov:CKV_AWS_62": [
@@ -529,8 +529,8 @@
     ],
     "checkov:CKV_AWS_63": [
       {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "1.16"
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
       }
     ],
     "checkov:CKV_AWS_66": [
@@ -571,8 +571,8 @@
     ],
     "checkov:CKV_AWS_88": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-1"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
       }
     ],
     "checkov:CKV_AWS_92": [
@@ -977,6 +977,12 @@
         "control_id": "5.6.4"
       }
     ],
+    "checkov:CKV_K8S_22": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-1"
+      }
+    ],
     "checkov:CKV_K8S_23": [
       {
         "framework": "CIS-Kubernetes-2.0",
@@ -1112,8 +1118,8 @@
     ],
     "kics:022f8938-4b17-420c-aca3-f917f290f322": [
       {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "1.16"
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
       }
     ],
     "kics:050a9ba8-d1cb-4c61-a5e8-8805a70d3b85": [
@@ -1164,8 +1170,12 @@
     ],
     "kics:4a1e6b34-1008-4e61-a5f2-1f7c276f8d14": [
       {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "5.2"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
+      },
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-6"
       }
     ],
     "kics:4d2cf896-c053-4be5-9c95-8b4771112f29": [
@@ -1270,8 +1280,8 @@
     ],
     "trivy:AWS-0009": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-1"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
       }
     ],
     "trivy:AWS-0014": [
@@ -1374,8 +1384,8 @@
     ],
     "trivy:AWS-0040": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
       }
     ],
     "trivy:AWS-0041": [
@@ -1546,8 +1556,8 @@
     ],
     "trivy:AWS-0132": [
       {
-        "framework": "CIS-AWS-1.4",
-        "control_id": "2.1.1"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-12"
       }
     ],
     "trivy:AWS-0143": [
@@ -1558,8 +1568,8 @@
     ],
     "trivy:AWS-0164": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-1"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
       }
     ],
     "trivy:AWS-0178": [
@@ -1570,8 +1580,8 @@
     ],
     "trivy:AWS-0180": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
       }
     ],
     "trivy:AWS-0345": [
@@ -1844,6 +1854,12 @@
         "control_id": "CICD-SEC-9"
       }
     ],
+    "trivy:KSV-0014": [
+      {
+        "framework": "OWASP-CloudNative",
+        "control_id": "CNAS-1"
+      }
+    ],
     "trivy:KSV-0015": [
       {
         "framework": "NIST-800-53-r5",
@@ -1940,8 +1956,8 @@
     ],
     "trivy:KSV-0112": [
       {
-        "framework": "CIS-Kubernetes-2.0",
-        "control_id": "5.1.3"
+        "framework": "NIST-800-53-r5",
+        "control_id": "AC-6"
       }
     ],
     "trivy:KSV-0113": [
@@ -2110,10 +2126,6 @@
       "reason": "no-control",
       "note": "Google Groups for GKE RBAC; an identity-provider choice."
     },
-    "checkov:CKV_K8S_22": {
-      "reason": "no-control",
-      "note": "Read-only root filesystem. CIS Kubernetes reaches it only by reference (5.6.3 pointing at the Docker benchmark), and 5.6.3 is satisfied by any securityContext. NIST SI-14 (non-persistence) and SI-7 (integrity) were considered and are about something else."
-    },
     "checkov:CKV_K8S_40": {
       "reason": "no-control",
       "note": "UID/GID above 10000, to avoid colliding with host accounts. Stricter than CIS Kubernetes 5.2.7, which asks for not-root, and no NIST control asks for it either."
@@ -2173,10 +2185,6 @@
     "trivy:GCP-0051": {
       "reason": "hygiene",
       "note": "Labels on GKE clusters."
-    },
-    "trivy:KSV-0014": {
-      "reason": "no-control",
-      "note": "Read-only root filesystem. CIS Kubernetes reaches it only by reference (5.6.3 pointing at the Docker benchmark), and 5.6.3 is satisfied by any securityContext. NIST SI-14 (non-persistence) and SI-7 (integrity) were considered and are about something else."
     },
     "trivy:KSV-0020": {
       "reason": "no-control",

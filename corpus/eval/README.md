@@ -299,10 +299,13 @@ in `rule_mappings.json` — spec §7.1's second half. Read from the file rather
 than from a `mapping-agent` run: it is a property of the corpus, costs
 nothing, and is deterministic.
 
-| | 2026-11-01, 90 cases | 2026-09-12, 40 cases |
-|---|---|---|
-| labelled pairs that fired | **131/133 — 98.5%** | 44/61 — 72% |
-| all distinct rules fired | **174/242 — 71.9%** | 48/123 — 39% |
+| | 2026-11-03, corpus corrected | 2026-11-01, 90 cases | 2026-09-12, 40 cases |
+|---|---|---|---|
+| labelled pairs that fired | **133/133 — 100%** | 131/133 — 98.5% | 44/61 — 72% |
+| all distinct rules fired | **176/242 — 72.7%** | 174/242 — 71.9% | 48/123 — 39% |
+
+The 2026-11-03 column is the same findings against the corrected
+`rule_mappings.json` (below): the read-only root filesystem pair is mapped.
 
 The 2026-11-01 figures are from the run on image `b22fc47` above, with NIST
 SP 800-53 loaded (see 2026-10-11 below); the 68 unmapped rules are listed in
@@ -570,6 +573,16 @@ offers:
 
 This is the baseline. The corpus is corrected in a change of its own, and
 measured again, so the difference is the correction's.
+
+### Corrected, 2026-11-03
+
+The 20 rules behind those 28 pairs now offer what the labels say
+(`corpus/README.md`, the last section). Corpus correctness is **180 of
+180**: every candidate right on every pair. That is true by construction,
+since the labels made the change, so it says the known gaps are closed and
+nothing about rules the eval does not cover. The agent still makes no
+choice that matters here. **Not yet measured on the pipeline:** the runs
+come after the corrected corpus is deployed.
 
 ## How the labels were produced, and what happened to them
 

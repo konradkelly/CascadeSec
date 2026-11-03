@@ -164,7 +164,8 @@ The 16 unmapped rules are unmapped on purpose, and again they cluster:
   `CKV_K8S_10-13`; 104 findings) -- not in the CIS Kubernetes Benchmark at
   all. A control gap, like log retention was for AWS, not a missing mapping.
 - **Read-only root filesystem** (`KSV-0014`, `CKV_K8S_22`; 28 findings, the
-  only unmapped rule Trivy rates HIGH) -- the benchmark reaches it only by
+  only unmapped rule Trivy rates HIGH; mapped to OWASP CNAS-1 since
+  2026-11-03, see the last section) -- the benchmark reaches it only by
   reference, 5.6.3 pointing at the Docker benchmark's list of security
   contexts. Mapping it to 5.6.3 would be force-mapping: a container with a
   securityContext and a writable root does not violate "apply a
@@ -438,7 +439,8 @@ precedent fits, the precedent comes first and NIST sits beside it:
   than 5.2.7, and nothing in 800-53 asks for it either.
 - **Read-only root filesystem** (`KSV-0014`, `CKV_K8S_22`; 63). SI-14
   (non-persistence) and SI-7 (integrity) were considered and are about
-  something else; it stays where the Kubernetes section left it.
+  something else; it stays where the Kubernetes section left it. (Mapped to
+  CNAS-1 on 2026-11-03, below.)
 - **Deletion protection.** AWS's Security Hub mapping puts RDS.8 under CM-3
   and SC-5(2), but neither control's text mentions deletion, so citing them
   would be citing AWS's mapping rather than the control. Same test for **IAM
@@ -453,6 +455,38 @@ TLS, geo- and zone-redundancy, SQL threat detection -- and the rest is in the
 `unmapped` section with the same reasons. Its Azure rules were triaged from
 the ids that section records; KICS queries it names without an id are not,
 and will show as `unreviewed` until someone keys them.
+
+### Corrected against the mapping-accuracy labels (2026-11-03)
+
+The eval's mapping-accuracy labels (`eval/README.md` § Mapping accuracy)
+were drafted without reading this file, and reviewed by Konrad, so they
+measured it rather than repeated it. On 28 of their 180 pairs every
+candidate here was wrong, or there was none. The 20 rules behind them now
+offer what the labels say, by one rule: **a candidate must be right for
+every finding its rule can raise.** mapping-agent sees the rule, not the
+resource, so it cannot tell the case where a broader control happens to
+apply.
+
+| rules | was | now | why |
+|---|---|---|---|
+| `AWS-0132`, `CKV_AWS_145`: S3 with a customer-managed key | CIS AWS 2.1.1 | NIST SC-12 | AWS encrypts every bucket by default; a missing CMK is who holds the key, which is SC-12, as the other CMK rules already were |
+| `CKV_AWS_63`, `_109`, `_110`, `_111`, KICS `022f8938` (data exfiltration) | CIS AWS 1.16 | NIST AC-6 | each fires on policies narrower than `*` on `*`, which is all 1.16 covers |
+| `CKV_AWS_88`, `CKV_AWS_130`, `AWS-0009`, `AWS-0164`: public IPs | OWASP CNAS-1 | NIST SC-7 | a boundary question with a specific control; CNAS-1 is for when nothing fits |
+| `CKV_AWS_17`, `CKV_AWS_39`, `AWS-0040`, `AWS-0180`: public endpoints and databases | OWASP CNAS-6 | NIST SC-7 | being reachable is not a network access rule that fails to default to deny |
+| `CKV_AWS_60`: any principal may assume the role | NIST AC-6 | NIST AC-3 | no authorization is enforced at all, which is AC-3 rather than over-granting |
+| KICS `4a1e6b34`: open ingress on any port | CIS AWS 5.2 | NIST SC-7, OWASP CNAS-6 | 5.2 is ports 22 and 3389 only |
+| `KSV-0112`: full control of a namespace | CIS Kubernetes 5.1.3 | NIST AC-6 | its check is not stated as a wildcard rule |
+| `KSV-0014`, `CKV_K8S_22`: writable root filesystem | none (`no-control`) | OWASP CNAS-1 | still no specific control; the catch-all, a permissive default relied on |
+
+The last row reverses the 2026-09-19 and 2026-10-11 decisions above. Those
+weighed CIS 5.6.3 and NIST SI-14 and SI-7 and rejected each, rightly;
+neither names CNAS-1, and the labels' rule for it, "only when nothing more
+specific fits", is met here and nowhere else in the eval.
+
+On the eval this makes every candidate right for all 180 pairs. That is true
+by construction, since the labels are what changed it, so it is not
+evidence beyond those pairs; the run after deploy says what the pipeline
+does with it.
 
 ## Not the corpus: `eval/`
 
