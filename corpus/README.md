@@ -425,7 +425,8 @@ precedent fits, the precedent comes first and NIST sits beside it:
   its alert recipients.
 - **Precedent rather than NIST:** `docker.sock` is a hostPath, so CIS 5.2.11;
   reading every secret is CIS 5.1.2; `KSV-0046` is wildcard RBAC beside
-  `KSV-0044` on 5.1.3; GKE private clusters and authorized networks join the
+  `KSV-0044` on 5.1.3; GKE private clusters (on SC-7 alone since 2026-11-03)
+  and authorized networks join the
   other public-exposure rules on CNAS-6 (with SC-7); the launch-configuration
   public IP and GKE's metadata server join the instance forms and IMDSv1 on
   CNAS-1.
@@ -485,8 +486,28 @@ specific fits", is met here and nowhere else in the eval.
 
 On the eval this makes every candidate right for all 180 pairs. That is true
 by construction, since the labels are what changed it, so it is not
-evidence beyond those pairs; the run after deploy says what the pipeline
-does with it.
+evidence beyond those pairs. Deployed, the pipeline mapped all 181 labelled
+findings to a right control in each of three runs (`eval/README.md`).
+
+**Five more, on rules the eval does not label.** The table above moved rules
+away from CNAS-1 and CNAS-6, and 12 rules with no label still offered one of
+them. Each was made to fire on a scratch Terraform file and judged by the
+same test, from the scanner's own title and description. This review was not
+blind: their candidates were known when they were read.
+
+| rules | was | now | why |
+|---|---|---|---|
+| `CKV_AWS_137` (Elasticsearch outside a VPC), `AWS-0053` (internet-facing load balancer) | OWASP CNAS-6 | NIST SC-7 | being reachable is not a network access rule that fails to default to deny |
+| `CKV_GCP_25`, `CKV_GCP_64`, `GCP-0059`: private clusters and nodes | OWASP CNAS-6, NIST SC-7 | NIST SC-7 | the same; and with both offered, the agent could cite the wrong one |
+
+The other seven stay. `CKV_AWS_79`, `CKV_GCP_69` and `AWS-0028`, the instance
+metadata rules, stay on CNAS-1: nothing more specific fits, and Trivy's
+description of `AWS-0028` says the permissive setting is the default.
+`CKV2_AWS_12` stays on CIS 5.3 and CNAS-6, since the default security group
+is a network access control that should deny. `CKV_GCP_12`, `CKV_GCP_20` and
+`GCP-0061` stay on CNAS-6 and SC-7: network policy and authorized networks
+are that kind of rule too, as the EKS allowed-CIDR pair is labelled. The
+other 164 rules with no label have not been reviewed.
 
 ## Not the corpus: `eval/`
 

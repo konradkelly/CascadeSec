@@ -139,8 +139,8 @@
     ],
     "checkov:CKV_AWS_137": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
       }
     ],
     "checkov:CKV_AWS_144": [
@@ -831,10 +831,6 @@
     ],
     "checkov:CKV_GCP_25": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
-      },
-      {
         "framework": "NIST-800-53-r5",
         "control_id": "SC-7"
       }
@@ -846,10 +842,6 @@
       }
     ],
     "checkov:CKV_GCP_64": [
-      {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
-      },
       {
         "framework": "NIST-800-53-r5",
         "control_id": "SC-7"
@@ -1420,8 +1412,8 @@
     ],
     "trivy:AWS-0053": [
       {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
+        "framework": "NIST-800-53-r5",
+        "control_id": "SC-7"
       }
     ],
     "trivy:AWS-0065": [
@@ -1733,10 +1725,6 @@
       }
     ],
     "trivy:GCP-0059": [
-      {
-        "framework": "OWASP-CloudNative",
-        "control_id": "CNAS-6"
-      },
       {
         "framework": "NIST-800-53-r5",
         "control_id": "SC-7"
