@@ -236,7 +236,9 @@ the specs finds no claim that the deployed system contradicts.
      invented.
 
    The 28 pairs are corrected in `rule_mappings.json` next, and measured
-   again (`corpus/eval/README.md` § Mapping accuracy).
+   again (`corpus/eval/README.md` § Mapping accuracy). **Corrected
+   2026-11-03**, 20 rules, so every candidate is right on all 180 pairs, by
+   construction; the runs after deploy are next.
 2. **Fix quality.** A new `corpus/eval/run_fix_eval.py`.
    - **Cases:** every positive eval case, plus the repositories
      `corpus/external/` pins, at their pinned commits.
