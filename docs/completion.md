@@ -69,7 +69,7 @@ CascadeSec 1.0 is done when all six hold:
 | Area | State | Evidence |
 |---|---|---|
 | Detection: Terraform, OpenTofu, Kubernetes, CloudFormation, ARM, Bicep | Deployed | Recall 98.9%, 178 of 180, on 84 positive cases and 6 clean controls, 2026-11-01, image `b22fc47`, the same as on 2026-09-23 (`corpus/eval/README.md`) |
-| Control mapping with citations | Deployed | Coverage measured: 98.5% of labelled pairs and 71.9% of distinct rules have a candidate (2026-11-01), with NIST 800-53 loaded for the unmapped tail (`#51`). It was 72% and 39% on 2026-09-12. Accuracy measured 2026-11-01: 154 of 181 labelled findings mapped right (85.1%), every miss a corpus gap rather than the agent's choice; citations 99.4-99.7% faithful |
+| Control mapping with citations | Deployed | Coverage measured: 100% of labelled pairs and 72.7% of distinct rules have a candidate (2026-11-03), with NIST 800-53 loaded for the unmapped tail (`#51`). It was 72% and 39% on 2026-09-12. Accuracy measured blind 2026-11-01: 154 of 181 labelled findings mapped right (85.1%), every miss a corpus gap rather than the agent's choice. Those gaps corrected and deployed 2026-11-03, when all 181 map right; citations 99.4-99.7% faithful |
 | Remediation: self-check, suppression and deletion gates, assumptions, held fixes | Deployed | Gates proven by unit tests on captured diffs; neither had fired in production when iacposture-spec §6 was written. Fix quality not measured |
 | context-agent | Deployed | context-agent-spec; Lambda last updated 2026-09-24 |
 | GitHub App: check runs, annotations, suggested changes (v3) | Deployed 2026-09-25 | ci-integration-spec |
@@ -77,7 +77,7 @@ CascadeSec 1.0 is done when all six hold:
 | CDK: detection and remediation through the sandbox | Deployed 2026-10-11, behind `cdk_synthesis` | sandbox-spec §9 steps 2-3; testbed #4 and #5 |
 | Pulumi (TypeScript and JavaScript, 13 AWS resource types) and Helm rendering | Built; verified on AWS 2026-10-13; detection only, by hand through `scripts/sandbox.py`; not in the PR pipeline | sandbox-spec §1, `#52`, `#53` |
 | CLI review commands (track R) | Merged 2026-10-18 | cli-spec §13 |
-| CLI local scan, baseline, pre-commit hooks, SARIF | Merged by 2026-10-31. Images published to GHCR 2026-10-29 and again 2026-11-01 (`#76`), public since 2026-11-01 | cli-spec §13, sarif-spec |
+| CLI local scan, baseline, pre-commit hooks, SARIF | Merged by 2026-10-31. Images published to GHCR 2026-10-29, and again 2026-11-01 (`#76`) and 2026-11-03 (`#82`), public since 2026-11-01 | cli-spec §13, sarif-spec |
 | Portable runtime, phase 1: the core vendored into mapping-agent | Deployed 2026-10-31 | portable-runtime-spec §8 |
 | Portable runtime, phase 2: RecordStore and the G1-G9 suite | Merged 2026-10-31 (`#74`). No handler uses it yet. mapping-agent's zip vendors the core, so it was deployed with it the same day | portable-runtime-spec §12 |
 | Tests | 1,558, counted by collection on 2026-10-31 | 1,446 Python (Lambdas 915, CLI 227, corpus 219, core 40, deploy guard and drift check 42, Helm harness 3), dashboard 100, Node harness 12. All run in CI without AWS credentials |
@@ -236,9 +236,13 @@ the specs finds no claim that the deployed system contradicts.
      invented.
 
    The 28 pairs are corrected in `rule_mappings.json` next, and measured
-   again (`corpus/eval/README.md` § Mapping accuracy). **Corrected
-   2026-11-03**, 20 rules, so every candidate is right on all 180 pairs, by
-   construction; the runs after deploy are next.
+   again (`corpus/eval/README.md` § Mapping accuracy). **Corrected and
+   deployed 2026-11-03**, 20 rules (`#81`, `#82`). Three more runs, $7.76,
+   mapped all 181 labelled findings right, with citations again 99.4-99.7%
+   faithful. Since the labels drove the correction, that closes the gaps
+   and is not a second measure: 85.1% stays the blind number. Five more
+   rules that have no label moved to SC-7 after a review of those offering
+   the same controls, and 164 rules with no label are unreviewed.
 2. **Fix quality.** A new `corpus/eval/run_fix_eval.py`.
    - **Cases:** every positive eval case, plus the repositories
      `corpus/external/` pins, at their pinned commits.
