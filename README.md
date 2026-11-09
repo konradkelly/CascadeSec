@@ -2,25 +2,39 @@
 
 # CascadeSec
 
-**Infrastructure-as-code security scanning with AI-drafted fixes that prove themselves before a human sees them. Runs on serverless AWS and inside the GitHub pull request.**
+**Infrastructure-as-code security scanning with AI-drafted fixes that have to prove themselves before they are suggested. Runs on serverless AWS and inside the GitHub pull request.**
 
 ![CI](https://img.shields.io/github/actions/workflow/status/konradkelly/CascadeSec/ci.yml?branch=main&label=CI)
 ![AWS](https://img.shields.io/badge/AWS-Lambda%20%7C%20Step%20Functions%20%7C%20DynamoDB-orange)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
-A deterministic scanner finds the misconfiguration. An LLM drafts the fix, then re-runs the same scanner against its own diff, and only a fix that passes reaches a reviewer. A maintainer can commit the verified fixes to the pull request's branch with one click on the GitHub check run.
+Established open-source scanners find the misconfiguration. An AI agent drafts the fix, and the fix is only suggested to a reviewer after the same scanners confirm it actually solves the problem. A maintainer can then commit the verified fixes to the pull request with one click.
 
-**At a glance**
+**See it working:** [a pull request on the test repository](https://github.com/konradkelly/cascadesec-testbed/pull/2). It shows the CascadeSec check run with 44 annotations, six fixes posted as suggested changes, and two commits made by the CascadeSec Fixes App after the fixes were approved.
 
-- **98.9% detection recall** (178 of 180) on a labelled corpus of 90 cases, measured against the deployed scanner — [method](./corpus/eval/README.md)
-- **85.1% mapping accuracy, measured blind** (154 of 181 findings mapped to a right control, the same in three runs). Every miss was a gap in the corpus's candidates, not a wrong choice by the agent. Those gaps are now closed: all 181 map right, which is not a second measure, since the labels drove the correction — [method](./corpus/eval/README.md#mapping-accuracy)
-- **Seven IaC languages in pull requests:** Terraform, OpenTofu, Kubernetes, CloudFormation, Azure ARM, Bicep, and AWS CDK apps, which run in a sandbox with no credentials. Pulumi and Helm can be scanned by hand, detection only. Findings are mapped to OWASP, CIS and NIST 800-53 controls
-- **Deployed end to end:** pull request → check run → self-verified fixes → one-click commit, verified live on a test repository
-- **From the terminal too:** the `cascadesec` CLI scans locally with a baseline, runs as a pre-commit hook, writes SARIF for GitHub Code Scanning, and reviews and commits fixes
-- **18 AWS services, all in Terraform**, and 1,677 tests in CI (Lambdas, CLI on Linux and Windows, corpus, deploy guard, sandbox harnesses, dashboard), run with no AWS credentials
+## Highlights
+
+- **AI that has to prove its work.** Detection is deterministic (Trivy, Checkov, KICS and custom Rego checks), so the model cannot invent a finding. A drafted fix is suggested to a reviewer only once a rescan shows it clears the finding without adding a new one and without suppressing the scanner. Any other fix, or one that depends on something the agent could not check, is held for a human with the reason spelled out.
+- **Measured, with the method published.** **98.9%** detection recall on 90 labelled cases. **85.1%** of findings were mapped to the right compliance control (OWASP, CIS, NIST 800-53) in a blind measurement, and every miss was traced to the rule-to-control table, which has since been corrected. [Method and limits](./corpus/eval/README.md). Fix quality is the next measurement.
+- **Untrusted code runs in a sandbox.** AWS CDK apps from a pull request are synthesized on Fargate with no IAM role and no route to the internet, behind a DNS firewall, so the code being scanned holds no credentials.
+- **Run with production habits.** 18 AWS services, all in Terraform, deployed through a guard written after a bad apply took a component down, and checked against `main` by a drift check. Two GitHub Apps split the permissions: one reports on the pull request, and only the other can push commits. 1,677 tests run in CI, none with AWS credentials.
+- **Seven IaC languages in pull requests:** Terraform, OpenTofu, Kubernetes, CloudFormation, Azure ARM, Bicep and AWS CDK. A CLI also scans locally, runs as a pre-commit hook, and writes SARIF for GitHub Code Scanning.
 
 ![Proposed diff replacing an open egress rule with four scoped rules](docs/images/proposed-diff-egress.png)
 
 *A fix the agent proposed for a security group in [terragoat](https://github.com/bridgecrewio/terragoat), code nobody on this project wrote. The `0.0.0.0/0, all ports` egress is replaced by four scoped rules. The agent read the instance's `user_data` and found the `apt-get` that needs ports 80 and 443.*
+
+## Try it in two minutes
+
+You need Python 3.11 or later, [pipx](https://pipx.pypa.io/), git and Docker. No account or API key: a local scan runs the published scanner image with networking turned off.
+
+```bash
+pipx install "git+https://github.com/konradkelly/CascadeSec#subdirectory=cli"
+git clone --depth 1 https://github.com/bridgecrewio/terragoat
+cascadesec scan terragoat/terraform/aws
+```
+
+The first run downloads the scanner image (about 350 MB). Tested on 2026-11-09 with a fresh install on Windows and Linux: on terragoat's AWS code it found 333 issues in 14 files in about 15 seconds, and listed for most of them the compliance controls a full scan would choose among. It exits with code 1 when it finds anything rated high or above, as a CI gate would. A local scan is detection only: control citations and AI-drafted fixes come from the deployed pipeline. More in the [CLI guide](./cli/README.md).
 
 ## How it works
 
@@ -95,48 +109,26 @@ Full technical spec (data model, agent JSON contracts, eval plan, build phases):
 
 ## Evaluation
 
-Detection recall is measured, not assumed. The test set is a labelled corpus of Terraform, OpenTofu, Kubernetes, CloudFormation, ARM and Bicep cases with known injected vulnerabilities, scanned by the **deployed** scanner.
+Every number below is measured against the **deployed** pipeline, with the method, dates and corrections in [`corpus/eval/README.md`](./corpus/eval/README.md).
 
-**98.9%: 178 of 180 expected findings across 84 positive cases and 6 clean controls** (2026-11-01, image `b22fc47`, the same as on 2026-09-23: Trivy 0.74.0 + Checkov 3.3.16 + KICS 2.1.20 + `IACP-0001`). By source: Trivy 63/63, KICS 22/22, Checkov 93/95. Both misses are documented upstream tool gaps and were left as misses, not relabelled. The full method, the corrections log, and what the number does *not* measure are in [`corpus/eval/README.md`](./corpus/eval/README.md).
+- **Detection: 98.9%**, 178 of 180 expected findings across 84 labelled vulnerable cases and 6 clean controls, which raised nothing (2026-11-01). Both misses are documented gaps in the upstream tools, left as misses rather than relabelled. This mostly measures the scanners.
+- **Control mapping: 85.1%**, 154 of 181 findings mapped to a right control, the same in three runs, measured blind against labels reviewed before any number was computed (2026-11-01). Every miss came from the rule-to-control table offering no right control, not from the agent choosing badly. The table was corrected and deployed, and all 181 now map right (2026-11-03). That shows the gaps are closed, not a second measurement, since the same labels drove the correction. 99.4-99.7% of the agent's citations are faithful quotations of the control.
+- **Fix quality: not measured yet.** A clean rescan proves a finding is gone, not that the infrastructure still works. The next step is a fix-quality eval with a human audit of the fixes ([`docs/completion.md`](./docs/completion.md), phase 2).
 
-Detection recall mostly measures the scanners. CascadeSec's own claims are that mapping picks the right control and that a self-checked fix is a correct fix. **Mapping is measured.** Blind, on 2026-11-01, 154 of 181 labelled findings were mapped to a right control (85.1%), the same in three runs, and every miss was a gap in the corpus's candidates rather than a wrong choice by the agent. Those candidates were corrected and deployed on 2026-11-03, and all 181 now map right in three more runs. That closes the gaps and is not a second measure, since the labels drove the correction, and about half of what a run maps (170 of 351 findings) carries no label. 99.4-99.7% of citations are faithful quotations ([method and the misses](./corpus/eval/README.md#mapping-accuracy)). Fix quality is not measured yet ([`docs/completion.md`](./docs/completion.md), phase 2).
+## Limitations
 
-## Running it
+- **Fix quality is unmeasured** (above). Comparable published work, [TerraRepair](https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ESEM.2026.68), found about one in five scanner-verified fixes wrong on human review.
+- **The agents run only on AWS today.** Running them without an AWS account is in progress; local scanning already works without one.
+- **Drafts vary from run to run**, so the same finding can get a different fix.
+- **Remediation rewrites whole files**, which makes fixes in very large files slow and expensive.
+- **Pulumi and Helm are detection only**, run by hand, and OpenTofu has a single scanner (Trivy).
+- **The project has not been security-audited.**
 
-Against the deployed dev stack, with AWS credentials and `terraform` on `PATH`:
-
-```bash
-python scripts/scan.py path/to/terraform          # upload, scan, map, then ask before remediating
-python scripts/scan.py path/to/terraform --yes    # don't ask
-python corpus/eval/run_eval.py                    # detection recall over the labelled cases
-python corpus/external/run_external.py           # scan pinned third-party repos, compare to baseline
-```
-
-`scan.py` uploads the directory, starts one execution of the pipeline, reports each stage as it runs, and prints the dashboard URL when it finishes. Remediation costs one model call per mapped finding, so `scan.py` asks before running it (`--no-remediate` stops after mapping).
-
-From the terminal, the `cascadesec` CLI ([`cli/README.md`](./cli/README.md)) scans a directory locally through the pinned scanner image, under `--network none`. It holds known findings back with a baseline, runs as a pre-commit hook, and writes SARIF. Against the deployed stack it reads, decides on and commits fixes. The scanner and hook images are public on GHCR, so a local scan needs Docker but no account.
-
-Helm charts can be rendered offline in the sandbox and their generated manifests
-scanned with `python scripts/sandbox.py helm path/to/repo --app-dir charts/app --scan`.
-Vendor dependencies first; use repeatable `--values` options for repository-relative
-values files. Findings point to rendered YAML. This command does not persist or
-remediate findings. The Helm runner was verified on AWS on 2026-10-13; deploying
-it requires rebuilding the sandbox image and applying `terraform/sandbox`
-([sandbox spec](docs/sandbox-spec.md)).
+What is left before 1.0, and what is deliberately out of scope, is in [`docs/completion.md`](./docs/completion.md).
 
 ## Status
 
-**Deployed and running** against a dev AWS account, with a GitHub App installed on a test repository. CI runs on every push. It runs 1,677 tests, counted on 2026-11-01:
-- the Lambda suites (915);
-- the CLI on Linux and Windows (227);
-- the corpus data tests (309);
-- the mapping eval's scoring (29);
-- the core's record store and its conformance suite (40);
-- the deploy guard and the drift check (42);
-- the Pulumi and Helm harnesses (15);
-- the dashboard's tests (100), with its lint and type-check.
-
-It runs deliberately without AWS credentials, so a test run can never touch real infrastructure.
+**Deployed and running** against a dev AWS account, with the GitHub Apps installed on the [test repository](https://github.com/konradkelly/cascadesec-testbed). CI runs 1,677 tests on every push, with no AWS credentials, so a test run can never touch real infrastructure.
 
 | Version | What | State |
 |---|---|---|
@@ -146,10 +138,23 @@ It runs deliberately without AWS credentials, so a test run can never touch real
 | v4 | Write-back: verified fixes committed to the PR branch from the dashboard or a **Commit fixes** button on the check | Deployed and verified live 2026-09-30 ([write-back](docs/write-back-spec.md), [GitHub-first review](docs/github-first-review-spec.md)) |
 | Sandbox | CDK apps synthesized with no credentials, findings placed on the TypeScript line, fixes verified by synthesizing again | Deployed 2026-10-11 ([spec](docs/sandbox-spec.md)) |
 | Sandbox, by hand | Pulumi programs (TypeScript and JavaScript, 13 AWS resource types) and Helm charts, detection only | Run on AWS by 2026-10-13 |
-| CLI | Review commands; local scan with a baseline; pre-commit hooks; SARIF | Merged by 2026-10-31. Images public on GHCR since 2026-11-01 ([CLI](docs/cli-spec.md), [SARIF](docs/sarif-spec.md)) |
-| Portable runtime | The agents without AWS: one core, local stores, `cascadesec run` | Phase 1 deployed 2026-10-31. The RecordStore port and its conformance suite are merged, and no handler uses them yet; the rest is in progress ([spec](docs/portable-runtime-spec.md)) |
+| CLI | Local scan with a baseline, pre-commit hooks, SARIF, and review commands | Merged by 2026-10-31; images public on GHCR since 2026-11-01 ([CLI](docs/cli-spec.md), [SARIF](docs/sarif-spec.md)) |
+| Portable runtime | The agents without AWS: one core, local stores, `cascadesec run` | In progress ([spec](docs/portable-runtime-spec.md)) |
 
-What is left before 1.0, and what is deliberately out of it, is in [`docs/completion.md`](docs/completion.md).
+## Running the pipeline on AWS
+
+The pipeline is a Terraform stack ([`terraform/`](./terraform/)) deployed through `scripts/deploy.py`. Deploying your own copy needs an AWS account, an Anthropic API key and two registered GitHub Apps, and is not yet packaged as a one-step install. Against a deployed stack, with AWS credentials and `terraform` on `PATH`:
+
+```bash
+python scripts/scan.py path/to/terraform          # upload, scan, map, then ask before remediating
+python scripts/scan.py path/to/terraform --yes    # don't ask
+python corpus/eval/run_eval.py                    # detection recall over the labelled cases
+python corpus/external/run_external.py           # scan pinned third-party repos, compare to baseline
+```
+
+`scan.py` uploads the directory, starts one execution of the pipeline, reports each stage as it runs, and prints the dashboard URL when it finishes. Remediation costs one model call per mapped finding, so `scan.py` asks before running it (`--no-remediate` stops after mapping). Against a deployed stack the CLI also reads, decides on and commits fixes from the terminal.
+
+Helm charts can be rendered offline in the sandbox and their manifests scanned with `python scripts/sandbox.py helm path/to/repo --app-dir charts/app --scan`, detection only ([sandbox spec](docs/sandbox-spec.md)).
 
 ## Tech stack
 
