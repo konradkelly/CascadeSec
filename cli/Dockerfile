@@ -14,7 +14,7 @@
 # the tools the Lambda runs. build-image.sh --ghcr builds it on each scanner
 # publish. Locally, on a locally built scanner:
 #   docker build --build-arg SCANNER_IMAGE=cascadesec-scanner:local -t cascadesec-hook:local cli
-ARG SCANNER_IMAGE=ghcr.io/konradkelly/cascadesec-scanner@sha256:9f79cbf0c1bfa44a5670151ec8a7c4a527e1f4754406fb636f73dee4fb8fca5d
+ARG SCANNER_IMAGE=ghcr.io/konradkelly/cascadesec-scanner@sha256:83b26daa98794fa3374d14036d6f90db59b1e1f078443e12eac19c11757330fa
 FROM ${SCANNER_IMAGE}
 ARG SCANNER_IMAGE
 
