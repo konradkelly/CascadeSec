@@ -25,13 +25,13 @@ from cascadesec.errors import INCOMPLETE, OK, REFUSED, SERVICE, USAGE, CliError
 
 # The image this CLI runs, pinned by manifest digest, never a tag (§3.2):
 # local and pipeline results then come from the same tools at the same
-# versions. It is the manifest ECR holds for commit 123b79f, published to
-# GHCR by `build-image.sh --ghcr` on 2026-11-03, which checked GHCR serves
+# versions. It is the manifest ECR holds for commit 4375dd6, published to
+# GHCR by `build-image.sh --ghcr` on 2026-11-08, which checked GHCR serves
 # it byte for byte. Bump it with each publish, with cli/Dockerfile's default
 # and the hook image in .pre-commit-hooks.yaml. Overridden by
 # CASCADESEC_SCANNER_IMAGE or --image, as for a local `cascadesec-scanner:local`.
 SCANNER_IMAGE = ("ghcr.io/konradkelly/cascadesec-scanner"
-                 "@sha256:9f79cbf0c1bfa44a5670151ec8a7c4a527e1f4754406fb636f73dee4fb8fca5d")
+                 "@sha256:83b26daa98794fa3374d14036d6f90db59b1e1f078443e12eac19c11757330fa")
 
 FAIL_ON = ("critical", "high", "medium", "low", "any", "none")
 
