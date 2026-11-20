@@ -132,10 +132,10 @@ class _Outcome(typing.NamedTuple):
     scanner_verified: bool
     content: str | None
     rescan_counts: "collections.Counter | None"
-    # (source, rule_id, resource) for every rescan finding that names its
-    # resource -- see _present_triples. The counts say how many times a rule
-    # fires; this says on what.
-    rescan_triples: "set | None"
+    # The same counts per (source, rule_id, resource), for every rescan
+    # finding that names its resource -- see _count_resource_triples.
+    # rescan_counts says how many times a rule fires; this says on what.
+    rescan_triples: "collections.Counter | None"
     # This fix's diff, kept so the next fix in the file can record a hash of
     # it in its own applies_after. Only set when scanner_verified, for the
     # same reason content is: an unverified fix never becomes a base.
@@ -334,7 +334,7 @@ def handler(event, context):
         # (source, rule_id, resource) -> the fix that stopped the rule firing
         # on that resource. The per-resource form of cleared_by, for files
         # where one rule fires on several resources and a fix settles one of
-        # them at a time -- see _present_triples.
+        # them at a time -- see _count_resource_triples.
         resolved_by = {}
         # Drafts this run has already spent on this file. In per-file mode the
         # counters carried in from a continuation are this file's, so the
@@ -410,6 +410,7 @@ def handler(event, context):
                 outcome = _remediate_finding(
                     pr_id, finding, base_content, baseline_counts, list(applies_after),
                     _flagged_lines(original_content, finding), base_sha256=base_sha256,
+                    baseline_triples=baseline_triples,
                 )
             except Exception:
                 # One finding's failure shouldn't abandon the rest of the file.
@@ -439,7 +440,11 @@ def handler(event, context):
                 for pair, previous in baseline_counts.items():
                     if previous > 0 and outcome.rescan_counts[pair] == 0:
                         cleared_by[pair] = finding["finding_id"]
-                for triple in baseline_triples - outcome.rescan_triples:
+                # Keys, not Counter subtraction: a resource is resolved when
+                # the rule stops firing on it at all. Subtracting counts
+                # would call one of two instances on it resolved, and
+                # supersede the finding on the other.
+                for triple in baseline_triples.keys() - outcome.rescan_triples.keys():
                     resolved_by[triple] = finding["finding_id"]
 
                 base_content = outcome.content
@@ -511,7 +516,7 @@ def _remediation_order(finding):
 
 
 def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_after, flagged="",
-                       base_sha256=None):
+                       base_sha256=None, baseline_triples=None):
     finding_id = finding["finding_id"]
     file_path = finding["file"]
 
@@ -582,7 +587,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
         return _Outcome(False, False, None, None, None, None)
 
     self_check_passed, self_check_new_findings, cleared = _evaluate_self_check(
-        finding, rescan_findings, baseline_counts
+        finding, rescan_findings, baseline_counts, baseline_triples
     )
     # Kept so an accepted fix can hand its own finding set to the next fix in
     # this file as that fix's baseline.
@@ -621,7 +626,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
         scanner_verified,
         corrected_content if scanner_verified else None,
         rescan_counts if scanner_verified else None,
-        _present_triples(rescan_findings) if scanner_verified else None,
+        _count_resource_triples(rescan_findings) if scanner_verified else None,
         diff_text if scanner_verified else None,
     )
 
@@ -642,8 +647,8 @@ def _query_all(table, **kwargs):
 
 
 def _chain_root(pr_id, file_path, resume_from=None, on_file=None):
-    """Where this file's chain starts: (content, finding counts, finding
-    triples, applies_after, base_sha256).
+    """Where this file's chain starts: (content, finding counts by rule,
+    finding counts by rule and resource, applies_after, base_sha256).
 
     base_sha256 is the hash of the snapshot file the whole chain descends
     from. A chain rooted at a fix inherits the fix's own, so every link
@@ -707,7 +712,7 @@ def _chain_root(pr_id, file_path, resume_from=None, on_file=None):
             # "none".
             counts = _count_pairs(on_file)
             content = _fetch_original_content(pr_id, file_path)
-            return content, counts, _present_triples(on_file), [], _content_sha256(content)
+            return content, counts, _count_resource_triples(on_file), [], _content_sha256(content)
         root = max(accepted, key=lambda f: len(f["proposed_fix"].get("applies_after") or []))
 
     root_id = root["finding_id"]
@@ -728,7 +733,7 @@ def _chain_root(pr_id, file_path, resume_from=None, on_file=None):
 
     chain = list(root["proposed_fix"].get("applies_after") or [])
     chain.append({"finding_id": root_id, "diff_sha256": _diff_sha256(root["proposed_fix"]["diff"])})
-    return (content, counts, _present_triples(rescan_findings), chain,
+    return (content, counts, _count_resource_triples(rescan_findings), chain,
             root["proposed_fix"].get("base_sha256"))
 
 
@@ -1661,8 +1666,9 @@ def _count_pairs(findings):
     return counts
 
 
-def _present_triples(findings):
-    """(source, rule_id, resource) for every finding that names its resource.
+def _count_resource_triples(findings):
+    """(source, rule_id, resource) occurrence counts, one per finding id, for
+    every finding that names its resource.
 
     Counts by (source, rule_id) cannot say *which* instance of a rule a fix
     removed, only that there is one fewer. That was enough while the rule
@@ -1677,17 +1683,21 @@ def _present_triples(findings):
     resource address is what tells those thirteen apart from the ones still
     firing on a bucket nothing has touched.
 
+    Nor can it tell that a fix cleared the right instance, which is why
+    _evaluate_self_check asks this too, and why these are counts: a
+    resource can carry one rule more than once (two open ingress rules in
+    one security group), and fixing one of them is progress on it.
+
     A finding without a resource (a secret, or a record from before the
-    scanner carried the field) is not in the set, and the count-based
-    supersede in handler() still covers it.
+    scanner carried the field) is not counted, and the count by rule still
+    covers it, in the supersede and in the self-check.
     """
-    return {
-        (f["source"], f["rule_id"], f["resource"])
-        for f in findings if f.get("resource")
-    }
+    return collections.Counter({
+        triple: n for triple, n in _count_triples(findings).items() if triple[2]
+    })
 
 
-def _evaluate_self_check(finding, rescan_findings, baseline_counts):
+def _evaluate_self_check(finding, rescan_findings, baseline_counts, baseline_triples=None):
     target_pair = (finding["source"], finding["rule_id"])
     rescan_counts = _count_pairs(rescan_findings)
 
@@ -1697,6 +1707,22 @@ def _evaluate_self_check(finding, rescan_findings, baseline_counts):
     # more: a rule appearing fewer times than before means an instance
     # genuinely went away, which presence can't see at all.
     cleared = rescan_counts[target_pair] < baseline_counts[target_pair]
+
+    # And fewer on the flagged resource, not merely somewhere in the file.
+    # The count by rule cannot say which instance went away: with two open
+    # security groups in one file and the finding on the first, a fix that
+    # narrows the second takes the rule from 2 to 1 and passed. Both counts
+    # have to fall, because the resource's alone would pass a fix that
+    # renames the flagged resource and leaves it open -- the old address
+    # stops firing, the new one fires in its place, and only the count by
+    # rule sees that nothing went away.
+    # Asked only when the baseline holds this finding on its resource. A
+    # finding without one, or a baseline from a scanner that did not carry
+    # the field, is judged by the count by rule alone, as it always was.
+    target_triple = target_pair + (finding.get("resource"),)
+    if baseline_triples and baseline_triples[target_triple]:
+        rescan_triples = _count_resource_triples(rescan_findings)
+        cleared = cleared and rescan_triples[target_triple] < baseline_triples[target_triple]
 
     # "New" covers a rule absent from the baseline *and* extra instances of one
     # already there -- a fix that doubles an existing problem isn't clean.

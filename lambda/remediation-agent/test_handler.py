@@ -185,6 +185,98 @@ def test_extra_instance_of_an_existing_rule_counts_as_a_new_finding():
     assert passed is False
 
 
+# ---------- _evaluate_self_check: the flagged resource ----------
+
+def _open_ssh(resource, finding_id, source="checkov", rule_id="CKV_AWS_24"):
+    """SSH open to the world on one security group."""
+    return {"source": source, "rule_id": rule_id, "resource": resource, "finding_id": finding_id}
+
+
+def _baselines(findings):
+    """Both baselines, as _chain_root derives them for a pristine root."""
+    return handler._count_pairs(findings), handler._count_resource_triples(findings)
+
+
+def test_a_fix_to_the_wrong_resource_does_not_clear():
+    """Two open security groups, the finding on the first, and a fix that
+    narrows the second. The rule goes from 2 to 1, which is all the count
+    by rule can see, and that passed. The flagged group is still open."""
+    bastion = _open_ssh("aws_security_group.bastion", "f1")
+    legacy = _open_ssh("aws_security_group.legacy", "f2")
+    pairs, triples = _baselines([bastion, legacy])
+
+    passed, new_findings, cleared = handler._evaluate_self_check(bastion, [bastion], pairs, triples)
+
+    assert cleared is False
+    assert new_findings == []
+    assert passed is False
+
+
+def test_a_fix_to_the_flagged_resource_clears_while_the_rule_fires_on_another():
+    bastion = _open_ssh("aws_security_group.bastion", "f1")
+    legacy = _open_ssh("aws_security_group.legacy", "f2")
+    pairs, triples = _baselines([bastion, legacy])
+
+    passed, new_findings, cleared = handler._evaluate_self_check(bastion, [legacy], pairs, triples)
+
+    assert cleared is True
+    assert new_findings == []
+    assert passed is True
+
+
+def test_renaming_the_flagged_resource_without_fixing_it_does_not_clear():
+    """The flagged address stops firing because it no longer exists. Its
+    own count would call that cleared; the rule fires as often as before."""
+    bastion = _open_ssh("aws_security_group.bastion", "f1")
+    renamed = _open_ssh("aws_security_group.bastion_admin", "r1")
+    pairs, triples = _baselines([bastion])
+
+    passed, _, cleared = handler._evaluate_self_check(bastion, [renamed], pairs, triples)
+
+    assert cleared is False
+    assert passed is False
+
+
+def test_fixing_one_of_two_instances_on_the_flagged_resource_clears():
+    """Trivy reports each open ingress rule, so one security group can carry
+    the rule twice. A fix to the flagged rule leaves the group still firing,
+    and only a count on the resource, not its presence, sees the progress."""
+    first = _open_ssh("aws_security_group.bastion", "f1", source="trivy", rule_id="AWS-0107")
+    second = _open_ssh("aws_security_group.bastion", "f2", source="trivy", rule_id="AWS-0107")
+    pairs, triples = _baselines([first, second])
+
+    passed, new_findings, cleared = handler._evaluate_self_check(first, [second], pairs, triples)
+
+    assert cleared is True
+    assert new_findings == []
+    assert passed is True
+
+
+def test_a_finding_without_a_resource_is_judged_by_the_count_by_rule():
+    """A secret names no resource. Other findings in the baseline naming
+    theirs does not change how this one is judged."""
+    secret = {"source": "checkov", "rule_id": "CKV_SECRET_6", "finding_id": "s1"}
+    bastion = _open_ssh("aws_security_group.bastion", "f1")
+    pairs, triples = _baselines([secret, bastion])
+
+    passed, new_findings, cleared = handler._evaluate_self_check(secret, [bastion], pairs, triples)
+
+    assert cleared is True
+    assert new_findings == []
+    assert passed is True
+
+
+def test_resource_counts_skip_unnamed_findings_and_count_an_id_once():
+    """The table keeps one record per id and the scanner may report more
+    (see _count_pairs); both sides are counted the way the table does."""
+    named = _open_ssh("aws_security_group.bastion", "f1")
+    unnamed = {"source": "checkov", "rule_id": "CKV_SECRET_6", "finding_id": "s1", "resource": ""}
+
+    assert handler._count_resource_triples([named, named, unnamed]) == collections.Counter(
+        {("checkov", "CKV_AWS_24", "aws_security_group.bastion"): 1}
+    )
+
+
 # ---------- suppression rejection ----------
 
 # The literal diff the agent produced against PugetScope's security groups: it
@@ -2664,6 +2756,79 @@ def test_a_baseline_that_names_no_resources_never_supersedes_by_resource(
 
     assert result["superseded_count"] == 0
     assert mock_get_client.return_value.messages.create.call_count == 3
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_a_draft_that_fixes_the_wrong_resource_is_held(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """The per-resource baseline has to reach the self-check, not stop at
+    the supersede. f1's draft narrows the other group: held, cleared false.
+    f2's draft, on the original file since f1's never became a base, is
+    the same edit and is right for f2."""
+    pair = sorted([
+        _on(_mapped("CKV_AWS_24", 1, "f1", source="checkov"), "aws_security_group.bastion"),
+        _on(_mapped("CKV_AWS_24", 10, "f2", source="checkov"), "aws_security_group.legacy"),
+    ], key=handler._remediation_order)
+    bastion_still_open = {"findings": [
+        _on(_mapped("CKV_AWS_24", 1, "f1", source="checkov"), "aws_security_group.bastion"),
+    ]}
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": pair}, {"Items": pair}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: b"original")}
+    mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response(
+        {"corrected_file_content": "legacy narrowed", "rationale": "r", "assumptions": []}
+    )
+    mock_lambda_client.invoke.return_value = _scan_reply(bastion_still_open)
+
+    result = handler.handler({"pr_id": "chain-1"}, None)
+
+    assert result["needs_human_only_count"] == 1
+    assert result["fix_proposed_count"] == 1
+    held, proposed = _written(mock_table, 0), _written(mock_table, 1)
+    assert held[":pf"]["cleared"] is False
+    assert held[":pf"]["self_check_passed"] is False
+    assert proposed[":pf"]["cleared"] is True
+    assert proposed[":pf"]["self_check_passed"] is True
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_one_of_two_instances_fixed_on_a_resource_does_not_supersede_the_other(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """The baseline counts per resource now, and the supersede still asks
+    whether the rule stopped firing on it at all. Subtracting the counts
+    instead would call the group resolved after f1, with f2's ingress rule
+    still open on it."""
+    pair = sorted([
+        _on(_mapped("AWS-0107", 3, "f1"), "aws_security_group.bastion"),
+        _on(_mapped("AWS-0107", 8, "f2"), "aws_security_group.bastion"),
+    ], key=handler._remediation_order)
+    after_f1 = {"findings": [_on(_mapped("AWS-0107", 8, "f2"), "aws_security_group.bastion")]}
+
+    mock_table = MagicMock()
+    mock_table.query.side_effect = [{"Items": pair}, {"Items": pair}]
+    mock_dynamodb.Table.return_value = mock_table
+    mock_s3.get_object.return_value = {"Body": SimpleNamespace(read=lambda: b"original")}
+    mock_get_client.return_value.messages.create.side_effect = [
+        _fake_anthropic_response({"corrected_file_content": "first", "rationale": "r", "assumptions": []}),
+        _fake_anthropic_response({"corrected_file_content": "both", "rationale": "r", "assumptions": []}),
+    ]
+    mock_lambda_client.invoke.side_effect = [_scan_reply(after_f1), _scan_reply({"findings": []})]
+
+    result = handler.handler({"pr_id": "chain-1"}, None)
+
+    assert result["superseded_count"] == 0
+    assert result["fix_proposed_count"] == 2
+    assert mock_get_client.return_value.messages.create.call_count == 2
 
 
 # ---------- stale fixes: a base the PR head has moved away from ----------
