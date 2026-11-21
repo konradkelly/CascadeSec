@@ -23,9 +23,9 @@ variable "project" {
 }
 
 variable "mapping_agent_model" {
-  description = "Anthropic model ID for mapping-agent. Defaults to Opus per the project's model-choice policy; override to a cheaper model (e.g. claude-haiku-4-5) since control-mapping is a bounded classification task that doesn't need Opus-tier reasoning."
+  description = "Anthropic model ID for mapping-agent. Haiku since 2026-11-21: the mapping eval (corpus/eval/README.md) gave the same 181 of 181 on it as on claude-opus-5, at about a 44th of the cost, because the corpus offers each rule only controls that are right for every finding it raises. Re-run that eval before changing it."
   type        = string
-  default     = "claude-opus-5"
+  default     = "claude-haiku-5-5"
 }
 
 variable "remediation_agent_model" {

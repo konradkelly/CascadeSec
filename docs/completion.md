@@ -69,7 +69,7 @@ CascadeSec 1.0 is done when all six hold:
 | Area | State | Evidence |
 |---|---|---|
 | Detection: Terraform, OpenTofu, Kubernetes, CloudFormation, ARM, Bicep | Deployed | Recall 98.9%, 178 of 180, on 84 positive cases and 6 clean controls, 2026-11-01, image `b22fc47`, the same as on 2026-09-23 (`corpus/eval/README.md`) |
-| Control mapping with citations | Deployed | Coverage measured: 100% of labelled pairs and 72.7% of distinct rules have a candidate (2026-11-03), with NIST 800-53 loaded for the unmapped tail (`#51`). It was 72% and 39% on 2026-09-12. Accuracy measured blind 2026-11-01: 154 of 181 labelled findings mapped right (85.1%), every miss a corpus gap rather than the agent's choice. Those gaps corrected and deployed 2026-11-03, when all 181 map right; citations 99.4-99.7% faithful |
+| Control mapping with citations | Deployed | Coverage measured: 100% of labelled pairs and 72.7% of distinct rules have a candidate (2026-11-03), with NIST 800-53 loaded for the unmapped tail (`#51`). It was 72% and 39% on 2026-09-12. Accuracy measured blind 2026-11-01: 154 of 181 labelled findings mapped right (85.1%), every miss a corpus gap rather than the agent's choice. Those gaps corrected and deployed 2026-11-03, when all 181 map right; citations 99.4-99.7% faithful. On Haiku 5.5 since 2026-11-21: the same 181, citations 98.0% faithful, about a 44th of the cost |
 | Remediation: self-check, suppression and deletion gates, assumptions, held fixes | Deployed | Gates proven by unit tests on captured diffs; neither had fired in production when iacposture-spec §6 was written. Fix quality not measured |
 | context-agent | Deployed | context-agent-spec; Lambda last updated 2026-09-24 |
 | GitHub App: check runs, annotations, suggested changes (v3) | Deployed 2026-09-25 | ci-integration-spec |
@@ -243,6 +243,9 @@ the specs finds no claim that the deployed system contradicts.
    and is not a second measure: 85.1% stays the blind number. Five more
    rules that have no label moved to SC-7 after a review of those offering
    the same controls, and 164 rules with no label are unreviewed.
+   **Mapping moved to Haiku 5.5 on 2026-11-21**, Konrad's decision after
+   three runs on it gave the same 181 of 181 for $0.18 against Opus 5's
+   $7.76, with citations 98.0% faithful against 99.4-99.7%.
 2. **Fix quality.** A new `corpus/eval/run_fix_eval.py`.
    - **Cases:** every positive eval case, plus the repositories
      `corpus/external/` pins, at their pinned commits.

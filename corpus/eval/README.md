@@ -427,7 +427,9 @@ candidate it could pick was right. With the corpus corrected against the
 labels, all 181 map right ([2026-11-03](#corrected-2026-11-03)), which closes
 those gaps and is not a second measure of accuracy, since the labels drove
 it. In both, 99.4-99.7% of citations are faithful
-quotations of the control.
+quotations of the control. Since 2026-11-21 mapping runs on Haiku 5.5, with
+the same 181 of 181 for about a 44th of the cost, and citations a little
+less faithful to the letter ([2026-11-21](#mapping-on-haiku-55-2026-11-21)).
 
 ### Why it is three numbers and not one
 
@@ -620,6 +622,46 @@ moved to NIST SC-7 (`corpus/README.md`), and none of the five fires on a case
 here, so the numbers above stand. The other 164 have not been reviewed. The
 agent's choice is still unmeasured, since no labelled pair offers it one that
 matters.
+
+### Mapping on Haiku 5.5, 2026-11-21
+
+On this corpus mapping-agent's pick never decides anything (above): its work
+is the citation and the rationale. So the question for a cheaper model was
+whether those held. Three runs by the same method,
+`eval-map-20261121-haiku-1` to `-3`, with `claude-haiku-5-5` at effort low
+and everything else as deployed: the scanner image `4375dd6`
+(`sha256:83b26daa`) and the corpus from `main`, which `scripts/drift.py`
+reported matching before the model was changed.
+
+| | Opus 5, 2026-11-03 | Haiku 5.5, 2026-11-21 |
+|---|---|---|
+| labelled findings mapped to a right control | 181 / 181 | **181 / 181, in all three runs** |
+| findings mapped, left raw, per run | 351, 161 | 351, 161 |
+| faithful quotations | 99.4-99.7% | 98.0% in every run |
+| 15 words or more (asked: under 15) | 20-22 per run | 112-115 per run, the longest 22 |
+| cost of three runs | $7.76 | **$0.18** |
+| time per run | about 18 minutes | about 10 minutes |
+
+**Haiku invented nothing.** Its seven non-excerpts per run are all real
+control text with words dropped and nothing to say so: the parenthetical list
+in CIS AWS 2.1.5 (12 times across the runs), a clause of CIS Azure 4.15
+(once), and the template brackets of NIST CM-14 (twice) and SC-8(1) (six
+times), the last the same rewrite Opus made. Opus marked its cuts with "...";
+Haiku never did, and it quotes longer passages than the prompt allows. The
+citations keep their meaning, but the dashboard shows each as a verbatim
+quote, so a check in code that refuses or trims one that is not would close
+the gap whichever model runs.
+
+**Why a cheap model is enough here:** the corpus offers each rule only
+controls that are right for every finding it raises (`corpus/README.md`), so
+the model's job is to cite, not to judge. If the corpus stopped holding to
+that, this eval could not show whether Haiku chooses as well as Opus, because
+no labelled pair offers a choice that matters.
+
+Its longest response was 667 output tokens, against mapping-agent's cap of
+1,024, so nothing was cut off. 1,041 usage lines were logged for 1,053
+mappings. Kept: `mapping_agent_model` defaults to `claude-haiku-5-5` from this
+run on, and remediation and context-agent stay on `claude-opus-5`.
 
 ## How the labels were produced, and what happened to them
 
