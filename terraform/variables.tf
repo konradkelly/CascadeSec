@@ -29,9 +29,9 @@ variable "mapping_agent_model" {
 }
 
 variable "remediation_agent_model" {
-  description = "Anthropic model ID for remediation-agent. Defaults to Opus: rewriting a Terraform file correctly and minimally is a harder task than mapping-agent's bounded classification, so the Opus default is easier to justify here. Override to trade fix quality for cost."
+  description = "Anthropic model ID for remediation-agent. Sonnet since 2026-11-22: one run each on an 11-case subset (docs/completion.md, phase 2 step 2) found its fixes as good as claude-opus-5's in all but one held draft, at about a third of the remediation cost, while claude-opus-5-5 cost more than either. Sonnet states fewer assumptions, and the gates hold only what is stated, so the fix eval must count passed fixes that should have been held. Re-run that comparison before changing it."
   type        = string
-  default     = "claude-opus-5"
+  default     = "claude-sonnet-5-5"
 }
 
 variable "context_agent_model" {

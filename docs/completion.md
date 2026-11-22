@@ -288,6 +288,33 @@ the specs finds no claim that the deployed system contradicts.
    
    Done when one full run is recorded with model id, image digest, corpus
    commit, date and total cost.
+
+   **Remediation moved to Sonnet 5.5 on 2026-11-22**, Konrad's decision
+   after a first comparison, before this eval exists. Eleven positive cases
+   (34 mapped findings, every language but CDK and Helm) went through
+   `scripts/scan.py` once per model, with context-agent on Opus 5 each time:
+
+   | | Opus 5 | Opus 5.5 | Sonnet 5.5 |
+   |---|---|---|---|
+   | Drafts | 17 | 21 | 17 |
+   | Cleared the finding | 17 | 20 | 16 |
+   | Passed the self-check | 4 | 5 | 7 |
+   | Introduced a finding | 1 | 3 | 1 |
+   | Suppression or deletion | 0 | 0 | 0 |
+   | Remediation cost | $0.79 | $1.00 | $0.27 |
+
+   Every judgement call (open SSH and RDP, the full-admin policy, the
+   wildcard role) was held by stated assumptions under all three. Read side
+   by side, the drafts agree on the clear-cut cases. Opus 5.5 wrote about
+   80% more output than Opus 5, so it cost more despite the lower price,
+   and fixed the wildcard role one rule at a time, adding findings. Sonnet
+   drafted one wrong fix, a CloudFormation egress rule narrowed to port 443
+   towards the SSH admin range, which the gate held. It also states fewer
+   assumptions, which is part of why more of its fixes passed: Multi-AZ,
+   which roughly doubles a database's cost, passed unflagged where both
+   Opus models held it. The gates hold only what the model says it
+   assumed, so this eval's audit must count passed fixes that should have
+   been held. One run per model is a first look, not a measurement.
 3. **Fix acceptance on real pull requests** (iacposture-spec §7 item 3).
    Computed from review events: approved unedited, edited, rejected.
    Reported with its *n*, and with the plain fact that the testbed's pull
