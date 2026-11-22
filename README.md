@@ -163,7 +163,7 @@ Helm charts can be rendered offline in the sandbox and their manifests scanned w
 - **CLI:** Python, the OS keyring for sessions, the pinned scanner image under Docker, pre-commit, SARIF
 - **GitHub:** two GitHub Apps (a reader and a writer). They use webhooks, the Checks API (annotations and action buttons), PR reviews with suggested changes, and signed commits through the Git Data API
 - **Scanning:** Trivy, Checkov, KICS, and custom Trivy checks in Rego
-- **Agents:** Anthropic API (Claude Opus 5 drafts fixes, Claude Haiku 5.5 maps controls), with outputs constrained to strict JSON schemas
+- **Agents:** Anthropic API (Claude Sonnet 5.5 drafts fixes, Claude Haiku 5.5 maps controls, Claude Opus 5 answers questions about the repository), with outputs constrained to strict JSON schemas
 - **Frontend:** React, Vite, TypeScript
 - **CI:** GitHub Actions: pytest per Lambda, the CLI on Linux and Windows, corpus data tests, the deploy guard, Node and Helm harnesses for the sandbox, and oxlint, `tsc` and Vitest for the dashboard
 
