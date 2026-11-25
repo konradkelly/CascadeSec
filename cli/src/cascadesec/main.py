@@ -486,9 +486,13 @@ def cmd_edit(args, ctx):
     kept = f" Your edit is at {draft.path}." if draft else ""
     err = render.Out(sys.stderr, color=sys.stderr.isatty() and "NO_COLOR" not in ctx.env)
     err.line(f"Your change to the fix for {fid} ({current['file']}):")
-    render.diff_lines(err, "".join(difflib.unified_diff(
-        current["content"].splitlines(keepends=True), edited.splitlines(keepends=True),
-        fromfile=f"fix/{current['file']}", tofile=f"edited/{current['file']}")))
+    # A last line with no newline gets the standard marker, or the next line
+    # of the diff would print joined onto it.
+    render.diff_lines(err, "".join(
+        line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+        for line in difflib.unified_diff(
+            current["content"].splitlines(keepends=True), edited.splitlines(keepends=True),
+            fromfile=f"fix/{current['file']}", tofile=f"edited/{current['file']}")))
     if not args.yes:
         if not ctx.interactive:
             raise CliError("--yes is needed to record an edit without a terminal." + kept, USAGE)

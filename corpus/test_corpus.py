@@ -467,6 +467,17 @@ def test_the_preview_and_the_committer_plan_alike(name):
     assert len(set(bodies.values())) == 1, bodies
 
 
+def test_every_lambda_writes_diffs_alike():
+    """remediation-agent stores each fix's diff, review-api a reviewer's edit,
+    github-gateway the offer and review-api and the committer the commit
+    preview. One copy that drops the no-newline marker gives a diff that
+    does not apply again."""
+    bodies = _function_bodies("_unified_diff", "lambda/remediation-agent/handler.py",
+                              "lambda/review-api/handler.py", "lambda/github-gateway/handler.py",
+                              "lambda/github-committer/handler.py")
+    assert len(set(bodies.values())) == 1, bodies
+
+
 def test_everyone_agrees_on_which_file_a_fix_edits():
     """A CDK finding is on a synthesized template and its fix edits the app's
     source (sandbox-spec §9 step 3). github-gateway selects and posts by
