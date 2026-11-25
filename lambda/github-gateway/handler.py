@@ -1040,11 +1040,20 @@ def plan_offer(pr_id, findings):
             "chain": chain,
             "rules": sorted({fixes[i]["rule_id"] for i in chain}),
             "content_sha256": _content_sha256(corrected),
-            "diff": "".join(difflib.unified_diff(
-                head.splitlines(keepends=True), corrected.splitlines(keepends=True),
-                fromfile=f"a/{path}", tofile=f"b/{path}")),
+            "diff": _unified_diff(head, corrected, path),
         })
     return offer
+
+
+def _unified_diff(before, after, path):
+    """A unified diff from a/path to b/path that patch and git apply accept.
+    difflib leaves a last line that has no newline unterminated, so the next
+    line of the diff runs into it and the diff no longer parses; the standard
+    marker goes after such a line instead."""
+    return "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+                   for line in difflib.unified_diff(
+                       before.splitlines(keepends=True), after.splitlines(keepends=True),
+                       fromfile=f"a/{path}", tofile=f"b/{path}"))
 
 
 def offer_section(offer, button=False):

@@ -1298,6 +1298,24 @@ def test_compute_diff_matches_fixture_after_content():
     assert "+resource \"aws_s3_bucket_server_side_encryption_configuration\" \"data\"" in diff_text
 
 
+@pytest.mark.parametrize("before, after", [
+    ('{\n  "a": 1\n}\n', '{"a": 1, "b": 2}'),      # fix drops the final newline
+    ('{"a": 1}', '{"a": 1, "b": 2}'),              # neither side has one
+    ('{"a": 1}', '{\n  "a": 1\n}\n'),              # fix adds one
+])
+def test_compute_diff_applies_when_a_side_has_no_final_newline(tmp_path, before, after):
+    """difflib leaves the last line unterminated, so the next diff line ran
+    into it: a fix that minified a .tf.json gave a diff nothing could apply
+    (fix eval, 2026-11-25)."""
+    import subprocess
+    (tmp_path / "main.tf.json").write_bytes(before.encode())
+    diff_text = handler._compute_diff(before, after, "main.tf.json")
+    p = subprocess.run(["git", "apply", "-"], cwd=tmp_path, input=diff_text.encode(),
+                       capture_output=True)
+    assert p.returncode == 0, p.stderr
+    assert (tmp_path / "main.tf.json").read_bytes() == after.encode()
+
+
 # ---------- handler() end to end ----------
 
 def _fake_anthropic_response(payload_dict):

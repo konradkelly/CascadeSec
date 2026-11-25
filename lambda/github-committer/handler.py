@@ -959,10 +959,18 @@ def _commit_diff(head, content, path):
     """What the reviewer confirms: the head to the tip, the whole change the
     commit makes to this file -- not any one fix's diff, which is in the
     line numbers of an intermediate file."""
-    return "".join(difflib.unified_diff(
-        head.splitlines(keepends=True), content.splitlines(keepends=True),
-        fromfile=f"a/{path}", tofile=f"b/{path}",
-    ))
+    return _unified_diff(head, content, path)
+
+
+def _unified_diff(before, after, path):
+    """A unified diff from a/path to b/path that patch and git apply accept.
+    difflib leaves a last line that has no newline unterminated, so the next
+    line of the diff runs into it and the diff no longer parses; the standard
+    marker goes after such a line instead."""
+    return "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+                   for line in difflib.unified_diff(
+                       before.splitlines(keepends=True), after.splitlines(keepends=True),
+                       fromfile=f"a/{path}", tofile=f"b/{path}"))
 
 
 def _diff_sha256(diff_text):

@@ -1586,13 +1586,18 @@ TARGET_TYPE_ADDRESS_JOIN = {
 
 
 def _compute_diff(original_content, corrected_content, file_path):
-    diff_lines = difflib.unified_diff(
-        original_content.splitlines(keepends=True),
-        corrected_content.splitlines(keepends=True),
-        fromfile=f"a/{file_path}",
-        tofile=f"b/{file_path}",
-    )
-    return "".join(diff_lines)
+    return _unified_diff(original_content, corrected_content, file_path)
+
+
+def _unified_diff(before, after, path):
+    """A unified diff from a/path to b/path that patch and git apply accept.
+    difflib leaves a last line that has no newline unterminated, so the next
+    line of the diff runs into it and the diff no longer parses; the standard
+    marker goes after such a line instead."""
+    return "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+                   for line in difflib.unified_diff(
+                       before.splitlines(keepends=True), after.splitlines(keepends=True),
+                       fromfile=f"a/{path}", tofile=f"b/{path}"))
 
 
 def _self_check_prefix(pr_id, finding_id):
