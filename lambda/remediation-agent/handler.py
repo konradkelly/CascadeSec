@@ -170,8 +170,16 @@ REMEDIATION_OUTPUT_SCHEMA = {
         # the repository cannot settle come back as unknown and hold the fix
         # from the questions record. See _remediate_finding.
         "questions": {"type": "array", "items": {"type": "string"}},
+        # Changes outside this file the fix needs in order to work once
+        # applied: not a guess about what is true, which is an assumption,
+        # but something nobody has done yet. The fix eval found these written
+        # in the rationale as advice, where no gate reads them (a role's
+        # kms:Decrypt on a new key; a diagnostic setting for audit logs).
+        # A non-empty list holds the fix, like an assumption.
+        "required_elsewhere": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["rationale", "corrected_file_content", "assumptions", "questions"],
+    "required": ["rationale", "corrected_file_content", "assumptions", "questions",
+                 "required_elsewhere"],
     "additionalProperties": False,
 }
 
@@ -545,6 +553,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
     # there (below). One list, one meaning -- and no duplicate when the model
     # has already restated the unanswered question as the claim it relies on.
     assumptions = list(remediation.get("assumptions") or [])
+    required_elsewhere = list(remediation.get("required_elsewhere") or [])
     unanswered = [a["question"] for a in answers if a["answer"] == "unknown"]
 
     diff_text = _compute_diff(base_content, corrected_content, file_path)
@@ -609,10 +618,13 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
     # An unanswered question is the third gate: "we looked and the
     # repository does not say" is still something the fix may rest on, and
     # the model is not trusted to decide that it does not.
-    if dropped_resources or assumptions or unanswered:
+    # Work the fix needs outside this file is the fourth: applied without it,
+    # the fix breaks something or leaves the weakness, however clean the scan.
+    if dropped_resources or assumptions or unanswered or required_elsewhere:
         logger.info(
-            "finding %s held for human review (dropped=%s, assumptions=%s, unanswered=%s)",
-            finding_id, dropped_resources, assumptions, unanswered,
+            "finding %s held for human review (dropped=%s, assumptions=%s, unanswered=%s, "
+            "required_elsewhere=%s)",
+            finding_id, dropped_resources, assumptions, unanswered, required_elsewhere,
         )
         self_check_passed = False
 
@@ -620,6 +632,7 @@ def _remediate_finding(pr_id, finding, base_content, baseline_counts, applies_af
         finding, diff_text, rationale, self_check_passed, self_check_new_findings, cleared,
         dropped_resources=dropped_resources, assumptions=assumptions,
         applies_after=applies_after, questions=answers, base_sha256=base_sha256,
+        required_elsewhere=required_elsewhere,
     )
     return _Outcome(
         self_check_passed,
@@ -1070,7 +1083,22 @@ def _call_remediation_agent(finding, original_content, answers=None, flagged="")
         "An empty list is the correct and expected answer for a "
         "self-contained fix. Every entry costs a human's attention, so a list "
         "padded with things that cannot actually break anything is worse than "
-        "no list at all -- it buries the one that matters."
+        "no list at all -- it buries the one that matters.\n\n"
+        "In `required_elsewhere`, list ONLY changes that meet BOTH tests:\n"
+        "  (a) the fix needs them to work once applied, and this file does "
+        "not make them, AND\n"
+        "  (b) without them, applying this fix would break the running system "
+        "or leave the weakness in place, however clean the rescan.\n"
+        "This is not a guess about what is already true -- that is an "
+        "assumption. It is work nobody has done yet. Examples that qualify: a "
+        "role defined elsewhere that must be granted use of a key this fix "
+        "creates; a destination that must be configured before the logging "
+        "this fix enables records anything; a value every deployment must now "
+        "supply. Write each as the change to make, naming what it applies to. "
+        "Do NOT list follow-ups that are only good practice, or anything the "
+        "fix works without. If you have written such a change in the "
+        "rationale, it belongs here too. An empty list is the correct and "
+        "expected answer for a fix that is complete on its own."
     )
     if answers is not None:
         # The redraft. The answers are cited facts about the repository; the
@@ -1884,7 +1912,7 @@ def _content_sha256(content):
 def _write_result(
     finding, diff_text, rationale, self_check_passed, self_check_new_findings, cleared,
     suppression_attempt=None, dropped_resources=None, assumptions=None, scan_errors=None,
-    applies_after=None, questions=None, base_sha256=None, file=None,
+    applies_after=None, questions=None, base_sha256=None, file=None, required_elsewhere=None,
 ):
     table = dynamodb.Table(DYNAMODB_TABLE)
     # The file the fix edits, when it is not the finding's own: a CDK
@@ -1914,6 +1942,9 @@ def _write_result(
                 # matter how clean the rescan came back.
                 "dropped_resources": dropped_resources or [],
                 "assumptions": assumptions or [],
+                # Changes outside the file the fix needs to work once
+                # applied. Also forces human review.
+                "required_elsewhere": required_elsewhere or [],
                 # The fixes, in order, that this one is drafted on top of --
                 # empty means it applies to the pristine file. Every file in
                 # this project carries several findings, so most fixes are not

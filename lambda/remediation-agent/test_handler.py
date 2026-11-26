@@ -1127,6 +1127,41 @@ def test_no_assumptions_and_no_deletions_still_passes(
     assert written[":pf"]["self_check_passed"] is True
     assert written[":pf"]["dropped_resources"] == []
     assert written[":pf"]["assumptions"] == []
+    assert written[":pf"]["required_elsewhere"] == []
+
+
+@patch.object(handler, "_get_anthropic_client")
+@patch.object(handler, "lambda_client")
+@patch.object(handler, "s3")
+@patch.object(handler, "dynamodb")
+def test_work_required_elsewhere_forces_human_review_despite_a_clean_rescan(
+    mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client
+):
+    """The Lambda CMK class of failure: the fix is complete in its file and
+    scans clean, but a role defined elsewhere must be granted the new key or
+    the function fails. Not an assumption, and held all the same."""
+    result, mock_table = _run_one_finding(
+        mock_dynamodb, mock_s3, mock_lambda_client, mock_get_client,
+        {
+            "corrected_file_content": _read_fixture_tf("s3-bucket-encryption", "after"),
+            "rationale": "Added a default SSE configuration.",
+            "assumptions": [],
+            "required_elsewhere": ["Grant the readers' roles kms:Decrypt on the new key."],
+        },
+    )
+
+    assert result["fix_proposed_count"] == 0
+    written = mock_table.update_item.call_args.kwargs["ExpressionAttributeValues"]
+    assert written[":status"] == "needs-human-only"
+    assert written[":pf"]["self_check_passed"] is False
+    assert written[":pf"]["required_elsewhere"] == ["Grant the readers' roles kms:Decrypt on the new key."]
+    assert written[":pf"]["assumptions"] == []
+    assert written[":pf"]["cleared"] is True
+
+
+def test_the_prompt_asks_for_work_required_elsewhere():
+    prompt_schema = handler.REMEDIATION_OUTPUT_SCHEMA
+    assert "required_elsewhere" in prompt_schema["required"]
 
 
 # ---------- unparseable-fix gate ----------
