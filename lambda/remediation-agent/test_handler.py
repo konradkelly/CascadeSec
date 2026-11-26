@@ -1164,6 +1164,21 @@ def test_the_prompt_asks_for_work_required_elsewhere():
     assert "required_elsewhere" in prompt_schema["required"]
 
 
+def test_the_prompt_keeps_loud_deploy_failures_out_of_required_elsewhere():
+    """Given "a value every deployment must now supply" as an example, the
+    model listed every new no-default parameter, and held correct fixes
+    whose only gap stops the deploy before it changes anything."""
+    with patch.object(handler, "_get_anthropic_client") as mock_get_client:
+        mock_get_client.return_value.messages.create.return_value = _fake_anthropic_response(
+            {"corrected_file_content": "x", "rationale": "r", "assumptions": []}
+        )
+        handler._call_remediation_agent(_mapped("CKV_AZURE_9", 42, "f1"), "x")
+
+    prompt = " ".join(_prompt_of(mock_get_client, 0).split())
+    assert "a value every deployment must now supply" not in prompt
+    assert "such as a required parameter or variable with no default" in prompt
+
+
 # ---------- unparseable-fix gate ----------
 
 # The scanner's fixture, not a copy: this is the same artifact on both sides of
