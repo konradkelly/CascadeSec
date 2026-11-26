@@ -1,0 +1,702 @@
+[
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "bfd0fb626da0d07a",
+  "file": "arm-keyvault-no-purge-protection/azuredeploy.json",
+  "language": "arm",
+  "rule": "checkov:CKV_AZURE_189",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Disabling public network access is the fix the rule asks for, and the loss of public reachability is stated as the assumption that held it.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "8f407fd14b5a6350",
+  "file": "arm-nsg-rdp-from-anywhere/azuredeploy.json",
+  "language": "arm",
+  "rule": "checkov:CKV_AZURE_9",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Moves the RDP source to a required parameter with no default, so the template can no longer open RDP to the internet by omission.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "a679930638827c8e",
+  "file": "arm-sql-no-auditing/azuredeploy.json",
+  "language": "arm",
+  "rule": "kics:e055285c-bc01-48b4-8aa5-8a54acdd29df",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "incorrect",
+  "why": "Enables auditing to Azure Monitor without the diagnostic setting that delivers it, so no audit record is kept anywhere; the rationale says so, yet the fix passed.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "c507a18f7f02a010",
+  "file": "bicep-sql-no-auditing/main.bicep",
+  "language": "bicep",
+  "rule": "checkov:CKV_AZURE_23",
+  "outcome": "held",
+  "gates": [
+   "introduced a finding"
+  ],
+  "verdict": "incorrect",
+  "why": "Same as the ARM case: auditing to Azure Monitor with no diagnostic setting keeps no audit trail, so the weakness stays.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "bc1e8ab77fd62660",
+  "file": "bicep-storage-insecure-transfer/main.bicep",
+  "language": "bicep",
+  "rule": "checkov:CKV_AZURE_35",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Default-deny network ACLs with the AzureServices bypass is the standard fix, and the lost public access is the stated assumption.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "995878b2e8cf0740",
+  "file": "bicep-storage-insecure-transfer/main.bicep",
+  "language": "bicep",
+  "rule": "checkov:CKV_AZURE_44",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "TLS 1.2 minimum is the fix; legacy clients are the stated assumption.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "09f2ed5cd5a28c53",
+  "file": "bicep-keyvault-no-purge-protection/main.bicep",
+  "language": "bicep",
+  "rule": "checkov:CKV_AZURE_110",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "Sets soft delete as purge protection requires, and the rationale warns that purge protection is irreversible.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-real-1",
+  "finding_id": "ab3a58b4982b1adc",
+  "file": "azure-storage/main.bicep",
+  "language": "bicep",
+  "rule": "checkov:CKV_AZURE_44",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "One attribute, minimum TLS 1.2, on Microsoft's own sample; nothing else changes.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "fb9347231dd335e3",
+  "file": "cfn-sg-open-ingress/template.yaml",
+  "language": "cloudformation",
+  "rule": "trivy:AWS-0104",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Narrows egress to HTTPS towards a required, non-/0 range; a guess at the host's outbound needs, stated as the assumption that held it.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "8d46b6d22da447c7",
+  "file": "cfn-cloudtrail-no-validation/template.yaml",
+  "language": "cloudformation",
+  "rule": "checkov:CKV_AWS_35",
+  "outcome": "held",
+  "gates": [
+   "introduced a finding"
+  ],
+  "verdict": "incorrect",
+  "why": "Adds TrailName to an existing trail, which replaces the trail on update, and the rationale does not mention it.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "18125ded9fe8eff0",
+  "file": "cfn-s3-unencrypted/template.yaml",
+  "language": "cloudformation",
+  "rule": "kics:b2e8752c-3497-4255-98d2-e4ae5b46bbf5",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "SSE-S3 default encryption with a bucket key: the minimal fix, no new resources.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "4e1302e24a0378d2",
+  "file": "cfn-sg-open-ingress/template.yaml",
+  "language": "cloudformation",
+  "rule": "checkov:CKV_AWS_24",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "SSH source becomes a required parameter that rejects /0; the rationale says deployers must now supply it.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-real-1",
+  "finding_id": "0ca9dac783824bdb",
+  "file": "boutique/frontend.yaml",
+  "language": "kubernetes",
+  "rule": "checkov:CKV_K8S_21",
+  "outcome": "held",
+  "gates": [
+   "assumption",
+   "unanswered question"
+  ],
+  "verdict": "incorrect",
+  "why": "Moves only the Deployment into a new namespace; its ServiceAccount stays behind, so pods would fail to start, as the rationale itself admits.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-real-1",
+  "finding_id": "460d3d4ea3e5097e",
+  "file": "k8s-goat-sysmon/deployment.yaml",
+  "language": "kubernetes",
+  "rule": "checkov:CKV_K8S_21",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Moves the Secret with its consumers and adds the Namespace, so the manifest still applies on its own.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-real-1",
+  "finding_id": "cef90a63b60dc9a8",
+  "file": "k8s-goat-sysmon/deployment.yaml",
+  "language": "kubernetes",
+  "rule": "trivy:KSV-0008",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Removes hostIPC, which nothing in the manifest uses.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "89e52373218ee25d",
+  "file": "k8s-literal-secret-in-env/manifest.yaml",
+  "language": "kubernetes",
+  "rule": "trivy:IACP-0002",
+  "outcome": "held",
+  "gates": [
+   "introduced a finding",
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "References the repository's existing db-credentials Secret instead of the literal, and says the literal must be rotated.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "ea688113f1c36706",
+  "file": "k8s-rbac-wildcard-role/manifest.yaml",
+  "language": "kubernetes",
+  "rule": "checkov:CKV_K8S_157",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "incorrect",
+  "why": "Only drops bind/escalate/impersonate; wildcard resources still grant create and update on secrets, roles and pods, so the escalation path remains.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "c8d902fe33df0c65",
+  "file": "k8s-host-port/manifest.yaml",
+  "language": "kubernetes",
+  "rule": "checkov:CKV_K8S_26",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Removes hostPort and keeps containerPort; probes are unaffected, and external node-port users are the stated assumption.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "f493e80c5b41f737",
+  "file": "k8s-capabilities-not-dropped/manifest.yaml",
+  "language": "kubernetes",
+  "rule": "checkov:CKV_K8S_28",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Drops ALL capabilities on a non-root container serving a high port.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "b42a5f8645acb052",
+  "file": "k8s-host-ipc/manifest.yaml",
+  "language": "kubernetes",
+  "rule": "checkov:CKV_K8S_18",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Removes hostIPC: true; the default is false.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-real-1",
+  "finding_id": "c4a7575e41a54023",
+  "file": "boutique/frontend.yaml",
+  "language": "kubernetes",
+  "rule": "checkov:CKV_K8S_21",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "incorrect",
+  "why": "Hard-codes a 'boutique' namespace into one Service of Online Boutique, which is deployed by namespace at apply time; it passed only on top of the held Deployment change it depends on.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "9ea390d1e45bc69a",
+  "file": "opentofu-unencrypted-bucket/main.tofu",
+  "language": "opentofu",
+  "rule": "trivy:AWS-0089",
+  "outcome": "held",
+  "gates": [
+   "not cleared",
+   "introduced a finding"
+  ],
+  "verdict": "correct",
+  "why": "A dedicated log bucket with a scoped delivery policy is a sound logging fix; the self-check held it for the log bucket's own findings.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "948875877dccb113",
+  "file": "opentofu-unencrypted-bucket/main.tofu",
+  "language": "opentofu",
+  "rule": "trivy:AWS-0086",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "A public access block with all four settings on.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "c367a24eb5339b52",
+  "file": "sg-http-from-anywhere/main.tf",
+  "language": "terraform",
+  "rule": "trivy:IACP-0001",
+  "outcome": "held",
+  "gates": [
+   "not cleared"
+  ],
+  "verdict": "correct",
+  "why": "Declines to change a web tier's public port 80, the right call when intent is a reviewer's decision.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "42514d503e69bce3",
+  "file": "sns-unencrypted/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_26",
+  "outcome": "held",
+  "gates": [
+   "introduced a finding"
+  ],
+  "verdict": "correct",
+  "why": "Encrypts the topic with the AWS-managed key and warns that service publishers would need a customer-managed key.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "dfec98573943ad22",
+  "file": "iam-privilege-escalation/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_286",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "incorrect",
+  "why": "Removes iam:PassRole, but lambda:CreateFunction cannot work without passing an execution role, so the policy no longer does what it is for.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "ffa5a99225efdd9a",
+  "file": "lambda-env-unencrypted/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_173",
+  "outcome": "held",
+  "gates": [
+   "introduced a finding"
+  ],
+  "verdict": "correct",
+  "why": "A rotating CMK for the environment variables; the role's kms:Decrypt need is stated.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "d3d124864dc1bd30",
+  "file": "module-registry-unpinned/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_TF_1",
+  "outcome": "held",
+  "gates": [
+   "not cleared",
+   "assumption",
+   "unanswered question"
+  ],
+  "verdict": "incorrect",
+  "why": "Pins to a tag rather than a commit hash, so the rule is not satisfied, and switches registry to git at an unverified version.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "ec24f24334985780",
+  "file": "ebs-unencrypted/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_189",
+  "outcome": "held",
+  "gates": [
+   "introduced a finding",
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "CMK encryption with rotation, and it warns that the volume will be replaced.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "726f68e106a3e3b8",
+  "file": "ec2-secret-in-user-data/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_46",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Removes the hard-coded keys and adds an instance profile with no permissions, saying the keys must be revoked.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "9683308095b10f0a",
+  "file": "vpc-no-flow-logs/main.tf",
+  "language": "terraform",
+  "rule": "trivy:AWS-0178",
+  "outcome": "held",
+  "gates": [
+   "introduced a finding"
+  ],
+  "verdict": "correct",
+  "why": "A complete flow log setup: log group with retention, role and scoped policy.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-real-1",
+  "finding_id": "39621688de42d085",
+  "file": "terragoat/s3.tf",
+  "language": "terraform",
+  "rule": "trivy:AWS-0132",
+  "outcome": "held",
+  "gates": [
+   "introduced a finding"
+  ],
+  "verdict": "correct",
+  "why": "SSE-KMS with a rotating key on terragoat's data bucket, in the provider version's inline form the file already uses.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "fae64e17ffbed1e8",
+  "file": "sg-port-range-from-anywhere/main.tf",
+  "language": "terraform",
+  "rule": "trivy:IACP-0001",
+  "outcome": "held",
+  "gates": [
+   "assumption",
+   "unanswered question"
+  ],
+  "verdict": "correct",
+  "why": "NodePort source becomes a required variable that rejects 0.0.0.0/0.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "6b63a3c3f4c7dfeb",
+  "file": "sg-egress-to-anywhere/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_382",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Narrows all-protocol egress to HTTPS; other outbound needs are the stated assumption.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "e08de12f233fc06a",
+  "file": "iam-role-assumable-by-any-aws-principal/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_60",
+  "outcome": "held",
+  "gates": [
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "Trust narrowed from any AWS principal to the account, flagged as a placeholder for the real assumers.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "407723acfbaf4ba3",
+  "file": "iam-policy-document-full-admin/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_356",
+  "outcome": "held",
+  "gates": [
+   "not cleared",
+   "assumption",
+   "unanswered question"
+  ],
+  "verdict": "correct",
+  "why": "Scopes the restrictable S3 actions to a bucket variable and keeps only the actions that must stay on *.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "c0c5546258de7fb0",
+  "file": "s3-no-encryption/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_145",
+  "outcome": "held",
+  "gates": [
+   "introduced a finding",
+   "assumption"
+  ],
+  "verdict": "correct",
+  "why": "SSE-KMS with a rotating CMK and a bucket key; principals' KMS access is the stated assumption.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "13bf171e7cd08d3c",
+  "file": "secret-in-tfvars/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_226",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "One attribute, auto_minor_version_upgrade = true.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "337a1807d0703dc4",
+  "file": "ebs-unencrypted/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_3",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "encrypted = true with the AWS-managed key, warning that the volume will be replaced.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "b950e95d35852ab7",
+  "file": "sqs-unencrypted/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_27",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "SQS-managed SSE: no key, no permission changes.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "8450becd800362f6",
+  "file": "rds-publicly-accessible/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_129",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "Log exports with the right PostgreSQL types.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "bd6b715190277ed4",
+  "file": "rds-publicly-accessible/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_226",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "One attribute, auto_minor_version_upgrade = true.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "55e371b268990014",
+  "file": "secret-in-tfvars/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_129",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "Log exports with the right PostgreSQL types.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "f82e788341421e37",
+  "file": "cloudtrail-no-log-validation/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_36",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "Turns log file validation on, one attribute.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ },
+ {
+  "pr_id": "fixeval-20261122-cases-1",
+  "finding_id": "75e0d536c0858811",
+  "file": "rds-literal-password/main.tf",
+  "language": "terraform",
+  "rule": "checkov:CKV_AWS_226",
+  "outcome": "passed",
+  "gates": [],
+  "verdict": "correct",
+  "why": "One attribute, auto_minor_version_upgrade = true.",
+  "drafted_by": "claude",
+  "reviewed": true,
+  "reviewed_by": "konradkelly"
+ }
+]
