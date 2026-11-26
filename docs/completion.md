@@ -80,7 +80,7 @@ CascadeSec 1.0 is done when all six hold:
 | CLI local scan, baseline, pre-commit hooks, SARIF | Merged by 2026-10-31. Images published to GHCR 2026-10-29, and again 2026-11-01 (`#76`) and 2026-11-03 (`#82`), public since 2026-11-01 | cli-spec §13, sarif-spec |
 | Portable runtime, phase 1: the core vendored into mapping-agent | Deployed 2026-10-31 | portable-runtime-spec §8 |
 | Portable runtime, phase 2: RecordStore and the G1-G9 suite | Merged 2026-10-31 (`#74`). No handler uses it yet. mapping-agent's zip vendors the core, so it was deployed with it the same day | portable-runtime-spec §12 |
-| Tests | 1,677, counted by collection on 2026-11-01 | 1,565 Python (Lambdas 915, CLI 227, corpus 309, the mapping eval's scoring 29, core 40, deploy guard and drift check 42, Helm harness 3), dashboard 100, Node harness 12. All run in CI without AWS credentials |
+| Tests | 1,701, counted by collection on 2026-11-26 | 1,589 Python (Lambdas 926, CLI 227, corpus 310, the mapping and fix evals' scoring 29 and 12, core 40, deploy guard and drift check 42, Helm harness 3), dashboard 100, Node harness 12. All run in CI without AWS credentials |
 
 ## 4. Not in 1.0
 
@@ -315,6 +315,20 @@ the specs finds no claim that the deployed system contradicts.
    Opus models held it. The gates hold only what the model says it
    assumed, so this eval's audit must count passed fixes that should have
    been held. One run per model is a first look, not a measurement.
+
+   **Done 2026-11-22 to 25**, at a smaller scope than above, for about $10
+   in all ($9.56): every case drafted once, an 11-case subset three times,
+   7 files from 4 pinned repositories, and 45 fixes audited, not *k* = 3
+   and 50 (C3). Recorded with model ids, image digest, commit, date and cost
+   in `corpus/eval/README.md` § Fix quality. Over every case, 133 of 200
+   drafts cleared their finding without adding one, and 67 passed every
+   gate. Konrad reviewed all 45 audit verdicts: 13 of 15 passed fixes were
+   correct, and 6 of 30 held fixes were wrong. No fix made a file fail
+   `terraform validate`. Two of the 45 put a break that follows the apply
+   in the rationale, not in `assumptions`, where the gate would read it;
+   one of them passed. A bug in every diff of a file with no final newline
+   was found and fixed (`#90`). Not done: a schema check for Kubernetes,
+   and the pinned repositories beyond the sample.
 3. **Fix acceptance on real pull requests** (iacposture-spec §7 item 3).
    Computed from review events: approved unedited, edited, rejected.
    Reported with its *n*, and with the plain fact that the testbed's pull

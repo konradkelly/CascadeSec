@@ -15,9 +15,9 @@ Established open-source scanners find the misconfiguration. An AI agent drafts t
 ## Highlights
 
 - **AI that has to prove its work.** Detection is deterministic (Trivy, Checkov, KICS and custom Rego checks), so the model cannot invent a finding. A drafted fix is suggested to a reviewer only once a rescan shows it clears the finding without adding a new one and without suppressing the scanner. Any other fix, or one that depends on something the agent could not check, is held for a human with the reason spelled out.
-- **Measured, with the method published.** **98.9%** detection recall on 90 labelled cases. **85.1%** of findings were mapped to the right compliance control (OWASP, CIS, NIST 800-53) in a blind measurement, and every miss was traced to the rule-to-control table, which has since been corrected. Mapping then moved to a model about 44 times cheaper after the same eval showed no loss of accuracy. [Method and limits](./corpus/eval/README.md). Fix quality is the next measurement.
+- **Measured, with the method published.** **98.9%** detection recall on 90 labelled cases. **85.1%** of findings were mapped to the right compliance control (OWASP, CIS, NIST 800-53) in a blind measurement, and every miss was traced to the rule-to-control table, which has since been corrected. Mapping then moved to a model about 44 times cheaper after the same eval showed no loss of accuracy. In a human audit, 13 of 15 fixes that reached a reviewer as clean were correct. [Method and limits](./corpus/eval/README.md).
 - **Untrusted code runs in a sandbox.** AWS CDK apps from a pull request are synthesized on Fargate with no IAM role and no route to the internet, behind a DNS firewall, so the code being scanned holds no credentials.
-- **Run with production habits.** 18 AWS services, all in Terraform, deployed through a guard written after a bad apply took a component down, and checked against `main` by a drift check. Two GitHub Apps split the permissions: one reports on the pull request, and only the other can push commits. 1,677 tests run in CI, none with AWS credentials.
+- **Run with production habits.** 18 AWS services, all in Terraform, deployed through a guard written after a bad apply took a component down, and checked against `main` by a drift check. Two GitHub Apps split the permissions: one reports on the pull request, and only the other can push commits. 1,701 tests run in CI, none with AWS credentials.
 - **Seven IaC languages in pull requests:** Terraform, OpenTofu, Kubernetes, CloudFormation, Azure ARM, Bicep and AWS CDK. A CLI also scans locally, runs as a pre-commit hook, and writes SARIF for GitHub Code Scanning.
 
 ![Proposed diff replacing an open egress rule with four scoped rules](docs/images/proposed-diff-egress.png)
@@ -113,11 +113,11 @@ Every number below is measured against the **deployed** pipeline, with the metho
 
 - **Detection: 98.9%**, 178 of 180 expected findings across 84 labelled vulnerable cases and 6 clean controls, which raised nothing (2026-11-01). Both misses are documented gaps in the upstream tools, left as misses rather than relabelled. This mostly measures the scanners.
 - **Control mapping: 85.1%**, 154 of 181 findings mapped to a right control, the same in three runs, measured blind against labels reviewed before any number was computed (2026-11-01). Every miss came from the rule-to-control table offering no right control, not from the agent choosing badly. The table was corrected and deployed, and all 181 now map right (2026-11-03). That shows the gaps are closed, not a second measurement, since the same labels drove the correction. 99.4-99.7% of the agent's citations are faithful quotations of the control. Mapping moved from Claude Opus 5 to Claude Haiku 5.5 after three runs gave the same 181 of 181 for about a 44th of the cost ($0.18 against $7.76), with citations a little less exact (98.0%) (2026-11-21).
-- **Fix quality: not measured yet.** A clean rescan proves a finding is gone, not that the infrastructure still works. The next step is a fix-quality eval with a human audit of the fixes ([`docs/completion.md`](./docs/completion.md), phase 2).
+- **Fix quality: 13 of 15 audited fixes that reached a reviewer as clean were correct** (2026-11-22 to 25). Over every eval case, 133 of 200 drafted fixes cleared their finding without adding one, and 67 passed every gate. The rest were held for a person to decide. In a human audit of 45 fixes, 6 of 30 held fixes were wrong, so the gates held them for a reason, and no fix broke `terraform validate`. A clean rescan proves only that a finding is gone, which is why the audit exists. The sample is small: 15 passed fixes. The whole run cost $9.56.
 
 ## Limitations
 
-- **Fix quality is unmeasured** (above). Comparable published work, [TerraRepair](https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ESEM.2026.68), found about one in five scanner-verified fixes wrong on human review.
+- **Fix quality is measured on a small sample** (above): 2 of 15 audited fixes that reached a reviewer as clean were wrong. Comparable published work, [TerraRepair](https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ESEM.2026.68), found about one in five scanner-verified fixes wrong on human review. The gates hold a fix only for what the model states as an assumption, and a break it mentions only in the rationale can pass.
 - **The agents run only on AWS today.** Running them without an AWS account is in progress; local scanning already works without one.
 - **Drafts vary from run to run**, so the same finding can get a different fix.
 - **Remediation rewrites whole files**, which makes fixes in very large files slow and expensive.
@@ -128,7 +128,7 @@ What is left before 1.0, and what is deliberately out of scope, is in [`docs/com
 
 ## Status
 
-**Deployed and running** against a dev AWS account, with the GitHub Apps installed on the [test repository](https://github.com/konradkelly/cascadesec-testbed). CI runs 1,677 tests on every push, with no AWS credentials, so a test run can never touch real infrastructure.
+**Deployed and running** against a dev AWS account, with the GitHub Apps installed on the [test repository](https://github.com/konradkelly/cascadesec-testbed). CI runs 1,701 tests on every push, with no AWS credentials, so a test run can never touch real infrastructure.
 
 | Version | What | State |
 |---|---|---|

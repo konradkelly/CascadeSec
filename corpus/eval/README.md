@@ -663,6 +663,179 @@ Its longest response was 667 output tokens, against mapping-agent's cap of
 mappings. Kept: `mapping_agent_model` defaults to `claude-haiku-5-5` from this
 run on, and remediation and context-agent stay on `claude-opus-5`.
 
+## Fix quality
+
+`docs/completion.md` phase 2 step 2. A clean rescan shows a finding is gone,
+not that the infrastructure still works, so this measures the fixes three
+ways: what the pipeline's own checks say, run to run, and what a person
+reading them says.
+
+**Runs, 2026-11-22**, through `scripts/scan.py` against the deployed stack,
+every scored by `run_fix_eval.py` (this directory):
+
+| Run | Input | Drafts | Cost | Time |
+|---|---|---|---|---|
+| `fixeval-20261122-cases-1` | every case in `cases/` | 200 | $6.08 | 26.7 min |
+| `fixcmp-20261122-sonnet55`, `fixeval-20261122-sub-2`, `-sub-3` | an 11-case subset, all six languages | 17, 18, 20 | $0.59, $0.61, $0.82 | about 3 min each |
+| `fixeval-20261122-real-1` | 7 files from 4 pinned real repositories (below) | 32 | $1.46 | 7.8 min |
+
+Total $9.56. Remediation on `claude-sonnet-5-5`, context-agent on
+`claude-opus-5`, the scanner image `sha256:83b26daa` (built from `4375dd6`),
+code and corpus at `7d26240`. `scripts/drift.py` reported no drift on that
+commit. The real-code files, each byte-identical to its repository at the
+commit `corpus/external/repos.json` pins: terragoat
+`terraform/aws/{consts,iam,s3}.tf`, kubernetes-goat
+`scenarios/insecure-rbac/setup.yaml` and
+`scenarios/system-monitor/deployment.yaml`, microservices-demo
+`kubernetes-manifests/frontend.yaml`, and azure-quickstart-templates
+`quickstarts/microsoft.storage/storage-account-create/main.bicep`.
+
+**Smaller than the plan.** C3 proposed every finding drafted three times and
+50 fixes audited. This is one draft per finding over every case, three over
+the subset, a real-code sample instead of every pinned repository, and 45
+audited, to keep the spend near $10.
+
+### What the pipeline's checks say
+
+Over every case, 351 mapped findings:
+
+| | |
+|---|---|
+| drafted | 200; the other 151 were superseded, cleared by a fix to the same resource first |
+| **cleared the finding without adding one** | **133 of 200 (66.5%)** |
+| **passed every gate**, so a reviewer sees it as clean | **67** |
+| held, by the first gate it tripped | 133: an assumption 66, an introduced finding 41, not cleared 26 |
+| suppression attempts, empty rationales | 0, 0 |
+| deleted a resource | 2 (and 1 on real code), all held |
+| median diff | 4 lines |
+| `terraform validate` | 97 valid, 0 invalid (below) |
+
+| Language | Passed | Held |
+|---|---|---|
+| Terraform | 37 | 67 |
+| CloudFormation | 11 | 11 |
+| Bicep | 7 | 15 |
+| ARM | 5 | 12 |
+| Kubernetes | 4 | 26 |
+| OpenTofu | 3 | 2 |
+
+**Most holds are judgement calls the gates are meant to stop.** The
+assumption gate tripped on 102 drafts, and 66 were held by it alone: fixes
+that close a port, narrow egress or move a namespace, where whether anything
+breaks depends on what the file cannot show. Kubernetes is held most (26 of
+30), because nearly every pod-security fix rests on what the container needs.
+
+**Real code**: 32 drafted, 9 passed, 23 held. 42 findings, 35 of them in
+terragoat's `s3.tf`, were not drafted because the run reached the eight drafts
+one file is allowed (`MAX_DRAFTS_PER_FILE`); the next run picks them up.
+
+**Validity.** No fix made a file invalid: 126 fixes validated across the five
+runs. Not checked:
+- **Every other language.** Nothing here validates them; phase 4 decides
+  whether to.
+- **terragoat**, all 12 of its fixes. It is written in Terraform 0.11
+  syntax (quoted type constraints), which current Terraform rejects before
+  any fix applies.
+- **`module-git-unpinned`**, whose module points at a placeholder repository
+  that `terraform init` cannot fetch.
+- **3 fixes that left the file unchanged**: the port-80 web tier the agent
+  declined to touch, and two findings an earlier fix had already cleared.
+- **3 fixes on `tf-json-unencrypted-bucket`.** One rewrote the 18-line
+  `main.tf.json` as a single line with no final newline, and Python's
+  `difflib` writes such a diff without the marker `patch` needs, so neither
+  it nor the two fixes built on it would apply. Commits were never affected,
+  since they are built from file contents; the dashboard showed a broken
+  diff. Fixed in `#90` (2026-11-25); the three stored diffs are left as
+  recorded. That fix passed the self-check, so a reviewer would have seen
+  an 18-line file replaced by one line.
+
+The scorer validates each fix in one shared working directory. The first
+attempt ran `terraform init` per case, and on Windows, where Terraform's
+plugin cache cannot symlink, each init copied the 735 MB AWS provider and the
+disk filled.
+
+### Run to run
+
+On the subset, three runs: 34 findings were drafted in at least two. Seven
+passed in all three, one in two, one in one, and 25 in none. **Whether a
+finding passes is fairly stable; the exact fix is not.** Of the 8 that passed
+in two or more runs, 3 made the same change each time. The comparison
+ignores spacing within a line but not lines re-aligned around a new
+attribute, so it undercounts agreement.
+
+### The audit
+
+45 fixes, sampled by `run_fix_eval.py --audit-sample` from `cases-1` and
+`real-1`, stratified by language and by passed or held: 39 from the cases, 6
+from real code. Claude drafted each verdict against completion's rubric (it
+removes the weakness and not only the trigger, it keeps what the resource was
+for, it would apply), and Konrad reviewed all 45 and accepted them. Each
+verdict, with one sentence of why, is in `fix_audit.json`.
+
+| | Correct | Wrong |
+|---|---|---|
+| **Passed**: 15 of the 76 passed fixes | 13 | **2** |
+| **Held**: 30 of the 156 held fixes | 24 | **6** |
+
+The sample is stratified, not proportional, so these are rates within each
+group, not estimates for the runs as a whole, and 15 is a small *n*.
+
+**The two wrong fixes that passed:**
+- **ARM SQL auditing** (`arm-sql-no-auditing`). It turns auditing on with
+  Azure Monitor as the target and no diagnostic setting to deliver it, so
+  nothing is recorded. The scanner checks only that auditing is enabled. The
+  Bicep version made the same fix and was held, but only because it added a
+  KICS finding, not for this.
+- **Online Boutique** (`frontend.yaml`). It hard-codes a namespace into one
+  Service of an application deployed by namespace at apply time. It passed
+  only because it was built on the Deployment's namespace change, which was
+  held, and is wrong (below).
+
+**The six wrong fixes that were held**, which is the gates working:
+- The CloudTrail trail gets a name, which replaces the trail.
+- The Deployment moves namespace without its ServiceAccount, so no pod starts.
+- The wildcard Role loses `bind` and `escalate` but keeps write access to
+  every resource, roles and secrets included.
+- `iam:PassRole` is removed from a policy whose `lambda:CreateFunction`
+  cannot work without it.
+- The module is pinned to a tag, which the rule does not accept.
+- The Bicep SQL auditing fix above.
+
+**What the loop adds**, the three numbers completion asks for:
+1. **Drafts that cleared their finding without adding one: 133 of 200
+   (66.5%).** The self-check scans one draft per finding. For 52 that is
+   the redraft made with context-agent's answers, and no record says what
+   their first draft would have scored, so context-agent's share cannot be
+   separated out. No draft is redone for failing the self-check.
+2. **Passed fixes the audit judged correct: 13 of 15.**
+3. **Held fixes that were in fact wrong: 6 of 30.** The other 24 were
+   right, held because they rest on something the file cannot show, which
+   is what the gates are for.
+
+[TerraRepair](https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ESEM.2026.68)
+found 78.9% of scanner-verified fixes correct on human review. That is
+context, not a comparison: its cases, model and scanners differ, and 13 of 15
+carries a wide margin.
+
+### A gap in the assumption gate
+
+The gate holds a fix when the model lists something in `assumptions`; it does
+not read the rationale. The prompt asks for a claim the model could not
+verify and that would break the system or leave the finding if false. A
+follow-up the fix needs reads as advice instead, and lands in the rationale.
+- **The Lambda CMK** (`lambda-env-unencrypted`): the rationale says the
+  execution role, defined outside the file, must be granted `kms:Decrypt`
+  on the new key, and without it the function fails at invocation.
+  Nothing went into `assumptions`. It was held only because the new key
+  has no explicit policy, which raised `CKV2_AWS_64`.
+- **ARM SQL auditing**: the rationale says audit logs reach nowhere until a
+  diagnostic setting exists. It passed.
+
+Two of the 45, one of them reaching a reviewer as clean. A follow-up worth
+measuring before it is built: whether asking for post-apply dependencies
+explicitly, or a check of the rationale, would have held both without
+holding more of the right ones.
+
 ## How the labels were produced, and what happened to them
 
 This section exists so the number above is not circular.
